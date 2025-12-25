@@ -8,19 +8,27 @@ MIN_THRESHOLD = 800  # Minimum threshold allowed
 IMPROVEMENT_THRESHOLD = 2  # Minimum improvement (%) required to avoid lowering the threshold
 STOP_AT_50_PERCENT = 50  # Stop threshold adjustments when separation reaches 50% of total consumption
 
-RAW_INPUT_DIRECTORY = "/sise/shanigu-group/hilakese-dorins/HouseholdData"
+# Get the absolute path to the experiment_pipeline directory
+import sys
+from pathlib import Path
+_BASE_DIR = Path(__file__).parent.absolute()
 
-BASE = "/sise/shanigu-group/hilakese-dorins/SequenceData/experiment_pipeline"
+RAW_INPUT_DIRECTORY = str(_BASE_DIR / "INPUT" / "HouseholdData")
 
-INPUT_DIRECTORY = BASE
+# All outputs go to OUTPUT directory
+OUTPUT_ROOT = str(_BASE_DIR / "OUTPUT")
 
-OUTPUT_BASE_PATH = BASE
+BASE = OUTPUT_ROOT
 
-PLOT_DIR = f"{BASE}/user_request_plots"
+INPUT_DIRECTORY = OUTPUT_ROOT
 
-LOGS_DIRECTORY = f"{BASE}/logs/"
+OUTPUT_BASE_PATH = OUTPUT_ROOT
 
-ERRORS_DIRECTORY = f"{BASE}/errors/"
+PLOT_DIR = f"{OUTPUT_ROOT}/plots"
+
+LOGS_DIRECTORY = f"{OUTPUT_ROOT}/logs/"
+
+ERRORS_DIRECTORY = f"{OUTPUT_ROOT}/errors/"
 
 
 def setup_logging(house_id, run_number, logs_directory=LOGS_DIRECTORY):

@@ -326,7 +326,7 @@ def create_changed_plots_from_path_for_seg_combined(filepath, original_cols, log
 
 
 # Main process
-def process_visualization(house_id, run_number, threshold):
+def process_visualization(house_id, run_number, threshold = DEFAULT_THRESHOLD):
     logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
     logger.info(f"Visualization process for house {house_id}, run {run_number}...")
 

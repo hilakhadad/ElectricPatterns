@@ -1,0 +1,43 @@
+experiment_pipeline/
+├── README.md                      # Main project documentation
+│
+├── Core Modules (Python files):
+│   ├── data_util.py              # Configuration & paths
+│   ├── on_off_log.py             # Event detection
+│   ├── new_matcher.py            # Event matching  
+│   ├── segmentation.py           # Data segmentation
+│   ├── eval_segmentation.py      # Evaluation
+│   └── visualization_with_mark.py # Visualization
+│
+├── INPUT/                         # Input data
+│   ├── readme.md
+│   └── HouseholdData/            # 166 household CSV files
+│       ├── example.csv
+│       ├── 1.csv, 2.csv, etc.
+│
+├── OUTPUT/                        # All pipeline outputs
+│   ├── readme.md
+│   ├── run_0/, run_1/, ...       # Results by run
+│   ├── logs/                     # Execution logs
+│   └── errors/                   # Error files
+│
+├── tests/                         # Test suite
+│   ├── readme.md
+│   ├── __init__.py
+│   ├── test_unit.py              # Unit tests
+│   ├── test_pipeline.py          # Integration tests
+│   └── run_all_tests.py          # Run all tests
+│
+├── docs/                          # Documentation
+│   ├── readme.md
+│   ├── getting-started.md        # Start here!
+│   ├── quick-start.md            # Quick reference
+│   ├── testing-guide.md          # Testing docs
+│   ├── refactoring-workflow.md   # Refactoring guide
+│   ├── output-structure.md       # Output structure
+│   └── summary.md                # Project summary
+│
+└── scripts/                       # Utility scripts
+    ├── readme.md
+    ├── test_single_house.py      # Test single house
+    └── run_scripts.py            # Pipeline orchestrator
