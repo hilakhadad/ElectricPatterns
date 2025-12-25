@@ -21,14 +21,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # CONFIGURATION - CHANGE THESE TO YOUR LOCAL PATHS
 # ============================================================================
 
+# Get the project root directory (two levels up from this script)
+_SCRIPT_DIR = Path(__file__).parent.parent.absolute()
+
 # Set this to your local test data directory containing CSV files
-LOCAL_INPUT_PATH = r"C:\Users\hilak\PycharmProjects\role_based_segregation_dev\experiment_pipeline\INPUT\HouseholdData"
+# By default, uses the experiment_pipeline/INPUT/HouseholdData directory
+LOCAL_INPUT_PATH = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
 
 # Set this to where you want outputs to be saved
-LOCAL_OUTPUT_PATH = r"C:\Users\hilak\PycharmProjects\role_based_segregation_dev\experiment_pipeline\OUTPUT"
+# By default, uses the experiment_pipeline/OUTPUT directory
+LOCAL_OUTPUT_PATH = str(_SCRIPT_DIR / "OUTPUT")
 
-# Which house to test (e.g., "house_1", "1", etc.)
-HOUSE_ID = "1"  # ← CHANGE THIS IF NEEDED
+# Which house to test (e.g., "example", "1", "2", etc.)
+HOUSE_ID = "example"  # ← CHANGE THIS IF NEEDED
 
 # Test with default threshold or custom
 DEFAULT_THRESHOLD = 1600

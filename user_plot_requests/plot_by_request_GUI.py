@@ -1,3 +1,10 @@
+"""
+GUI tool for generating interactive plots from segmentation results.
+
+NOTE: This script uses server paths by default.
+For local use, update the base_path in load_data() and get_available_houses()
+to point to your local OUTPUT directory.
+"""
 import pandas as pd
 from datetime import datetime, timedelta
 import os
@@ -11,6 +18,8 @@ from tkcalendar import Calendar
 
 # Load data from file
 def load_data(house_id, run_number):
+    # Server path - update this for local use
+    # Example: base_path = f"./experiment_pipeline/OUTPUT/run_{run_number}/house_{house_id}"
     base_path = f"/sise/shanigu-group/hilakese-dorins/SequenceData/new_pipeline/run_{run_number}/house_{house_id}"
     file_path = os.path.join(base_path, f"summarized_{house_id}.csv")
 
@@ -109,6 +118,8 @@ def process_plot(house_id, run_number, target_datetime):
 
 # Find available house numbers in directory
 def get_available_houses(run_number):
+    # Server path - update this for local use
+    # Example: base_path = f"./experiment_pipeline/OUTPUT/run_{run_number}"
     base_path = f"/sise/shanigu-group/hilakese-dorins/SequenceData/new_pipeline/run_{run_number}"
     house_files = [
         f.split("_")[1].split(".")[0]  # Extract house number from filename

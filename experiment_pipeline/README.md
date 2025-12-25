@@ -8,9 +8,9 @@ Pipeline for segregating household energy consumption into role-based components
 
 **New here? Start with:** [Getting Started Guide](docs/getting-started.md)
 
-```powershell
+```bash
 # 1. Activate environment
-conda activate role_seg_env
+conda activate electric_patterns  # or your environment name
 
 # 2. Run tests
 cd experiment_pipeline
@@ -66,14 +66,7 @@ experiment_pipeline/
 
 ## 📖 Documentation
 
-| Document | Purpose |
-|----------|---------|
-| **[Getting Started](docs/getting-started.md)** | **Start here tomorrow!** |
-| [Quick Start](docs/quick-start.md) | Quick reference guide |
-| [Testing Guide](docs/testing-guide.md) | How to use the test suite |
-| [Refactoring Workflow](docs/refactoring-workflow.md) | Safe refactoring process |
-| [Output Structure](docs/output-structure.md) | OUTPUT directory explained |
-| [Summary](docs/summary.md) | Complete project summary |
+This README provides the main documentation for the pipeline. Additional documentation may be available locally in the `docs/` directory (not tracked in git).
 
 ---
 
@@ -198,9 +191,10 @@ Install: `pip install -r requirements.txt`
 ## 🐛 Troubleshooting
 
 ### "No module named 'X'"
-```powershell
+```bash
 # Make sure you're in the correct environment:
-conda activate role_seg_env
+conda activate electric_patterns  # or your environment name
+pip install -r requirements.txt
 ```
 
 ### Tests failing

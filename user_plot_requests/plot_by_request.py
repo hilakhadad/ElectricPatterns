@@ -1,9 +1,17 @@
+"""
+Interactive plotting utility for visualizing segmentation results.
+
+NOTE: This script uses server paths by default.
+For local use, update PIPE_LINE_DIR to point to your local OUTPUT directory.
+"""
 import pandas as pd
 from datetime import datetime, timedelta
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from data_util import *
 
+# Server path - update this for local use
+# Example for local: PIPE_LINE_DIR = "./experiment_pipeline/OUTPUT"
 PIPE_LINE_DIR = "/sise/shanigu-group/hilakese-dorins/SequenceData/with_marks_pipeline"
 
 def get_available_houses(run_number):

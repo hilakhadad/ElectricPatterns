@@ -8,6 +8,10 @@ MIN_THRESHOLD = 800  # Minimum threshold allowed
 IMPROVEMENT_THRESHOLD = 2  # Minimum improvement (%) required to avoid lowering the threshold
 STOP_AT_50_PERCENT = 50  # Stop threshold adjustments when separation reaches 50% of total consumption
 
+# NOTE: This is a legacy configuration file kept for compatibility
+# The main configuration is now in experiment_pipeline/data_util.py
+# These paths point to the server location - update if needed for your environment
+
 RAW_INPUT_DIRECTORY = "/sise/shanigu-group/hilakese-dorins/HouseholdData"
 
 BASE = "/sise/shanigu-group/hilakese-dorins/SequenceData/experiment_pipeline"
