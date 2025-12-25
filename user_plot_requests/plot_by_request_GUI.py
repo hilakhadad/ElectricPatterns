@@ -9,7 +9,7 @@ from tkinter import messagebox
 from tkcalendar import Calendar
 
 
-# פונקציה לטעינת הנתונים
+# Load data from file
 def load_data(house_id, run_number):
     base_path = f"/sise/shanigu-group/hilakese-dorins/SequenceData/new_pipeline/run_{run_number}/house_{house_id}"
     file_path = os.path.join(base_path, f"summarized_{house_id}.csv")
@@ -22,7 +22,7 @@ def load_data(house_id, run_number):
     return df
 
 
-# פונקציה לסינון 12 שעות סביב תאריך
+# Filter data to 12-hour window around target date
 def filter_data_by_date(df, target_date):
     target_datetime = datetime.strptime(target_date, "%Y-%m-%d %H:%M:%S")
     start_time = target_datetime - timedelta(hours=6)
@@ -36,7 +36,7 @@ def filter_data_by_date(df, target_date):
     return filtered_df
 
 
-# פונקציה ליצירת גרף אינטראקטיבי
+# Create interactive plot
 def plot_combined_phases_interactive(df, phases, output_path):
     fig = make_subplots(
         rows=4, cols=len(phases),
@@ -89,16 +89,16 @@ def plot_combined_phases_interactive(df, phases, output_path):
     print(f"Interactive plot saved to {output_path}")
 
 
-# פונקציה להרצת התהליך
+# Process and generate plot
 def process_plot(house_id, run_number, target_datetime):
     try:
-        # טוען נתונים
+        # Load data
         df = load_data(house_id, run_number)
 
-        # סינון לפי תאריך
+        # Filter by date
         filtered_df = filter_data_by_date(df, target_datetime)
 
-        # יצירת הגרף
+        # Create plot
         output_path = f"./plots/house_{house_id}_run_{run_number}_{target_datetime.replace(':', '-')}.html"
         phases = ['w1', 'w2', 'w3']
         plot_combined_phases_interactive(filtered_df, phases, output_path)
@@ -107,18 +107,18 @@ def process_plot(house_id, run_number, target_datetime):
         messagebox.showerror("Error", str(e))
 
 
-# פונקציה לאיתור מספרי הבתים בתיקייה
+# Find available house numbers in directory
 def get_available_houses(run_number):
     base_path = f"/sise/shanigu-group/hilakese-dorins/SequenceData/new_pipeline/run_{run_number}"
     house_files = [
-        f.split("_")[1].split(".")[0]  # שליפת מספר הבית מתוך שם הקובץ
+        f.split("_")[1].split(".")[0]  # Extract house number from filename
         for f in os.listdir(base_path)
         if f.startswith("summarized_") and f.endswith(".csv")
     ]
     return sorted(house_files)
 
 
-# פונקציה ליצירת ממשק גרפי
+# Create GUI
 def create_gui():
     def on_submit():
         house_id = house_id_combobox.get()

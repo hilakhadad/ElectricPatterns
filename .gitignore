@@ -22,6 +22,17 @@ user_request_plots/
 output/
 *.log
 
+# Experiment pipeline data
+experiment_pipeline/INPUT/
+experiment_pipeline/OUTPUT/
+experiment_pipeline/docs/
+
+# Claude Code settings
+.claude/
+
+# Data files
+harvesting_data/*.csv
+
 # OS
 .DS_Store
 Thumbs.db
