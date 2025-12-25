@@ -1,0 +1,43 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+env/
+venv/
+.venv/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and outputs
+logs/
+errors/
+user_request_plots/
+output/
+*.log
+
+# Experiment pipeline data
+experiment_pipeline/INPUT/
+experiment_pipeline/OUTPUT/
+experiment_pipeline/docs/
+
+# Claude Code settings
+.claude/
+
+# Data files
+harvesting_data/*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packaging
+*.egg-info/
+dist/
+build/
