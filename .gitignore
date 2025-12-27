@@ -27,6 +27,9 @@ experiment_pipeline/INPUT/
 experiment_pipeline/OUTPUT/
 experiment_pipeline/docs/
 
+# Daily journal sync (personal utility)
+daily_journal_sync/
+
 # Claude Code settings
 .claude/
 
