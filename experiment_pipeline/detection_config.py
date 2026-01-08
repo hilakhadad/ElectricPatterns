@@ -22,6 +22,7 @@ class ExperimentConfig:
     use_gradual_detection: bool
     gradual_window_minutes: int
     gradual_direction_consistency: float  # e.g., 0.7 for 70%
+    progressive_window_search: bool = False  # Try 1min, then 2min, then 3min windows
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -34,6 +35,7 @@ class ExperimentConfig:
             'use_gradual_detection': self.use_gradual_detection,
             'gradual_window_minutes': self.gradual_window_minutes,
             'gradual_direction_consistency': self.gradual_direction_consistency,
+            'progressive_window_search': self.progressive_window_search,
         }
 
     def to_json(self, file_path: str):
@@ -58,6 +60,7 @@ EXPERIMENTS = {
         use_gradual_detection=False,
         gradual_window_minutes=3,
         gradual_direction_consistency=0.7,
+        progressive_window_search=False,
     ),
 
     'exp001_gradual_detection': ExperimentConfig(
@@ -69,6 +72,7 @@ EXPERIMENTS = {
         use_gradual_detection=True,
         gradual_window_minutes=3,
         gradual_direction_consistency=0.7,
+        progressive_window_search=False,
     ),
 
     'exp002_lower_TH': ExperimentConfig(
@@ -80,6 +84,19 @@ EXPERIMENTS = {
         use_gradual_detection=True,
         gradual_window_minutes=3,
         gradual_direction_consistency=0.7,
+        progressive_window_search=False,
+    ),
+
+    'exp003_progressive_search': ExperimentConfig(
+        exp_id='exp003',
+        description='Progressive window search: try 1min, then 2min, then 3min windows',
+        threshold=1500,
+        off_threshold_factor=0.8,
+        expand_event_factor=0.05,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
     ),
 }
 

@@ -69,4 +69,7 @@ def setup_logging(house_id, run_number, logs_directory=LOGS_DIRECTORY):
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
+    # Prevent propagation to root logger to avoid duplicate messages
+    logger.propagate = False
+
     return logger

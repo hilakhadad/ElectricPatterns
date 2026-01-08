@@ -33,15 +33,20 @@ LOCAL_INPUT_PATH = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
 LOCAL_OUTPUT_PATH = str(_SCRIPT_DIR / "OUTPUT")
 
 # Which house to test (e.g., "example", "1", "2", etc.)
-HOUSE_ID = "1"  # ← CHANGE THIS IF NEEDED
+HOUSE_ID = "1_debug"  # ← CHANGE THIS IF NEEDED
 
 # Experiment name (e.g., "exp000_baseline", "exp001_gradual_detection")
 # If None, uses DEFAULT_THRESHOLD directly without experiment framework
-EXPERIMENT_NAME = "exp002_lower_TH"  # ← CHANGE THIS TO RUN DIFFERENT EXPERIMENTS
+EXPERIMENT_NAME = "exp003_progressive_search"  # ← CHANGE THIS TO RUN DIFFERENT EXPERIMENTS
+
+# Number of iterations to run (each iteration uses output from previous as input)
+# After each iteration, detected events are removed from data, allowing detection of
+# smaller events that were previously "hidden" by larger ones
+MAX_ITERATIONS = 5  # ← CHANGE THIS IF NEEDED
 
 # Test with default threshold or custom (only used if EXPERIMENT_NAME is None)
+# Note: Threshold stays CONSTANT across all iterations (for reproducibility)
 DEFAULT_THRESHOLD = 1600
-RUN_NUMBER = 0
 
 # ============================================================================
 
@@ -110,33 +115,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def validate_input_file():
-    """Check if the input file exists"""
-    input_file = f"{LOCAL_INPUT_PATH}/{HOUSE_ID}.csv"
-    
+def validate_input_file(run_number):
+    """Check if the input file exists for given run number"""
+    if run_number == 0:
+        input_file = f"{LOCAL_INPUT_PATH}/{HOUSE_ID}.csv"
+    else:
+        # For subsequent iterations, use output from previous iteration
+        input_file = f"{LOCAL_OUTPUT_PATH}/run_{run_number}/HouseholdData/{HOUSE_ID}.csv"
+
     if not os.path.exists(input_file):
-        logger.error(f"❌ Input file not found: {input_file}")
-        logger.info(f"Please provide a CSV file at: {input_file}")
-        logger.info(f"Expected directory: {LOCAL_INPUT_PATH}")
-        return False
-    
+        if run_number == 0:
+            logger.error(f"Input file not found: {input_file}")
+            logger.info(f"Please provide a CSV file at: {input_file}")
+            return False
+        else:
+            # For iterations > 0, missing input means no more events to process
+            logger.info(f"No input for iteration {run_number} - previous iteration found no new events")
+            return False
+
     try:
         df = pd.read_csv(input_file)
-        logger.info(f"✓ Input file found with {len(df)} rows and columns: {list(df.columns)}")
+        logger.info(f"Input file found with {len(df)} rows")
         return True
     except Exception as e:
-        logger.error(f"❌ Error reading input file: {e}")
+        logger.error(f"Error reading input file: {e}")
         return False
 
-def run_on_off_detection():
+def run_on_off_detection(run_number):
     """Run on/off event detection"""
     logger.info("\n" + "="*60)
-    logger.info("STEP 1: ON/OFF EVENT DETECTION (on_off_log.py)")
+    logger.info(f"STEP 1: ON/OFF EVENT DETECTION (on_off_log.py) - Iteration {run_number}")
     logger.info("="*60)
 
     try:
         from on_off_log import process_house
-        output_dir = f"{LOCAL_OUTPUT_PATH}/run_{RUN_NUMBER}/house_{HOUSE_ID}"
+        output_dir = f"{LOCAL_OUTPUT_PATH}/run_{run_number}/house_{HOUSE_ID}"
         os.makedirs(output_dir, exist_ok=True)
 
         logger.info(f"Running on_off_log for house {HOUSE_ID}...")
@@ -145,28 +158,28 @@ def run_on_off_detection():
         if EXPERIMENT_NAME and exp_config:
             process_house(
                 house_id=HOUSE_ID,
-                run_number=RUN_NUMBER,
+                run_number=run_number,
                 threshold=DEFAULT_THRESHOLD,
                 config=exp_config
             )
         else:
             process_house(
                 house_id=HOUSE_ID,
-                run_number=RUN_NUMBER,
+                run_number=run_number,
                 threshold=DEFAULT_THRESHOLD
             )
-        logger.info("✓ On/off detection completed")
+        logger.info("On/off detection completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Error in on_off_log: {e}")
+        logger.error(f"Error in on_off_log: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
 
-def run_matching():
+def run_matching(run_number):
     """Run event matching"""
     logger.info("\n" + "="*60)
-    logger.info("STEP 2: EVENT MATCHING (new_matcher.py)")
+    logger.info(f"STEP 2: EVENT MATCHING (new_matcher.py) - Iteration {run_number}")
     logger.info("="*60)
 
     try:
@@ -175,21 +188,21 @@ def run_matching():
         logger.info(f"Running event matching for house {HOUSE_ID}...")
         process_matches(
             house_id=HOUSE_ID,
-            run_number=RUN_NUMBER,
+            run_number=run_number,
             threshold=DEFAULT_THRESHOLD
         )
-        logger.info("✓ Event matching completed")
+        logger.info("Event matching completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Error in new_matcher: {e}")
+        logger.error(f"Error in new_matcher: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
 
-def run_segmentation():
+def run_segmentation(run_number):
     """Run data segmentation"""
     logger.info("\n" + "="*60)
-    logger.info("STEP 3: DATA SEGMENTATION (segmentation.py)")
+    logger.info(f"STEP 3: DATA SEGMENTATION (segmentation.py) - Iteration {run_number}")
     logger.info("="*60)
 
     try:
@@ -198,20 +211,20 @@ def run_segmentation():
         logger.info(f"Running segmentation for house {HOUSE_ID}...")
         process_segmentation(
             house_id=HOUSE_ID,
-            run_number=RUN_NUMBER
+            run_number=run_number
         )
-        logger.info("✓ Segmentation completed")
+        logger.info("Segmentation completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Error in segmentation: {e}")
+        logger.error(f"Error in segmentation: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
 
-def run_evaluation():
+def run_evaluation(run_number):
     """Run segmentation evaluation"""
     logger.info("\n" + "="*60)
-    logger.info("STEP 4: EVALUATION (eval_segmentation.py)")
+    logger.info(f"STEP 4: EVALUATION (eval_segmentation.py) - Iteration {run_number}")
     logger.info("="*60)
 
     try:
@@ -220,21 +233,21 @@ def run_evaluation():
         logger.info(f"Running evaluation for house {HOUSE_ID}...")
         evaluate_segmentation(
             house_id=HOUSE_ID,
-            run_number=RUN_NUMBER,
+            run_number=run_number,
             threshold=DEFAULT_THRESHOLD
         )
-        logger.info("✓ Evaluation completed")
+        logger.info("Evaluation completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Error in eval_segmentation: {e}")
+        logger.error(f"Error in eval_segmentation: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
 
-def run_visualization():
+def run_visualization(run_number):
     """Run visualization"""
     logger.info("\n" + "="*60)
-    logger.info("STEP 5: VISUALIZATION (visualization_with_mark.py)")
+    logger.info(f"STEP 5: VISUALIZATION (visualization_with_mark.py) - Iteration {run_number}")
     logger.info("="*60)
 
     try:
@@ -243,16 +256,54 @@ def run_visualization():
         logger.info(f"Running visualization for house {HOUSE_ID}...")
         process_visualization(
             house_id=HOUSE_ID,
-            run_number=RUN_NUMBER,
+            run_number=run_number,
             threshold=DEFAULT_THRESHOLD
         )
-        logger.info("✓ Visualization completed")
+        logger.info("Visualization completed")
         return True
     except Exception as e:
-        logger.error(f"❌ Error in visualization: {e}")
+        logger.error(f"Error in visualization: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False
+
+def run_single_iteration(run_number):
+    """Run all pipeline steps for a single iteration"""
+    logger.info("\n" + "#"*60)
+    logger.info(f"ITERATION {run_number} of {MAX_ITERATIONS}")
+    logger.info("#"*60)
+
+    # Check if input exists for this iteration
+    if not validate_input_file(run_number):
+        if run_number == 0:
+            logger.error("Cannot proceed without valid input file")
+            return None  # Fatal error
+        else:
+            return False  # No more iterations needed
+
+    # Run pipeline steps
+    steps = [
+        ("On/Off Detection", run_on_off_detection),
+        ("Event Matching", run_matching),
+        ("Segmentation", run_segmentation),
+        ("Evaluation", run_evaluation),
+        ("Visualization", run_visualization),
+    ]
+
+    results = {}
+    for step_name, step_func in steps:
+        logger.info(f"\n>>> Running {step_name}...")
+        results[step_name] = step_func(run_number)
+        if not results[step_name]:
+            logger.warning(f"{step_name} failed, but continuing with next steps...")
+
+    # Check if segmentation produced output for next iteration
+    next_input = f"{LOCAL_OUTPUT_PATH}/run_{run_number + 1}/HouseholdData/{HOUSE_ID}.csv"
+    has_next = os.path.exists(next_input)
+
+    logger.info(f"\nIteration {run_number} completed. Next iteration possible: {has_next}")
+    return has_next
+
 
 def main():
     logger.info("\n" + "="*60)
@@ -270,40 +321,35 @@ def main():
     logger.info(f"House ID: {HOUSE_ID}")
     logger.info(f"Input Path: {LOCAL_INPUT_PATH}")
     logger.info(f"Output Path: {LOCAL_OUTPUT_PATH}")
-    logger.info(f"Threshold: {DEFAULT_THRESHOLD}W")
-    logger.info(f"Run Number: {RUN_NUMBER}")
-    
-    # Step 0: Validate input
-    if not validate_input_file():
-        logger.error("\n❌ Cannot proceed without valid input file")
-        return
-    
-    # Run pipeline steps
-    steps = [
-        ("On/Off Detection", run_on_off_detection),
-        ("Event Matching", run_matching),
-        ("Segmentation", run_segmentation),
-        ("Evaluation", run_evaluation),
-        ("Visualization", run_visualization),
-    ]
-    
-    results = {}
-    for step_name, step_func in steps:
-        logger.info(f"\n>>> Running {step_name}...")
-        results[step_name] = step_func()
-        if not results[step_name]:
-            logger.warning(f"⚠️  {step_name} failed, but continuing with next steps...")
-    
-    # Summary
+    logger.info(f"Threshold: {DEFAULT_THRESHOLD}W (constant across all iterations)")
+    logger.info(f"Max Iterations: {MAX_ITERATIONS}")
+
+    # Run iterations
+    iterations_completed = 0
+    for run_number in range(MAX_ITERATIONS):
+        result = run_single_iteration(run_number)
+
+        if result is None:
+            # Fatal error on first iteration
+            logger.error("Pipeline failed on first iteration")
+            return
+
+        iterations_completed += 1
+
+        if not result:
+            # No more events to process
+            logger.info(f"Stopping after {iterations_completed} iterations - no more events found")
+            break
+
+    # Final Summary
     logger.info("\n" + "="*60)
-    logger.info("TEST PIPELINE SUMMARY")
+    logger.info("PIPELINE COMPLETE")
     logger.info("="*60)
-    for step_name, success in results.items():
-        status = "✓ PASSED" if success else "❌ FAILED"
-        logger.info(f"{step_name}: {status}")
-    
-    logger.info(f"\nOutput files saved to: {LOCAL_OUTPUT_PATH}")
+    logger.info(f"Total iterations completed: {iterations_completed}")
+    logger.info(f"Output files saved to: {LOCAL_OUTPUT_PATH}")
+    logger.info(f"  - run_0/ through run_{iterations_completed - 1}/")
     logger.info(f"Logs saved to: {LOCAL_OUTPUT_PATH}/logs/test_{HOUSE_ID}.log")
+
 
 if __name__ == "__main__":
     main()
