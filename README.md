@@ -10,6 +10,10 @@ This repository contains the code and pipeline for analyzing electricity consump
 
 ## Features
 - **Event Detection**: Automatic detection of ON/OFF power events based on configurable thresholds
+  - Sharp event detection (single-sample threshold)
+  - Smart gradual detection (multi-minute ramp-ups/downs)
+  - Progressive window search for better event separation
+- **Experiment Framework**: Systematic configuration management for reproducible experiments
 - **Event Matching**: Smart pairing of ON/OFF events with phase validation
 - **Data Segmentation**: Role-based segregation of consumption into event-related and background power
 - **Evaluation Tools**: Quality metrics for segmentation performance
@@ -23,8 +27,13 @@ This repository contains the code and pipeline for analyzing electricity consump
 │   ├── OUTPUT/             # All outputs: results, logs, errors (gitignored)
 │   ├── tests/              # Comprehensive test suite
 │   ├── scripts/            # Helper scripts
-│   ├── docs/               # Detailed documentation (gitignored, local only)
-│   └── *.py               # Core modules (on_off_log, matcher, segmentation, etc.)
+│   ├── detection_config.py # Experiment configuration management
+│   ├── on_off_log.py       # Event detection (sharp + gradual)
+│   ├── new_matcher.py      # Event matching
+│   ├── segmentation.py     # Data segmentation
+│   ├── eval_segmentation.py # Evaluation metrics
+│   ├── visualization_with_mark.py # Interactive plots
+│   └── data_util.py        # Configuration and utilities
 ├── user_plot_requests/     # Interactive plotting tools
 ├── harvesting_data/        # Data collection utilities
 └── requirements.txt        # Python dependencies
@@ -58,15 +67,33 @@ See [experiment_pipeline/README.md](experiment_pipeline/README.md) for detailed 
    ```
 
 ### Quick Start
+
+#### Running Tests
 ```bash
 cd experiment_pipeline
 
 # Run the test suite
 python tests/run_all_tests.py
-
-# Run on example data (requires data in INPUT/HouseholdData/)
-python simple_test_example.py
 ```
+
+#### Running Experiments
+```bash
+cd experiment_pipeline
+
+# Test on a single house with experiment configuration
+python scripts/test_single_house.py
+
+# Configuration is in scripts/test_single_house.py:
+# - HOUSE_ID: Which house to test (e.g., "1", "2039")
+# - EXPERIMENT_NAME: Which experiment to run (e.g., "exp003_progressive_search")
+# - MAX_ITERATIONS: Number of iterations (default: 5)
+```
+
+**Available Experiments** (see `detection_config.py`):
+- `exp000_baseline`: Original detection (TH=1600W, no gradual detection)
+- `exp001_gradual_detection`: Smart gradual detection (TH=1600W)
+- `exp002_lower_TH`: Lower threshold (TH=1500W) with gradual detection
+- `exp003_progressive_search`: Progressive window search (TH=1500W, ±1→2→3 min)
 
 For detailed usage instructions, see the [Pipeline README](experiment_pipeline/README.md).
 
@@ -74,11 +101,31 @@ For detailed usage instructions, see the [Pipeline README](experiment_pipeline/R
 
 The analysis pipeline consists of five main stages:
 
-1. **On/Off Detection** - Identifies power events based on magnitude thresholds
-2. **Event Matching** - Pairs ON/OFF events with temporal and phase validation
-3. **Segmentation** - Segregates consumption into event-specific and background power
-4. **Evaluation** - Calculates separation quality metrics
-5. **Visualization** - Generates interactive plots
+1. **On/Off Detection** (`on_off_log.py`)
+   - Sharp event detection: Single-sample changes ≥ threshold
+   - Gradual event detection: Multi-minute ramp-ups/downs (80-130% of threshold)
+   - Progressive window search: Try ±1min, ±2min, ±3min windows sequentially
+   - Output: `on_off_{threshold}.csv`
+
+2. **Event Matching** (`new_matcher.py`)
+   - Pairs ON/OFF events with temporal and phase validation
+   - Classifies as spikes (≤2 min) or steady-state events
+   - Output: `matches_{house_id}.csv`
+
+3. **Segmentation** (`segmentation.py`)
+   - Segregates consumption into event-specific and background power
+   - Processes events by duration (shortest to longest)
+   - Output: `segmented_{house_id}.csv`, `summarized_{house_id}.csv`
+
+4. **Evaluation** (`eval_segmentation.py`)
+   - Calculates separation quality metrics
+   - Key metric: Explained Information Percentage
+   - Output: `evaluation_history_{house_id}.csv`
+
+5. **Visualization** (`visualization_with_mark.py`)
+   - Generates interactive Plotly plots (12-hour windows)
+   - 4 rows: original, remaining, short/medium/long duration events
+   - Output: HTML plots in `plots/{house_id}/`
 
 ## Testing
 
@@ -95,6 +142,23 @@ python experiment_pipeline/tests/test_pipeline.py
 
 ## Configuration
 
+### Experiment Configuration
+Experiments are defined in `experiment_pipeline/detection_config.py` using the `ExperimentConfig` dataclass:
+
+```python
+@dataclass
+class ExperimentConfig:
+    exp_id: str                          # e.g., "exp003"
+    description: str                     # Human-readable description
+    threshold: int                       # Main detection threshold (W)
+    off_threshold_factor: float          # OFF threshold = threshold × factor
+    expand_event_factor: float           # Extend events if 5% additional change
+    use_gradual_detection: bool          # Enable gradual detection
+    gradual_window_minutes: int          # Search window (±N minutes)
+    progressive_window_search: bool      # Try 1→2→3 min windows sequentially
+```
+
+### System Configuration
 All paths and parameters are configured in `experiment_pipeline/data_util.py`. The pipeline uses relative paths and works with local INPUT/OUTPUT directories by default.
 
 ## Contributing
