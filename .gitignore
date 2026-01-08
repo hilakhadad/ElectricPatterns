@@ -27,6 +27,10 @@ experiment_pipeline/INPUT/
 experiment_pipeline/OUTPUT/
 experiment_pipeline/docs/
 
+# Session documentation (contains Hebrew, keep local only)
+experiment_pipeline/EXPERIMENTS.md
+experiment_pipeline/SESSION_SUMMARY.md
+
 # Daily journal sync (personal utility)
 daily_journal_sync/
 

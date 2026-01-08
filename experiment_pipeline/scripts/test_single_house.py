@@ -33,17 +33,71 @@ LOCAL_INPUT_PATH = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
 LOCAL_OUTPUT_PATH = str(_SCRIPT_DIR / "OUTPUT")
 
 # Which house to test (e.g., "example", "1", "2", etc.)
-HOUSE_ID = "example"  # ← CHANGE THIS IF NEEDED
+HOUSE_ID = "1"  # ← CHANGE THIS IF NEEDED
 
-# Test with default threshold or custom
+# Experiment name (e.g., "exp000_baseline", "exp001_gradual_detection")
+# If None, uses DEFAULT_THRESHOLD directly without experiment framework
+EXPERIMENT_NAME = "exp002_lower_TH"  # ← CHANGE THIS TO RUN DIFFERENT EXPERIMENTS
+
+# Test with default threshold or custom (only used if EXPERIMENT_NAME is None)
 DEFAULT_THRESHOLD = 1600
 RUN_NUMBER = 0
 
 # ============================================================================
 
+# Load experiment configuration if specified
+from datetime import datetime
+from detection_config import get_experiment, save_experiment_metadata
+
+if EXPERIMENT_NAME:
+    try:
+        exp_config = get_experiment(EXPERIMENT_NAME)
+
+        # Create experiment-specific output directory with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        exp_output_path = str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{exp_config.exp_id}_{timestamp}")
+        LOCAL_OUTPUT_PATH = exp_output_path
+
+        # Override DEFAULT_THRESHOLD with experiment config
+        DEFAULT_THRESHOLD = exp_config.threshold
+
+        print(f"\n{'='*60}")
+        print(f"Running Experiment: {exp_config.exp_id}")
+        print(f"Description: {exp_config.description}")
+        print(f"Output: {exp_output_path}")
+        print(f"{'='*60}\n")
+    except KeyError as e:
+        print(f"Error: {e}")
+        print(f"Please check EXPERIMENT_NAME in the script.")
+        sys.exit(1)
+else:
+    exp_config = None
+    print(f"\n{'='*60}")
+    print(f"Running WITHOUT experiment framework")
+    print(f"Using threshold: {DEFAULT_THRESHOLD}W")
+    print(f"{'='*60}\n")
+
+# IMPORTANT: Override the global OUTPUT_BASE_PATH before importing modules
+import data_util
+data_util.OUTPUT_BASE_PATH = LOCAL_OUTPUT_PATH
+data_util.OUTPUT_ROOT = LOCAL_OUTPUT_PATH
+data_util.INPUT_DIRECTORY = LOCAL_OUTPUT_PATH
+data_util.LOGS_DIRECTORY = f"{LOCAL_OUTPUT_PATH}/logs/"
+
 # Create output directories
 os.makedirs(LOCAL_OUTPUT_PATH, exist_ok=True)
 os.makedirs(f"{LOCAL_OUTPUT_PATH}/logs", exist_ok=True)
+
+# Save experiment metadata if using experiment framework
+if EXPERIMENT_NAME and exp_config:
+    try:
+        # Try to get git hash
+        import subprocess
+        git_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+    except:
+        git_hash = None
+
+    save_experiment_metadata(exp_config, LOCAL_OUTPUT_PATH, git_hash)
 
 # Set up logging
 logging.basicConfig(
@@ -86,11 +140,21 @@ def run_on_off_detection():
         os.makedirs(output_dir, exist_ok=True)
 
         logger.info(f"Running on_off_log for house {HOUSE_ID}...")
-        process_house(
-            house_id=HOUSE_ID,
-            run_number=RUN_NUMBER,
-            threshold=DEFAULT_THRESHOLD
-        )
+
+        # Pass experiment config if available
+        if EXPERIMENT_NAME and exp_config:
+            process_house(
+                house_id=HOUSE_ID,
+                run_number=RUN_NUMBER,
+                threshold=DEFAULT_THRESHOLD,
+                config=exp_config
+            )
+        else:
+            process_house(
+                house_id=HOUSE_ID,
+                run_number=RUN_NUMBER,
+                threshold=DEFAULT_THRESHOLD
+            )
         logger.info("✓ On/off detection completed")
         return True
     except Exception as e:
@@ -194,6 +258,15 @@ def main():
     logger.info("\n" + "="*60)
     logger.info("STARTING LOCAL TEST PIPELINE")
     logger.info("="*60)
+
+    if EXPERIMENT_NAME and exp_config:
+        logger.info(f"Experiment: {exp_config.exp_id}")
+        logger.info(f"Description: {exp_config.description}")
+        logger.info(f"Configuration:")
+        for key, value in exp_config.to_dict().items():
+            if key not in ['exp_id', 'description']:
+                logger.info(f"  - {key}: {value}")
+
     logger.info(f"House ID: {HOUSE_ID}")
     logger.info(f"Input Path: {LOCAL_INPUT_PATH}")
     logger.info(f"Output Path: {LOCAL_OUTPUT_PATH}")
