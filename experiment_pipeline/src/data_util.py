@@ -11,7 +11,7 @@ STOP_AT_50_PERCENT = 50  # Stop threshold adjustments when separation reaches 50
 # Get the absolute path to the experiment_pipeline directory
 import sys
 from pathlib import Path
-_BASE_DIR = Path(__file__).parent.absolute()
+_BASE_DIR = Path(__file__).parent.parent.absolute()  # Go up from src/ to experiment_pipeline/
 
 RAW_INPUT_DIRECTORY = str(_BASE_DIR / "INPUT" / "HouseholdData")
 

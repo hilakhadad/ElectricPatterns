@@ -14,8 +14,8 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# Add parent directory to path to import modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add src directory to path to import modules
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # ============================================================================
 # CONFIGURATION - CHANGE THESE TO YOUR LOCAL PATHS

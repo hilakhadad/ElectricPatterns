@@ -23,6 +23,8 @@ output/
 *.log
 
 # Experiment pipeline data
+experiment_pipeline/old_run_files/
+experiment_pipeline/archive/
 experiment_pipeline/INPUT/
 experiment_pipeline/OUTPUT/
 experiment_pipeline/docs/
