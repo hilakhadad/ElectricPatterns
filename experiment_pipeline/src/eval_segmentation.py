@@ -85,20 +85,25 @@ def evaluate_segmentation(house_id, run_number, threshold):
             logger.warning(f"Column {original_col} not found, skipping phase {phase}.")
             continue
 
-        baseline_original = baseline_data[original_col].fillna(0)
-        current_remaining = current_data[remaining_col].fillna(0)
+        baseline_original = baseline_data[original_col]
+        current_remaining = current_data[remaining_col]
 
-        # Mask for minutes above threshold in baseline (run_0)
-        above_th_mask = baseline_original > threshold
+        # Create mask for valid data - rows that exist in BOTH baseline and current
+        # NaN values should NOT be counted as explained
+        valid_mask = baseline_original.notna() & current_remaining.notna()
+
+        # Mask for minutes above threshold in baseline (run_0) - only where data is valid
+        above_th_mask = (baseline_original > threshold) & valid_mask
 
         # === POWER METRICS ===
-        # Total power (all minutes) - for display
-        total_power_all = baseline_original.sum()
+        # Total power (all minutes) - for display (use fillna for sum)
+        total_power_all = baseline_original.fillna(0).sum()
 
         # Total power (only minutes above TH) - for calculations
         total_power_above_th = baseline_original[above_th_mask].sum()
 
         # Explained power cumulative (baseline - current remaining, only for minutes above TH)
+        # Only calculated where both values exist (above_th_mask already includes valid_mask)
         explained_power_cumulative = (baseline_original[above_th_mask] - current_remaining[above_th_mask]).clip(lower=0).sum()
 
         # Explained power percentage
@@ -112,8 +117,10 @@ def evaluate_segmentation(house_id, run_number, threshold):
             explained_power_iteration = explained_power_cumulative
             explained_power_iteration_pct = explained_power_cumulative_pct
         else:
-            prev_remaining = prev_data[remaining_col].fillna(0)
-            explained_power_iteration = (prev_remaining[above_th_mask] - current_remaining[above_th_mask]).clip(lower=0).sum()
+            prev_remaining = prev_data[remaining_col]
+            # Create valid mask for iteration comparison (prev and current both exist)
+            valid_iter_mask = above_th_mask & prev_remaining.notna() & current_remaining.notna()
+            explained_power_iteration = (prev_remaining[valid_iter_mask] - current_remaining[valid_iter_mask]).clip(lower=0).sum()
             if total_power_above_th > 0:
                 explained_power_iteration_pct = (explained_power_iteration / total_power_above_th) * 100
             else:
@@ -128,12 +135,19 @@ def evaluate_segmentation(house_id, run_number, threshold):
         if minutes_negative > 0:
             logger.warning(f"Phase {phase} - NEGATIVE VALUES DETECTED: {minutes_negative} minutes, {power_negative:.0f}W total")
 
+        # === MISSING VALUES (rows that disappeared) ===
+        # Count rows that exist in baseline but are NaN in current
+        minutes_missing = (baseline_original.notna() & current_remaining.isna()).sum()
+        if minutes_missing > 0:
+            logger.warning(f"Phase {phase} - MISSING VALUES: {minutes_missing} rows exist in baseline but NaN in current run")
+
         # === TIME METRICS ===
-        # Minutes above threshold in baseline
+        # Minutes above threshold in baseline (only where data is valid)
         minutes_above_th = above_th_mask.sum()
 
         # Minutes now below threshold (cumulative - from baseline to current)
-        minutes_below_th_cumulative = ((baseline_original > threshold) & (current_remaining <= threshold)).sum()
+        # Only count where both baseline and current have valid data
+        minutes_below_th_cumulative = (above_th_mask & (current_remaining <= threshold)).sum()
 
         # Time percentage cumulative
         if minutes_above_th > 0:
@@ -147,8 +161,10 @@ def evaluate_segmentation(house_id, run_number, threshold):
             time_pct_iteration = time_pct_cumulative
         else:
             # Minutes that were above TH in prev run but now below TH
-            prev_remaining = prev_data[remaining_col].fillna(0)
-            minutes_below_th_iteration = ((prev_remaining > threshold) & (current_remaining <= threshold)).sum()
+            prev_remaining = prev_data[remaining_col]
+            # Only count where all three (baseline, prev, current) have valid data
+            valid_time_iter_mask = above_th_mask & prev_remaining.notna() & current_remaining.notna()
+            minutes_below_th_iteration = (valid_time_iter_mask & (prev_remaining > threshold) & (current_remaining <= threshold)).sum()
             if minutes_above_th > 0:
                 time_pct_iteration = (minutes_below_th_iteration / minutes_above_th) * 100
             else:
@@ -176,6 +192,8 @@ def evaluate_segmentation(house_id, run_number, threshold):
             # Sanity check - negative values (physically impossible)
             'minutes_negative': minutes_negative,
             'power_negative': round(power_negative, 2),
+            # Missing values - rows that disappeared (NaN in current but exist in baseline)
+            'minutes_missing': minutes_missing,
         }
 
         results_list.append(result)
