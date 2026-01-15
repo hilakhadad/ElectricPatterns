@@ -1,19 +1,19 @@
 """
 Test script to run the pipeline on multiple houses in parallel.
-Uses test_single_house.py logic but runs multiple houses concurrently.
+Calls run_pipeline_for_house directly (no subprocess overhead).
 """
 import sys
 import os
-import subprocess
-import concurrent.futures
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Fix encoding for Windows console
 if sys.platform == 'win32':
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    if hasattr(sys.stdout, 'buffer'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 try:
     from tqdm import tqdm
@@ -23,196 +23,123 @@ except ImportError:
     print("Note: Install tqdm for progress bars: pip install tqdm")
 
 # ============================================================================
-# CONFIGURATION - CHANGE THESE
+# CONFIGURATION
 # ============================================================================
 
-# List of house IDs to process
-# Auto-detect all houses from INPUT directory
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 _INPUT_PATH = _SCRIPT_DIR / "INPUT" / "HouseholdData"
-HOUSE_IDS = [f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit() or f.stem in ['example', 'smaller_example']]
+
+# Auto-detect all houses from INPUT directory
+HOUSE_IDS = sorted([f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit()])
 
 # Experiment name (must match one in detection_config.py)
-EXPERIMENT_NAME = "exp004_noisy_matching"  # <- CHANGE THIS
+EXPERIMENT_NAME = "exp004_noisy_matching"
 
 # Number of iterations per house
 MAX_ITERATIONS = 2
 
-# Maximum parallel workers (set to len(HOUSE_IDS) or less based on your machine)
-MAX_WORKERS = 4
+# Maximum parallel workers
+MAX_WORKERS = 8
 
 # ============================================================================
 
-# Get paths
-LOCAL_INPUT_PATH = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
-LOCAL_OUTPUT_BASE = str(_SCRIPT_DIR / "OUTPUT" / "experiments")
 
-
-def run_single_house(house_id: str, experiment_name: str, output_path: str, max_iterations: int) -> dict:
+def process_single_house(args):
     """
-    Run the pipeline for a single house by calling test_single_house.py as subprocess.
-
-    Returns dict with results.
+    Worker function for parallel processing.
+    Must be at module level for multiprocessing to work.
     """
-    print(f"[{house_id}] Starting...")
+    house_id, experiment_name, house_output, max_iterations, input_path = args
 
-    # Normalize path to use forward slashes (works on Windows too)
-    output_path_normalized = output_path.replace('\\', '/')
+    # Import here to avoid issues with multiprocessing
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from test_single_house import run_pipeline_for_house
 
-    # Create a temporary script that imports and runs test_single_house with our config
-    script_content = f'''
-import sys
-import os
-from pathlib import Path
+    result = run_pipeline_for_house(
+        house_id=house_id,
+        experiment_name=experiment_name,
+        output_path=house_output,
+        max_iterations=max_iterations,
+        input_path=input_path,
+        quiet=True  # Suppress console output in parallel mode
+    )
 
-# Override configuration before importing
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-# Set config via environment or direct override
-import test_single_house as tsh
-
-# Override the module-level variables
-tsh.HOUSE_ID = "{house_id}"
-tsh.EXPERIMENT_NAME = "{experiment_name}"
-tsh.MAX_ITERATIONS = {max_iterations}
-tsh.LOCAL_OUTPUT_PATH = "{output_path_normalized}"
-
-# Re-setup data_util paths
-import data_util
-data_util.OUTPUT_BASE_PATH = "{output_path_normalized}"
-data_util.OUTPUT_ROOT = "{output_path_normalized}"
-data_util.INPUT_DIRECTORY = "{output_path_normalized}"
-data_util.LOGS_DIRECTORY = "{output_path_normalized}/logs/"
-
-os.makedirs("{output_path_normalized}", exist_ok=True)
-os.makedirs("{output_path_normalized}/logs", exist_ok=True)
-
-# Run
-tsh.main()
-'''
-
-    # Write temp script
-    temp_script = Path(__file__).parent / f"_temp_run_{house_id}.py"
-    try:
-        with open(temp_script, 'w', encoding='utf-8') as f:
-            f.write(script_content)
-
-        # Run it
-        result = subprocess.run(
-            [sys.executable, str(temp_script)],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace'
-        )
-
-        success = result.returncode == 0
-
-        if success:
-            print(f"[{house_id}] Completed successfully")
-        else:
-            print(f"[{house_id}] Failed with return code {result.returncode}")
-            if result.stderr:
-                print(f"[{house_id}] Error: {result.stderr[:500]}")
-
-        return {
-            'house_id': house_id,
-            'success': success,
-            'returncode': result.returncode,
-            'stdout': result.stdout,
-            'stderr': result.stderr
-        }
-
-    finally:
-        # Clean up temp script
-        if temp_script.exists():
-            temp_script.unlink()
+    return {
+        'house_id': house_id,
+        'success': result['success'],
+        'iterations': result['iterations'],
+        'error': result.get('error')
+    }
 
 
 def main():
-    print("="*60)
+    print("=" * 60)
     print("RUNNING PIPELINE ON MULTIPLE HOUSES")
-    print("="*60)
-    print(f"Houses: {HOUSE_IDS}")
+    print("=" * 60)
+    print(f"Houses: {len(HOUSE_IDS)} total")
     print(f"Experiment: {EXPERIMENT_NAME}")
     print(f"Max iterations per house: {MAX_ITERATIONS}")
     print(f"Max parallel workers: {min(MAX_WORKERS, len(HOUSE_IDS))}")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
 
-    # Validate input files exist
-    missing = []
-    for house_id in HOUSE_IDS:
-        input_file = f"{LOCAL_INPUT_PATH}/{house_id}.csv"
-        if not os.path.exists(input_file):
-            missing.append(house_id)
-
-    if missing:
-        print(f"ERROR: Missing input files for houses: {missing}")
-        print(f"Expected location: {LOCAL_INPUT_PATH}/")
+    if not HOUSE_IDS:
+        print(f"ERROR: No house CSV files found in {_INPUT_PATH}")
         return
 
     # Create shared output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    shared_output_dir = f"{LOCAL_OUTPUT_BASE}/{EXPERIMENT_NAME}_{timestamp}"
+    shared_output_dir = str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{EXPERIMENT_NAME}_{timestamp}")
     os.makedirs(shared_output_dir, exist_ok=True)
 
     print(f"Output directory: {shared_output_dir}\n")
 
-    # Prepare tasks - each house gets its own subdirectory
-    tasks = []
-    for house_id in HOUSE_IDS:
-        house_output = f"{shared_output_dir}/house_{house_id}"
-        tasks.append((house_id, EXPERIMENT_NAME, house_output, MAX_ITERATIONS))
+    # Prepare tasks
+    input_path = str(_INPUT_PATH)
+    tasks = [
+        (house_id, EXPERIMENT_NAME, f"{shared_output_dir}/house_{house_id}", MAX_ITERATIONS, input_path)
+        for house_id in HOUSE_IDS
+    ]
 
-    # Run in parallel with progress bar
+    # Run in parallel
     results = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(MAX_WORKERS, len(HOUSE_IDS))) as executor:
-        future_to_house = {
-            executor.submit(run_single_house, *task): task[0]
-            for task in tasks
-        }
+    num_workers = min(MAX_WORKERS, len(HOUSE_IDS))
 
-        # Use tqdm if available for progress bar
-        futures_iter = concurrent.futures.as_completed(future_to_house)
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(process_single_house, task): task[0] for task in tasks}
+
+        # Progress bar
+        futures_iter = as_completed(futures)
         if HAS_TQDM:
-            futures_iter = tqdm(
-                futures_iter,
-                total=len(HOUSE_IDS),
-                desc="Processing houses",
-                unit="house"
-            )
+            futures_iter = tqdm(futures_iter, total=len(HOUSE_IDS), desc="Processing", unit="house")
 
         for future in futures_iter:
-            house_id = future_to_house[future]
+            house_id = futures[future]
             try:
                 result = future.result()
                 results.append(result)
+                status = "OK" if result['success'] else "FAIL"
                 if HAS_TQDM:
-                    futures_iter.set_postfix(last=f"House {house_id}", status="OK" if result['success'] else "FAIL")
+                    futures_iter.set_postfix(last=house_id, status=status)
+                else:
+                    print(f"[{house_id}] {status}")
             except Exception as e:
                 print(f"[{house_id}] Exception: {e}")
-                results.append({
-                    'house_id': house_id,
-                    'success': False,
-                    'error': str(e)
-                })
+                results.append({'house_id': house_id, 'success': False, 'error': str(e)})
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("SUMMARY")
-    print("="*60)
+    print("=" * 60)
 
     successful = [r for r in results if r.get('success')]
     failed = [r for r in results if not r.get('success')]
 
     print(f"Successful: {len(successful)}/{len(HOUSE_IDS)}")
-    for r in successful:
-        print(f"  - House {r['house_id']}")
 
     if failed:
-        print(f"\nFailed: {len(failed)}/{len(HOUSE_IDS)}")
+        print(f"Failed: {len(failed)}/{len(HOUSE_IDS)}")
         for r in failed:
-            print(f"  - House {r['house_id']}: {r.get('error', 'see logs')}")
+            print(f"  - House {r['house_id']}: {r.get('error', 'unknown error')}")
 
     print(f"\nResults saved to: {shared_output_dir}")
 
