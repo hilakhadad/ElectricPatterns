@@ -35,7 +35,6 @@ experiment_pipeline/SESSION_SUMMARY.md
 
 # Temporary test scripts
 experiment_pipeline/scripts/_temp_*.py
-experiment_pipeline/scripts/test_array_of_houses.py
 
 # Daily journal sync (personal utility)
 daily_journal_sync/
