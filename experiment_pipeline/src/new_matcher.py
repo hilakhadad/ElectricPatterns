@@ -245,6 +245,14 @@ def process_matches(house_id, run_number, threshold):
         logger.error(f"Warning: Mismatch in event counts. Expected {len(log)}, but tracked {total_tracked}. Missing: {len(all_event_ids)} events.")
 
     save_events(matches, unmatched_on, unmatched_off, output_directory, house_id)
+
+    # Update on_off CSV with matched status column
+    on_off_path = f"{input_directory_log}/on_off_{threshold}.csv"
+    on_off_df = pd.read_csv(on_off_path)
+    on_off_df['matched'] = on_off_df['event_id'].isin(matched_event_ids).astype(int)
+    on_off_df.to_csv(on_off_path, index=False)
+    logger.info(f"Updated {on_off_path} with matched status column ({matched_event_ids.__len__()} matched events)")
+
     logger.info(f"Matching process for house {house_id}, run {run_number} completed.")
 
 

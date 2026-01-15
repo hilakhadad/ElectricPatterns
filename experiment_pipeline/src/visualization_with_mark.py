@@ -4,6 +4,7 @@ from datetime import timedelta
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib
+from matplotlib.lines import Line2D
 matplotlib.use('Agg')  # Set the non-GUI backend for headless environments
 import sys
 from data_util import *
@@ -100,10 +101,41 @@ def plot_combined_phases_interactive(df, phases, filepath, logger, additional_po
         subplot_titles=[f"Phase {phase}" for phase in phases]  # Titles only for the top row
     )
 
-    # Define colors for each phase
-    phase_colors = {"w1": "blue", "w2": "green", "w3": "orange"}
+    # Define colors - same for all phases
+    original_color = "black"  # For original data
+    main_color = "blue"  # For remaining data
+    duration_colors = {
+        "short": "green",
+        "medium": "orange",
+        "long": "purple"
+    }
 
     row_titles = ["Original Data", "After Segregation", "Segregation Data", "Event Markers"]
+
+    # Track which legend entries we've already added
+    legend_added = {'original': False, 'remaining': False, 'short': False, 'medium': False, 'long': False, 'on': False, 'off': False}
+
+    # Add invisible traces for legend items that should always appear
+    # This ensures consistent legend even when some data types are missing
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', name='Original',
+                             line=dict(color=original_color), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', name='Remaining',
+                             line=dict(color=main_color), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', name='Short duration',
+                             line=dict(color=duration_colors["short"]), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', name='Medium duration',
+                             line=dict(color=duration_colors["medium"]), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', name='Long duration',
+                             line=dict(color=duration_colors["long"]), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines+markers', name='Matched event',
+                             line=dict(dash='dash', color='green'), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines+markers', name='Unmatched ON',
+                             line=dict(dash='dash', color='red'), showlegend=True))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines+markers', name='Unmatched OFF',
+                             line=dict(dash='dash', color='blue'), showlegend=True))
+
+    # Mark all as added since we created the legend entries above
+    legend_added = {k: True for k in legend_added}
 
     for col_idx, phase in enumerate(phases, start=1):
         original_values = f'original_{phase}'
@@ -114,7 +146,8 @@ def plot_combined_phases_interactive(df, phases, filepath, logger, additional_po
         fig.add_trace(
             go.Scatter(
                 x=df['timestamp'], y=df[original_values],
-                mode='lines', name=f'Original {phase}', line=dict(color=phase_colors.get(phase, 'black'))
+                mode='lines', name='Original', line=dict(color=original_color),
+                showlegend=False
             ), row=1, col=col_idx
         )
 
@@ -122,29 +155,47 @@ def plot_combined_phases_interactive(df, phases, filepath, logger, additional_po
         fig.add_trace(
             go.Scatter(
                 x=df['timestamp'], y=df[cols_to_plot_after_seg],
-                mode='lines', name=f'Remaining {phase}', line=dict(color=phase_colors.get(phase, 'black'))
+                mode='lines', name='Remaining', line=dict(color=main_color),
+                showlegend=False
             ), row=2, col=col_idx
         )
 
         # Row 3: Segregation Data
         for col in cols_to_plot_seg:
             if col in df.columns:
+                # Determine duration type from column name
+                if 'short' in col:
+                    color = duration_colors["short"]
+                elif 'medium' in col:
+                    color = duration_colors["medium"]
+                else:
+                    color = duration_colors["long"]
                 fig.add_trace(
                     go.Scatter(
                         x=df['timestamp'], y=df[col],
-                        mode='lines', name=col
+                        mode='lines', line=dict(color=color),
+                        showlegend=False
                     ), row=3, col=col_idx
                 )
 
         # Row 4: Additional Points (if any)
         if additional_points is not None:
             for _, point in additional_points[additional_points['phase'] == phase].iterrows():
+                # Determine color based on matched status and event type
+                # Matched events = green, Unmatched ON = red, Unmatched OFF = blue
+                if point.get('matched', 0) == 1:
+                    event_color = 'green'  # Matched event
+                elif point['event_id'].startswith('on_'):
+                    event_color = 'red'    # Unmatched ON
+                else:
+                    event_color = 'blue'   # Unmatched OFF
                 fig.add_trace(
                     go.Scatter(
                         x=[point['start'], point['end']], y=[0, point['magnitude']],
                         mode='lines+markers',
                         name=f"Event {simplify_event_id(point['event_id'])}",
-                        line=dict(dash='dash', color='red')
+                        line=dict(dash='dash', color=event_color),
+                        showlegend=False  # Don't show in legend
                     ), row=4, col=col_idx
                 )
 
@@ -175,10 +226,13 @@ def plot_combined_phases_interactive(df, phases, filepath, logger, additional_po
 def plot_combined_phases(df, phases, filepath, additional_points=None):
     house_id = os.path.splitext(os.path.basename(filepath))[0]
 
-    phase_colors = {
-        "w1": "blue",
-        "w2": "green",
-        "w3": "orange"
+    # Define colors - same for all phases
+    original_color = "black"  # For original and remaining data
+    main_color = "blue"  
+    duration_colors = {
+        "short": "green",
+        "medium": "orange",
+        "long": "purple"
     }
 
     fig, axes = plt.subplots(nrows=4, ncols=len(phases), figsize=(18, 12), sharex=True, sharey=True,
@@ -233,10 +287,9 @@ def plot_combined_phases(df, phases, filepath, additional_points=None):
         axes[0, col_idx].plot(
             df['timestamp'],
             df[original_values],
-            label=original_values,
-            color=phase_colors.get(phase, "black")
+            label='Original' if col_idx == 0 else None,
+            color=original_color
         )
-        axes[0, col_idx].legend()
         axes[0, col_idx].xaxis.set_major_formatter(time_formatter)
         axes[0, col_idx].tick_params(axis='x', rotation=45)
         axes[0, col_idx].set_ylim(y_min, y_max)
@@ -245,10 +298,9 @@ def plot_combined_phases(df, phases, filepath, additional_points=None):
         axes[1, col_idx].plot(
             df['timestamp'],
             df[cols_to_plot_after_seg],
-            label=cols_to_plot_after_seg,
-            color=phase_colors.get(phase, "black")
+            label='Remaining' if col_idx == 0 else None,
+            color=main_color
         )
-        axes[1, col_idx].legend()
         axes[1, col_idx].xaxis.set_major_formatter(time_formatter)
         axes[1, col_idx].tick_params(axis='x', rotation=45)
         axes[1, col_idx].set_ylim(y_min, y_max)
@@ -256,36 +308,75 @@ def plot_combined_phases(df, phases, filepath, additional_points=None):
         # Row 2: Segregated events
         for col in cols_to_plot_seg:
             if col in df.columns:
-                axes[2, col_idx].plot(df['timestamp'], df[col], label=col)
-        axes[2, col_idx].legend()
+                # Determine duration type from column name
+                if 'short' in col:
+                    color = duration_colors["short"]
+                    label = 'Short duration' if col_idx == 0 else None
+                elif 'medium' in col:
+                    color = duration_colors["medium"]
+                    label = 'Medium duration' if col_idx == 0 else None
+                else:
+                    color = duration_colors["long"]
+                    label = 'Long duration' if col_idx == 0 else None
+                axes[2, col_idx].plot(df['timestamp'], df[col], label=label, color=color)
         axes[2, col_idx].xaxis.set_major_formatter(time_formatter)
         axes[2, col_idx].tick_params(axis='x', rotation=45)
         axes[2, col_idx].set_ylim(y_min, y_max)
 
-        # Row 3: Event markers
+        # Row 3: Event markers - color by matched status
+        # Matched = green, Unmatched ON = red, Unmatched OFF = blue
         if additional_points is not None:
             for idx, point in additional_points.iterrows():
                 if phase == point['phase']:
+                    # Determine color based on matched status
+                    if point.get('matched', 0) == 1:
+                        event_color = 'green'  # Matched event
+                    elif point['event_id'].startswith('on_'):
+                        event_color = 'red'    # Unmatched ON
+                    else:
+                        event_color = 'blue'   # Unmatched OFF
+
                     start_y = 0
                     end_y = min(abs(point['magnitude']), y_max)
                     axes[3, col_idx].plot(
                         [point['start'], point['start']], [start_y, end_y],
-                        color='red', linestyle=(0, (int(idx % 5), 3, 3, 3)), label=f"{point['event_id']} start"
+                        color=event_color, linestyle=(0, (int(idx % 5), 3, 3, 3))
                     )
                     axes[3, col_idx].plot(
                         [point['end'], point['end']], [start_y, end_y],
-                        color='blue', linestyle=(0, (int(idx % 5), 3, 3, 3)), label=f"{point['event_id']} end"
+                        color=event_color, linestyle=(0, (int(idx % 5), 3, 3, 3))
                     )
                     axes[3, col_idx].text(
                         point['start'], end_y + (y_max * 0.02), f"{simplify_event_id(point['event_id'])}_S",
-                        color='red', fontsize=8, rotation=45, ha='right'
+                        color=event_color, fontsize=8, rotation=45, ha='right'
                     )
                     axes[3, col_idx].text(
                         point['end'], end_y + (y_max * 0.02), f"{simplify_event_id(point['event_id'])}_E",
-                        color='blue', fontsize=8, rotation=45, ha='left'
+                        color=event_color, fontsize=8, rotation=45, ha='left'
                     )
             axes[3, col_idx].xaxis.set_major_formatter(time_formatter)
             axes[3, col_idx].tick_params(axis='x', rotation=45)
+
+    # Create a single legend for the entire figure
+    # Collect handles and labels from the first column only (where we set labels)
+    handles, labels = [], []
+    for row_idx in range(3):  # Rows 0, 1, 2 have the data plots
+        ax_handles, ax_labels = axes[row_idx, 0].get_legend_handles_labels()
+        for h, l in zip(ax_handles, ax_labels):
+            if l not in labels:  # Avoid duplicates
+                handles.append(h)
+                labels.append(l)
+
+    # Add event legend entries manually
+    handles.append(Line2D([0], [0], color='green', linestyle='--', label='Matched event'))
+    labels.append('Matched event')
+    handles.append(Line2D([0], [0], color='red', linestyle='--', label='Unmatched ON'))
+    labels.append('Unmatched ON')
+    handles.append(Line2D([0], [0], color='blue', linestyle='--', label='Unmatched OFF'))
+    labels.append('Unmatched OFF')
+
+    # Place legend outside the plot area
+    fig.legend(handles, labels, loc='upper right', bbox_to_anchor=(1.12, 0.98))
 
     # Set main title
     first_timestamp = df['timestamp'].iloc[0]
