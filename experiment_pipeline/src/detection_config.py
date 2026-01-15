@@ -98,6 +98,18 @@ EXPERIMENTS = {
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
     ),
+
+    'exp004_noisy_matching': ExperimentConfig(
+        exp_id='exp004',
+        description='Stage 2 noisy matching: match events with noise between ON/OFF using clipped cumsum segregation',
+        threshold=1500,
+        off_threshold_factor=0.8,
+        expand_event_factor=0.05,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
 }
 
 

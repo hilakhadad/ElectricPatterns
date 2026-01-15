@@ -82,6 +82,7 @@ def process_segmentation(house_id, run_number):
                 off_range = (updated_data['timestamp'] >= event['off_start']) & (
                             updated_data['timestamp'] <= event['off_end'] - pd.Timedelta(minutes=1))
                 magnitude = event['on_magnitude']
+                is_noisy = event.get('tag', '') == 'NOISY'
 
                 on_seg = updated_data.loc[on_range, diff].cumsum()
                 on_remain = updated_data.loc[on_range, remaining_power] - on_seg
@@ -92,8 +93,15 @@ def process_segmentation(house_id, run_number):
                     logger.error(
                         f"Negative values detected in ON phase {phase}, duration {duration} at timestamps: {error_timestamps.tolist()}")
 
+                # For NOISY events, take min(magnitude, remaining) to avoid negative values
+                # For regular events, use cumsum to track actual power changes
+                if is_noisy:
+                    # Safe subtraction: don't take more than what's available
+                    current_remaining = updated_data.loc[event_range, remaining_power]
+                    event_seg = current_remaining.clip(upper=magnitude)  # Take at most magnitude
+                else:
+                    event_seg = magnitude + updated_data.loc[event_range, diff].cumsum()
 
-                event_seg = magnitude + updated_data.loc[event_range, diff].cumsum()
                 event_remain = updated_data.loc[event_range, remaining_power] - event_seg
                 if (event_remain < 0).any():
                     error_indices = event_remain[event_remain < 0].index
@@ -102,8 +110,31 @@ def process_segmentation(house_id, run_number):
                     logger.error(
                         f"Negative values detected in EVENT phase {phase}, duration {duration} at timestamps: {error_timestamps.tolist()}")
 
-                off_seg = magnitude + updated_data.loc[off_range, diff].cumsum()
-                off_remain = updated_data.loc[off_range, remaining_power] - off_seg
+                # For OFF segment:
+                # - Regular events: use full cumsum (device power changes tracked normally)
+                # - NOISY events: align remaining to the value at off_end (when device is fully off)
+                #   This way remaining stays flat at the "after device turned off" level
+                if is_noisy:
+                    current_remaining_off = updated_data.loc[off_range, remaining_power]
+                    if len(current_remaining_off) > 0:
+                        # Target = remaining at off_end (the moment after device is fully off)
+                        # Note: off_range excludes off_end, so we need to look it up separately
+                        off_end_mask = updated_data['timestamp'] == event['off_end']
+                        if off_end_mask.any():
+                            target_remaining = updated_data.loc[off_end_mask, remaining_power].iloc[0]
+                        else:
+                            # Fallback to last row of off_range if off_end not found
+                            target_remaining = current_remaining_off.iloc[-1]
+                        # off_seg = what we need to subtract to reach target_remaining
+                        # off_seg = current - target (but not negative)
+                        off_seg = (current_remaining_off - target_remaining).clip(lower=0)
+                        off_remain = current_remaining_off - off_seg  # Will be target_remaining for all rows
+                    else:
+                        off_seg = current_remaining_off
+                        off_remain = current_remaining_off
+                else:
+                    off_seg = magnitude + updated_data.loc[off_range, diff].cumsum()
+                    off_remain = updated_data.loc[off_range, remaining_power] - off_seg
                 if (off_remain < 0).any():
                     error_indices = off_remain[off_remain < 0].index
                     error_timestamps = updated_data.loc[error_indices.intersection(updated_data.index), 'timestamp']
