@@ -5,7 +5,7 @@ Can be run standalone or imported and called from test_array_of_houses.py
 import sys
 import os
 import logging
-import pandas as pd
+import importlib
 from pathlib import Path
 from datetime import datetime
 
@@ -21,10 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Get the project root directory
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
-
-# Import after path setup
-import data_util
-from detection_config import get_experiment, save_experiment_metadata
 
 
 def run_pipeline_for_house(
@@ -53,18 +49,40 @@ def run_pipeline_for_house(
     if input_path is None:
         input_path = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
 
+    # CRITICAL: Reload data_util and all dependent modules to ensure clean state
+    # This is necessary because multiprocessing shares imported modules
+    import data_util
+    importlib.reload(data_util)
+
+    # Now set the paths BEFORE importing other modules
+    data_util.OUTPUT_BASE_PATH = output_path
+    data_util.OUTPUT_ROOT = output_path
+    data_util.INPUT_DIRECTORY = output_path
+    data_util.LOGS_DIRECTORY = f"{output_path}/logs/"
+    data_util.RAW_INPUT_DIRECTORY = input_path
+
+    # Reload all pipeline modules so they pick up the new data_util values
+    import on_off_log
+    import new_matcher
+    import segmentation
+    import eval_segmentation
+    import visualization_with_mark
+
+    importlib.reload(on_off_log)
+    importlib.reload(new_matcher)
+    importlib.reload(segmentation)
+    importlib.reload(eval_segmentation)
+    importlib.reload(visualization_with_mark)
+
+    # Import after reload
+    from detection_config import get_experiment, save_experiment_metadata
+
     # Load experiment config
     try:
         exp_config = get_experiment(experiment_name)
         threshold = exp_config.threshold
     except KeyError as e:
         return {'success': False, 'iterations': 0, 'error': f"Unknown experiment: {e}"}
-
-    # Override data_util paths
-    data_util.OUTPUT_BASE_PATH = output_path
-    data_util.OUTPUT_ROOT = output_path
-    data_util.INPUT_DIRECTORY = output_path
-    data_util.LOGS_DIRECTORY = f"{output_path}/logs/"
 
     # Create output directories
     os.makedirs(output_path, exist_ok=True)
@@ -76,7 +94,7 @@ def run_pipeline_for_house(
         log_handlers.append(logging.StreamHandler())
 
     # Create a unique logger for this house
-    logger = logging.getLogger(f"pipeline_{house_id}")
+    logger = logging.getLogger(f"pipeline_{house_id}_{os.getpid()}")
     logger.setLevel(logging.INFO)
     logger.handlers = []  # Clear existing handlers
     for handler in log_handlers:
@@ -94,13 +112,7 @@ def run_pipeline_for_house(
     logger.info(f"Starting pipeline for house {house_id}")
     logger.info(f"Experiment: {exp_config.exp_id} - {exp_config.description}")
     logger.info(f"Threshold: {threshold}W, Max iterations: {max_iterations}")
-
-    # Import pipeline modules
-    from on_off_log import process_house as detect_events
-    from new_matcher import process_matches
-    from segmentation import process_segmentation
-    from eval_segmentation import evaluate_segmentation
-    from visualization_with_mark import process_visualization
+    logger.info(f"Output path: {output_path}")
 
     # Run iterations
     iterations_completed = 0
@@ -128,23 +140,23 @@ def run_pipeline_for_house(
             logger.info("Step 1: Detecting ON/OFF events...")
             output_dir = f"{output_path}/run_{run_number}/house_{house_id}"
             os.makedirs(output_dir, exist_ok=True)
-            detect_events(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)
+            on_off_log.process_house(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)
 
             # Step 2: Match events
             logger.info("Step 2: Matching events...")
-            process_matches(house_id=house_id, run_number=run_number, threshold=threshold)
+            new_matcher.process_matches(house_id=house_id, run_number=run_number, threshold=threshold)
 
             # Step 3: Segmentation
             logger.info("Step 3: Segmenting data...")
-            process_segmentation(house_id=house_id, run_number=run_number)
+            segmentation.process_segmentation(house_id=house_id, run_number=run_number)
 
             # Step 4: Evaluation
             logger.info("Step 4: Evaluating results...")
-            evaluate_segmentation(house_id=house_id, run_number=run_number, threshold=threshold)
+            eval_segmentation.evaluate_segmentation(house_id=house_id, run_number=run_number, threshold=threshold)
 
             # Step 5: Visualization
             logger.info("Step 5: Creating visualizations...")
-            process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)
+            visualization_with_mark.process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)
 
             iterations_completed += 1
 
@@ -174,6 +186,8 @@ MAX_ITERATIONS = 2
 
 def main():
     """Run pipeline with standalone configuration."""
+    from detection_config import get_experiment
+
     # Create timestamped output directory
     exp_config = get_experiment(EXPERIMENT_NAME)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
