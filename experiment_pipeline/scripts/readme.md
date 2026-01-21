@@ -1,70 +1,55 @@
 # Scripts Directory
 
-Helper and utility scripts for running the pipeline.
+Execution scripts for running the pipeline.
 
----
-
-## 📄 Available Scripts
+## Available Scripts
 
 ### test_single_house.py
-Run the complete pipeline on a single house with customizable parameters.
 
-**Configure:**
+Run the complete pipeline on a single house.
+
+**Configure (in script):**
 ```python
-LOCAL_INPUT_PATH = r"C:\path\to\input"
-LOCAL_OUTPUT_PATH = r"C:\path\to\output"
-HOUSE_ID = "1"
-DEFAULT_THRESHOLD = 1600
-RUN_NUMBER = 0
+HOUSE_ID = "125"                           # House to process
+EXPERIMENT_NAME = "exp005_asymmetric_windows"  # Experiment config
+MAX_ITERATIONS = 2                          # Number of iterations
 ```
 
 **Run:**
-```powershell
+```bash
 python scripts/test_single_house.py
 ```
 
----
+**Import and use:**
+```python
+from test_single_house import run_pipeline_for_house
 
-### run_scripts.py
-Orchestrates the complete pipeline with automatic threshold adjustment.
+result = run_pipeline_for_house(
+    house_id="125",
+    experiment_name="exp005_asymmetric_windows",
+    output_path="/path/to/output",
+    max_iterations=2
+)
+# Returns: {'success': bool, 'iterations': int, 'error': str or None}
+```
+
+### test_array_of_houses.py
+
+Run the pipeline on multiple houses in parallel.
 
 **Features:**
-- Input/output validation
-- Automatic threshold adjustment based on evaluation
-- Multi-house batch processing capability
+- Auto-detects houses from `INPUT/HouseholdData/`
+- Parallel processing with configurable workers
+- Creates timestamped experiment output directory
+- Progress tracking and error handling
 
 **Run:**
-```powershell
-python scripts/run_scripts.py
+```bash
+python scripts/test_array_of_houses.py
 ```
 
----
+## Related
 
-## 🚀 Quick Examples
-
-### Run on a single house:
-```powershell
-# Edit test_single_house.py to set your paths and house ID
-python scripts/test_single_house.py
-```
-
-### Run full pipeline orchestration:
-```powershell
-python scripts/run_scripts.py
-```
-
----
-
-## 📝 Notes
-
-- These scripts are higher-level wrappers around the core modules
-- For testing and development, use the test suite in `tests/`
-- For production runs, use these scripts
-
----
-
-## 🔗 Related
-
-- Core modules: `on_off_log.py`, `new_matcher.py`, `segmentation.py`
+- Source modules: `src/pipeline/` (orchestration), `src/core/` (config)
 - Test suite: `tests/`
 - Documentation: `docs/`

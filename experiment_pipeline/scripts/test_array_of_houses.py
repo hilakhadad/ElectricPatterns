@@ -30,10 +30,11 @@ _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 _INPUT_PATH = _SCRIPT_DIR / "INPUT" / "HouseholdData"
 
 # Auto-detect all houses from INPUT directory
-HOUSE_IDS = sorted([f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit()])
+# HOUSE_IDS = sorted([f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit()])
+HOUSE_IDS = ["1", "1001", "2049", "2035"]
 
 # Experiment name (must match one in detection_config.py)
-EXPERIMENT_NAME = "exp004_noisy_matching"
+EXPERIMENT_NAME = "exp005_asymmetric_windows"
 
 # Number of iterations per house
 MAX_ITERATIONS = 2

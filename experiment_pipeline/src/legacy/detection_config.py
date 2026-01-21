@@ -110,6 +110,18 @@ EXPERIMENTS = {
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
     ),
+
+    'exp005_asymmetric_windows': ExperimentConfig(
+        exp_id='exp005',
+        description='Improved gradual ON/OFF detection: asymmetric window search (symmetric, before-only, after-only) to capture events near max_threshold boundary that were previously missed.',
+        threshold=1500,
+        off_threshold_factor=0.8,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
 }
 
 

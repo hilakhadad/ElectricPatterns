@@ -5,6 +5,7 @@ Calculates power and time metrics comparing original vs remaining consumption.
 import pandas as pd
 import os
 from data_util import setup_logging, OUTPUT_BASE_PATH, LOGS_DIRECTORY
+from pathlib import Path
 
 
 def evaluate_segmentation(house_id, run_number, threshold):
@@ -134,6 +135,8 @@ def evaluate_segmentation(house_id, run_number, threshold):
 
         if minutes_negative > 0:
             logger.warning(f"Phase {phase} - NEGATIVE VALUES DETECTED: {minutes_negative} minutes, {power_negative:.0f}W total")
+            # Save negative values to experiment-level CSV
+            _save_negative_values(current_data, current_remaining, negative_mask, house_id, run_number, phase)
 
         # === MISSING VALUES (rows that disappeared) ===
         # Count rows that exist in baseline but are NaN in current
@@ -221,6 +224,21 @@ def evaluate_segmentation(house_id, run_number, threshold):
     # Return results dict for potential use in stopping conditions
     return {phase: {k: v for k, v in r.items() if k not in ['house_id', 'run_number', 'threshold', 'phase']}
             for r in results_list for phase in [r['phase']]}
+
+
+def _save_negative_values(data, remaining_col_data, negative_mask, house_id, run_number, phase):
+    """Save negative value details to experiment-level CSV for debugging."""
+    negative_values_path = Path(OUTPUT_BASE_PATH) / "negative_values.csv"
+
+    negative_rows = data.loc[negative_mask, ['timestamp']].copy()
+    negative_rows['house_id'] = house_id
+    negative_rows['run_number'] = run_number
+    negative_rows['phase'] = phase
+    negative_rows['remaining_power'] = remaining_col_data[negative_mask].values
+
+    # Append to CSV (create with header if doesn't exist)
+    file_exists = negative_values_path.exists()
+    negative_rows.to_csv(negative_values_path, mode='a', header=not file_exists, index=False)
 
 
 if __name__ == "__main__":

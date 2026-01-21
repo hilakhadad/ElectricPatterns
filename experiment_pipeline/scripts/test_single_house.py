@@ -16,10 +16,9 @@ if sys.platform == 'win32':
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# Add src directory to path to import modules
+# Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-# Get the project root directory
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 
 
@@ -36,46 +35,45 @@ def run_pipeline_for_house(
 
     Args:
         house_id: House ID to process
-        experiment_name: Experiment name from detection_config.py
+        experiment_name: Experiment name from core.config
         output_path: Where to save outputs
         max_iterations: Number of iterations to run
-        input_path: Path to input CSV files (default: INPUT/HouseholdData)
+        input_path: Path to input CSV files
         quiet: If True, suppress console output
 
     Returns:
         dict with results: {'success': bool, 'iterations': int, 'error': str or None}
     """
-    # Set defaults
     if input_path is None:
         input_path = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
 
-    # CRITICAL: Reload data_util and all dependent modules to ensure clean state
-    # This is necessary because multiprocessing shares imported modules
-    import data_util
-    importlib.reload(data_util)
+    # Reload core.paths to update global paths for this run
+    import core.paths
+    importlib.reload(core.paths)
 
-    # Now set the paths BEFORE importing other modules
-    data_util.OUTPUT_BASE_PATH = output_path
-    data_util.OUTPUT_ROOT = output_path
-    data_util.INPUT_DIRECTORY = output_path
-    data_util.LOGS_DIRECTORY = f"{output_path}/logs/"
-    data_util.RAW_INPUT_DIRECTORY = input_path
+    # Override paths for this experiment
+    core.paths.OUTPUT_BASE_PATH = output_path
+    core.paths.OUTPUT_ROOT = output_path
+    core.paths.INPUT_DIRECTORY = output_path
+    core.paths.LOGS_DIRECTORY = f"{output_path}/logs/"
+    core.paths.RAW_INPUT_DIRECTORY = input_path
 
-    # Reload all pipeline modules so they pick up the new data_util values
-    import on_off_log
-    import new_matcher
-    import segmentation
-    import eval_segmentation
-    import visualization_with_mark
+    # Reload modules that depend on core.paths
+    import core.logging_setup
+    importlib.reload(core.logging_setup)
 
-    importlib.reload(on_off_log)
-    importlib.reload(new_matcher)
-    importlib.reload(segmentation)
-    importlib.reload(eval_segmentation)
-    importlib.reload(visualization_with_mark)
+    import core
+    importlib.reload(core)
 
-    # Import after reload
-    from detection_config import get_experiment, save_experiment_metadata
+    # Now import pipeline modules (they will use the updated paths)
+    from pipeline import (
+        process_detection,
+        process_matching,
+        process_segmentation,
+        process_evaluation,
+        process_visualization,
+    )
+    from core import get_experiment, save_experiment_metadata
 
     # Load experiment config
     try:
@@ -93,10 +91,9 @@ def run_pipeline_for_house(
     if not quiet:
         log_handlers.append(logging.StreamHandler())
 
-    # Create a unique logger for this house
     logger = logging.getLogger(f"pipeline_{house_id}_{os.getpid()}")
     logger.setLevel(logging.INFO)
-    logger.handlers = []  # Clear existing handlers
+    logger.handlers = []
     for handler in log_handlers:
         handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logger.addHandler(handler)
@@ -114,7 +111,6 @@ def run_pipeline_for_house(
     logger.info(f"Threshold: {threshold}W, Max iterations: {max_iterations}")
     logger.info(f"Output path: {output_path}")
 
-    # Run iterations
     iterations_completed = 0
 
     for run_number in range(max_iterations):
@@ -122,7 +118,7 @@ def run_pipeline_for_house(
         logger.info(f"ITERATION {run_number} of {max_iterations}")
         logger.info(f"{'#'*60}")
 
-        # Check input file exists
+        # Check input file
         if run_number == 0:
             input_file = f"{input_path}/{house_id}.csv"
         else:
@@ -136,31 +132,31 @@ def run_pipeline_for_house(
                 break
 
         try:
-            # Step 1: Detect events
+            # Step 1: Detection
             logger.info("Step 1: Detecting ON/OFF events...")
             output_dir = f"{output_path}/run_{run_number}/house_{house_id}"
             os.makedirs(output_dir, exist_ok=True)
-            on_off_log.process_house(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)
+            process_detection(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)
 
-            # Step 2: Match events
+            # Step 2: Matching
             logger.info("Step 2: Matching events...")
-            new_matcher.process_matches(house_id=house_id, run_number=run_number, threshold=threshold)
+            process_matching(house_id=house_id, run_number=run_number, threshold=threshold)
 
             # Step 3: Segmentation
             logger.info("Step 3: Segmenting data...")
-            segmentation.process_segmentation(house_id=house_id, run_number=run_number)
+            process_segmentation(house_id=house_id, run_number=run_number)
 
             # Step 4: Evaluation
             logger.info("Step 4: Evaluating results...")
-            eval_segmentation.evaluate_segmentation(house_id=house_id, run_number=run_number, threshold=threshold)
+            process_evaluation(house_id=house_id, run_number=run_number, threshold=threshold)
 
             # Step 5: Visualization
             logger.info("Step 5: Creating visualizations...")
-            visualization_with_mark.process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)
+            process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)
 
             iterations_completed += 1
 
-            # Check if next iteration has data
+            # Check for next iteration
             next_input = f"{output_path}/run_{run_number + 1}/HouseholdData/{house_id}.csv"
             if not os.path.exists(next_input):
                 logger.info("No more events found, stopping iterations")
@@ -177,18 +173,17 @@ def run_pipeline_for_house(
 
 
 # ============================================================================
-# STANDALONE CONFIGURATION - Used when running this file directly
+# STANDALONE CONFIGURATION
 # ============================================================================
-HOUSE_ID = "1"
-EXPERIMENT_NAME = "exp004_noisy_matching"
+HOUSE_ID = "125"
+EXPERIMENT_NAME = "exp005_asymmetric_windows"
 MAX_ITERATIONS = 2
 
 
 def main():
     """Run pipeline with standalone configuration."""
-    from detection_config import get_experiment
+    from core import get_experiment
 
-    # Create timestamped output directory
     exp_config = get_experiment(EXPERIMENT_NAME)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{exp_config.exp_id}_{timestamp}")

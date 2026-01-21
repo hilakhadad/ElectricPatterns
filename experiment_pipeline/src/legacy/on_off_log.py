@@ -5,6 +5,54 @@ import sys
 from data_util import *
 
 
+def merge_overlapping_events(events_df, max_gap_minutes=0):
+    """
+    Merge events that overlap or touch each other.
+
+    Only merges if:
+    - Events overlap (gap < 0)
+    - Events touch (next starts exactly when current ends, gap = 0)
+
+    Does NOT merge events with a gap between them (e.g., one ends at 22:05, next starts at 22:06).
+
+    Args:
+        events_df: DataFrame with 'start', 'end', 'magnitude' columns
+        max_gap_minutes: Maximum gap between events to still merge them (default 0 = only overlapping/touching)
+
+    Returns:
+        DataFrame with merged events
+    """
+    if len(events_df) <= 1:
+        return events_df
+
+    # Sort by start time
+    df = events_df.sort_values('start').reset_index(drop=True)
+
+    merged = []
+    current = df.iloc[0].copy()
+
+    for i in range(1, len(df)):
+        next_event = df.iloc[i]
+
+        # Check if events overlap or touch
+        # gap < 0: overlap, gap = 0: touch, gap > 0: separate events
+        gap = (next_event['start'] - current['end']).total_seconds() / 60
+
+        if gap <= max_gap_minutes:
+            # Merge: extend end time and add magnitudes
+            current['end'] = max(current['end'], next_event['end'])
+            current['magnitude'] = current['magnitude'] + next_event['magnitude']
+        else:
+            # No overlap - save current and start new
+            merged.append(current)
+            current = next_event.copy()
+
+    # Don't forget the last event
+    merged.append(current)
+
+    return pd.DataFrame(merged).reset_index(drop=True)
+
+
 def expand_event(event, data, event_type, diff):
     start, end, magnitude = event['start'], event['end'], event['magnitude']
 
@@ -125,90 +173,104 @@ def detect_smart_gradual_events(data, diff_col, threshold, event_type='on',
             if event_found:
                 break
 
-            start_time = timestamps[i] - np.timedelta64(current_window, 'm')
-            end_time = timestamps[i] + np.timedelta64(current_window, 'm')
+            # Try symmetric window first, then asymmetric windows if needed
+            # window_configs: (before_minutes, after_minutes)
+            window_configs = [
+                (current_window, current_window),  # Symmetric: ±N minutes
+                (current_window, 0),               # Only before: -N to 0 minutes
+                (0, current_window),               # Only after: 0 to +N minutes
+            ]
 
-            window_mask = (timestamps >= start_time) & (timestamps <= end_time)
-            window_indices = np.where(window_mask)[0]
+            for before_mins, after_mins in window_configs:
+                if event_found:
+                    break
 
-            if len(window_indices) < 1:
-                continue
+                start_time = timestamps[i] - np.timedelta64(before_mins, 'm')
+                end_time = timestamps[i] + np.timedelta64(after_mins, 'm')
 
-            # Filter to only adjacent indices that are NOT already used
-            # This prevents the same timestamps from being included in multiple events
-            adjacent_indices = []
-            for idx in sorted(window_indices):
-                if idx in used_indices:
-                    # Skip indices that are already part of another event
+                window_mask = (timestamps >= start_time) & (timestamps <= end_time)
+                window_indices = np.where(window_mask)[0]
+
+                if len(window_indices) < 1:
                     continue
-                if not adjacent_indices:
-                    # First index in the sequence
-                    adjacent_indices.append(idx)
-                else:
-                    # Check if this index is within 2 minutes of the last added index
-                    time_diff = (timestamps[idx] - timestamps[adjacent_indices[-1]]) / np.timedelta64(1, 'm')
-                    if time_diff <= 2:
+
+                # Filter to only adjacent indices that are NOT already used
+                # This prevents the same timestamps from being included in multiple events
+                adjacent_indices = []
+                for idx in sorted(window_indices):
+                    if idx in used_indices:
+                        # Skip indices that are already part of another event
+                        continue
+                    if not adjacent_indices:
+                        # First index in the sequence
                         adjacent_indices.append(idx)
                     else:
-                        # Gap too large - stop here and use what we have
-                        break
+                        # Check if this index is within 2 minutes of the last added index
+                        time_diff = (timestamps[idx] - timestamps[adjacent_indices[-1]]) / np.timedelta64(1, 'm')
+                        if time_diff <= 2:
+                            adjacent_indices.append(idx)
+                        else:
+                            # Gap too large - stop here and use what we have
+                            break
 
-            if len(adjacent_indices) < 1:
-                continue
+                if len(adjacent_indices) < 1:
+                    continue
 
-            adjacent_indices = np.array(adjacent_indices)
-            window_diffs = diffs[adjacent_indices]
-            window_sum = window_diffs.sum()
+                adjacent_indices = np.array(adjacent_indices)
+                window_diffs = diffs[adjacent_indices]
+                window_sum = window_diffs.sum()
 
-            # Determine primary direction and calculate noise threshold
-            if event_type == 'on':
-                positive_sum = window_diffs[window_diffs > 0].sum()
-                negative_sum = abs(window_diffs[window_diffs < 0].sum())
-                primary_sum = positive_sum
-                opposite_sum = negative_sum
-            else:
-                positive_sum = window_diffs[window_diffs > 0].sum()
-                negative_sum = abs(window_diffs[window_diffs < 0].sum())
-                primary_sum = negative_sum
-                opposite_sum = positive_sum
+                # Determine primary direction and calculate noise threshold
+                if event_type == 'on':
+                    positive_sum = window_diffs[window_diffs > 0].sum()
+                    negative_sum = abs(window_diffs[window_diffs < 0].sum())
+                    primary_sum = positive_sum
+                    opposite_sum = negative_sum
+                else:
+                    positive_sum = window_diffs[window_diffs > 0].sum()
+                    negative_sum = abs(window_diffs[window_diffs < 0].sum())
+                    primary_sum = negative_sum
+                    opposite_sum = positive_sum
 
-            # Allow opposite-direction changes if they're small enough
-            noise_threshold = max(50, abs(primary_sum) * 0.03)
+                # Allow opposite-direction changes if they're small enough
+                noise_threshold = max(50, abs(primary_sum) * 0.03)
 
-            if opposite_sum > noise_threshold:
-                # Too much opposite-direction change - try larger window
-                continue
+                if opposite_sum > noise_threshold:
+                    # Too much opposite-direction change - try next window config
+                    continue
 
-            valid_indices = adjacent_indices
-            if len(valid_indices) == 0:
-                continue
+                valid_indices = adjacent_indices
+                if len(valid_indices) == 0:
+                    continue
 
-            # Check duration constraint
-            min_significant_for_duration = threshold * 0.05
-            significant_mask = np.abs(diffs[valid_indices]) >= min_significant_for_duration
-            significant_indices = valid_indices[significant_mask]
+                # Check duration constraint
+                min_significant_for_duration = threshold * 0.05
+                significant_mask = np.abs(diffs[valid_indices]) >= min_significant_for_duration
+                significant_indices = valid_indices[significant_mask]
 
-            if len(significant_indices) == 0:
-                continue
+                if len(significant_indices) == 0:
+                    continue
 
-            event_start = timestamps[significant_indices[0]]
-            event_end = timestamps[significant_indices[-1]]
-            duration_minutes = (event_end - event_start) / np.timedelta64(1, 'm')
+                event_start = timestamps[significant_indices[0]]
+                event_end = timestamps[significant_indices[-1]]
+                # Duration = number of data points, not time difference
+                # If we have points at 22:06 and 22:07, that's 2 minutes of data
+                duration_minutes = len(significant_indices)
 
-            if duration_minutes > max_duration_minutes:
-                continue
+                if duration_minutes > max_duration_minutes:
+                    continue
 
-            # Check if it meets threshold but not too much (between 80%-130%)
-            abs_sum = abs(window_sum)
-            if partial_threshold <= abs_sum <= max_threshold:
-                # Valid gradual event found!
-                events.append({
-                    'start': event_start,
-                    'end': event_end,
-                    'magnitude': window_sum
-                })
-                used_indices.update(valid_indices)
-                event_found = True  # Stop trying larger windows
+                # Check if it meets threshold but not too much (between 80%-130%)
+                abs_sum = abs(window_sum)
+                if partial_threshold <= abs_sum <= max_threshold:
+                    # Valid gradual event found!
+                    events.append({
+                        'start': event_start,
+                        'end': event_end,
+                        'magnitude': window_sum
+                    })
+                    used_indices.update(valid_indices)
+                    event_found = True  # Stop trying other window configs
 
     if not events:
         return pd.DataFrame(columns=['start', 'end', 'magnitude'])
@@ -328,19 +390,28 @@ def process_house(house_id, run_number, threshold=DEFAULT_THRESHOLD, config=None
             if len(gradual_on) > 0:
                 logger.info(f"    Found {len(gradual_on)} gradual ON events")
                 results_on = pd.concat([results_on, gradual_on], ignore_index=True)
-                # Remove duplicates after merging (same start and end)
-                results_on = results_on.drop_duplicates(subset=['start', 'end'], keep='first').reset_index(drop=True)
             if len(gradual_off) > 0:
                 logger.info(f"    Found {len(gradual_off)} gradual OFF events")
                 results_off = pd.concat([results_off, gradual_off], ignore_index=True)
-                # Remove duplicates after merging (same start and end)
-                results_off = results_off.drop_duplicates(subset=['start', 'end'], keep='first').reset_index(drop=True)
 
-        results_on['duration'] = (results_on['end'] - results_on['start']).dt.total_seconds() / 60
+            # Merge overlapping or adjacent events (e.g., sharp + gradual that form one device activation)
+            before_merge_on = len(results_on)
+            before_merge_off = len(results_off)
+            results_on = merge_overlapping_events(results_on, max_gap_minutes=0)
+            results_off = merge_overlapping_events(results_off, max_gap_minutes=0)
+            if len(results_on) < before_merge_on:
+                logger.info(f"    Merged {before_merge_on - len(results_on)} overlapping ON events")
+            if len(results_off) < before_merge_off:
+                logger.info(f"    Merged {before_merge_off - len(results_off)} overlapping OFF events")
+
+        # Duration = number of data points, not time difference
+        # start=22:05, end=22:05 -> 1 minute (1 data point)
+        # start=22:05, end=22:07 -> 3 minutes (3 data points)
+        results_on['duration'] = ((results_on['end'] - results_on['start']).dt.total_seconds() / 60)
         results_on['phase'] = phase
         results_on['event'] = 'on'
 
-        results_off['duration'] = (results_off['end'] - results_off['start']).dt.total_seconds() / 60
+        results_off['duration'] = ((results_off['end'] - results_off['start']).dt.total_seconds() / 60)
         results_off['phase'] = phase
         results_off['event'] = 'off'
 

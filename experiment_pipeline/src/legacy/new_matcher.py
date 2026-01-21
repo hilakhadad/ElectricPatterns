@@ -159,7 +159,15 @@ def find_noisy_match(data, on_event, off_events, max_time_diff, max_magnitude_di
             logger.info(f"[Stage 2] Rejected {on_id}-{off_id}: power dropped to {min_power}W (baseline={baseline_power}W)")
             continue
 
-        # Skip validation with is_valid_event_removal - we'll use clipped cumsum instead
+        # Validate that removal won't create negative values
+        off_event_dict = off_event.to_dict()
+        off_event_dict['phase'] = phase
+        on_event_dict = {'start': on_event['start'], 'end': on_end, 'magnitude': on_magnitude, 'phase': phase, 'event_id': on_id}
+
+        if not is_valid_event_removal(data, on_event_dict, off_event_dict, logger):
+            logger.info(f"[Stage 2] Rejected {on_id}-{off_id}: would create negative values")
+            continue
+
         logger.info(f"[Stage 2] Matched {on_id} with {off_id} as NOISY: ON={on_magnitude}W, OFF={off_magnitude}W")
         return off_event, "NOISY"
 
@@ -167,14 +175,129 @@ def find_noisy_match(data, on_event, off_events, max_time_diff, max_magnitude_di
     return None, None
 
 
+def find_matches_stack_based(data, on_events_list, off_events_list, phase, max_time_diff, max_magnitude_diff, logger):
+    """
+    Stack-based matching: process events chronologically using LIFO approach.
+
+    When an OFF event arrives, try to match it with the most recent ON event (LIFO)
+    that has similar magnitude. This handles overlapping events better.
+
+    Args:
+        data: DataFrame with power data
+        on_events_list: list of ON event dicts
+        off_events_list: list of OFF event dicts
+        phase: phase name (w1, w2, w3)
+        max_time_diff: max hours between ON and OFF
+        max_magnitude_diff: max watts difference for deviation check
+        logger: logger instance
+
+    Returns:
+        matches: list of matched event dicts
+        unmatched_on: list of unmatched ON events
+        unmatched_off: list of unmatched OFF events
+    """
+    # Combine and sort all events chronologically
+    all_events = []
+    for e in on_events_list:
+        all_events.append({**e, 'type': 'on', 'sort_time': e['end']})
+    for e in off_events_list:
+        all_events.append({**e, 'type': 'off', 'sort_time': e['start']})
+
+    all_events.sort(key=lambda x: x['sort_time'])
+
+    # Stack of active ON events (LIFO)
+    on_stack = []
+    matches = []
+    unmatched_off = []
+
+    diff_col = f"{phase}_diff"
+
+    for event in all_events:
+        if event['type'] == 'on':
+            # Push ON event to stack
+            on_stack.append(event)
+            logger.info(f"[Stack] Pushed {event['event_id']} to stack (magnitude={event['magnitude']}W). Stack size: {len(on_stack)}")
+
+        else:  # OFF event
+            off_event = event
+            off_id = off_event['event_id']
+            off_magnitude = abs(off_event['magnitude'])
+            off_start = off_event['start']
+
+            logger.info(f"[Stack] Processing OFF {off_id} (magnitude={off_magnitude}W). Stack size: {len(on_stack)}")
+
+            # Try to find matching ON from stack (LIFO order - check from end)
+            matched = False
+            for i in range(len(on_stack) - 1, -1, -1):
+                on_event = on_stack[i]
+                on_id = on_event['event_id']
+                on_magnitude = abs(on_event['magnitude'])
+                on_end = on_event['end']
+
+                # Check time constraint
+                time_diff_hours = (off_start - on_end).total_seconds() / 3600
+                if time_diff_hours > max_time_diff or time_diff_hours < 0:
+                    continue
+
+                # Check magnitude similarity (±500W for stack matching)
+                mag_diff = abs(on_magnitude - off_magnitude)
+                if mag_diff > 500:
+                    logger.info(f"[Stack] {on_id} magnitude mismatch with {off_id}: {on_magnitude}W vs {off_magnitude}W (diff={mag_diff}W)")
+                    continue
+
+                # Validate that removal won't create negative values
+                if not is_valid_event_removal(data, on_event, off_event, logger):
+                    logger.info(f"[Stack] {on_id}-{off_id} failed validation, trying next in stack")
+                    continue
+
+                # Determine tag (SPIKE or NON-M)
+                duration_minutes = (off_event['end'] - on_event['start']).total_seconds() / 60
+                if duration_minutes <= 2:
+                    tag = "SPIKE"
+                else:
+                    tag = "NON-M"
+
+                # Match found!
+                matches.append({
+                    'on_event_id': on_id,
+                    'off_event_id': off_id,
+                    'on_start': on_event['start'],
+                    'on_end': on_event['end'],
+                    'off_start': off_event['start'],
+                    'off_end': off_event['end'],
+                    'duration': duration_minutes,
+                    'on_magnitude': on_event['magnitude'],
+                    'off_magnitude': off_event['magnitude'],
+                    'tag': tag,
+                    'phase': phase
+                })
+
+                logger.info(f"[Stack] Matched {on_id} with {off_id} as {tag} (mag diff={mag_diff}W)")
+
+                # Remove matched ON from stack
+                on_stack.pop(i)
+                matched = True
+                break
+
+            if not matched:
+                logger.info(f"[Stack] No match found for OFF {off_id}, adding to unmatched")
+                unmatched_off.append(off_event)
+
+    # Remaining ON events in stack are unmatched
+    unmatched_on = on_stack
+    for on_event in unmatched_on:
+        logger.info(f"[Stack] Unmatched ON: {on_event['event_id']}")
+
+    logger.info(f"[Stack] Phase {phase} complete: {len(matches)} matches, {len(unmatched_on)} unmatched ON, {len(unmatched_off)} unmatched OFF")
+
+    return matches, unmatched_on, unmatched_off
+
+
 def is_valid_event_removal(data, on_event, off_event, logger):
 
     phase = on_event['phase']
     on_id = on_event['event_id']
     off_id = off_event['event_id']
-
-    if on_id == 'on_w1_103':
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
 
     power_col = phase
     diff_col = f"{phase}_diff"  #
@@ -192,29 +315,34 @@ def is_valid_event_removal(data, on_event, off_event, logger):
         event_remain = data.loc[event_range, power_col] - event_seg
         off_seg = magnitude + data.loc[off_range, diff_col].cumsum()
         off_remain = data.loc[off_range, power_col] - off_seg
-        if on_id == 'on_w1_103':
-            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
-            print(f"on_seg:{on_seg}")
-            print(f"on_remain:{on_remain}")
-            print(f"event_seg:{event_seg}")
-            print(f"event_remain:{event_remain}")
-            print(f"off_seg:{off_seg}")
-            print(f"off_remain:{off_remain}")
-            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
     except Exception as e:
         logger.error(f"Error adjusting data ranges of {on_id} and {off_id}: {e}")
         return False
 
+    # Check remaining power (what's left after removing event) - must not be negative
     if (on_remain < 0).any():
-        logger.warning(f"Negative values detected in ON period for event {on_id} (Phase {phase}). Skipping match with OFF event {off_id}.")
+        logger.warning(f"Negative remaining in ON period for {on_id}. Skipping match with {off_id}.")
         return False
 
     if (event_remain < 0).any():
-        logger.warning(f"Negative values detected in the intermediate period between ON event {on_id} and OFF event {off_id} (Phase {phase}). Skipping match.")
+        logger.warning(f"Negative remaining in event period between {on_id} and {off_id}. Skipping match.")
         return False
 
     if (off_remain < 0).any():
-        logger.warning(f"Negative values detected in OFF period for event {off_id} (Phase {phase}). Skipping match with ON event {on_id}.")
+        logger.warning(f"Negative remaining in OFF period for {off_id}. Skipping match with {on_id}.")
+        return False
+
+    # Check event power itself - must not be negative
+    if (on_seg < 0).any():
+        logger.warning(f"Negative event power in ON period for {on_id}. Skipping match with {off_id}.")
+        return False
+
+    if (event_seg < 0).any():
+        logger.warning(f"Negative event power in event period between {on_id} and {off_id}. Skipping match.")
+        return False
+
+    if (off_seg < 0).any():
+        logger.warning(f"Negative event power in OFF period for {off_id}. Skipping match with {on_id}.")
         return False
 
     return True
@@ -395,10 +523,97 @@ def process_matches(house_id, run_number, threshold):
     logger.info(f"Matching process for house {house_id}, run {run_number} completed.")
 
 
+def process_matches_stack_based(house_id, run_number, threshold):
+    """
+    Alternative matching using stack-based approach.
+    Call this instead of process_matches to use LIFO matching.
+    """
+    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    logger.info(f"[Stack-based] Match process for house {house_id} in run {run_number}.")
+
+    input_directory_data = RAW_INPUT_DIRECTORY if run_number == 0 else f"{INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
+    input_directory_log = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+    output_directory = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+
+    os.makedirs(output_directory, exist_ok=True)
+
+    file_path_data = f"{input_directory_data}/{house_id}.csv"
+    file_path_log = f"{input_directory_log}/on_off_{threshold}.csv"
+
+    if not os.path.exists(file_path_data) or not os.path.exists(file_path_log):
+        logger.error(f"Missing input files for house {house_id} in run {run_number}.")
+        return
+
+    data = pd.read_csv(file_path_data, parse_dates=['timestamp'])
+    log = pd.read_csv(file_path_log, parse_dates=['start', 'end'])
+
+    data.rename(columns={'1': 'w1', '2': 'w2', '3': 'w3'}, inplace=True)
+    data.drop(columns=['sum'], inplace=True, errors='ignore')
+
+    phases = ['w1', 'w2', 'w3']
+    all_matches = []
+    all_unmatched_on = []
+    all_unmatched_off = []
+
+    for phase in phases:
+        data[f"{phase}_diff"] = data[phase].diff()
+
+        on_events = log[(log['phase'] == phase) & (log['event'] == 'on')].to_dict('records')
+        off_events = log[(log['phase'] == phase) & (log['event'] == 'off')].to_dict('records')
+
+        matches, unmatched_on, unmatched_off = find_matches_stack_based(
+            data, on_events, off_events, phase,
+            max_time_diff=6,
+            max_magnitude_diff=350,
+            logger=logger
+        )
+
+        all_matches.extend(matches)
+        all_unmatched_on.extend(unmatched_on)
+        all_unmatched_off.extend(unmatched_off)
+
+    # Format matches for saving (convert timestamps to strings)
+    formatted_matches = []
+    for m in all_matches:
+        formatted_matches.append({
+            'on_event_id': m['on_event_id'],
+            'off_event_id': m['off_event_id'],
+            'on_start': m['on_start'].strftime('%d/%m/%Y %H:%M'),
+            'on_end': m['on_end'].strftime('%d/%m/%Y %H:%M'),
+            'off_start': m['off_start'].strftime('%d/%m/%Y %H:%M'),
+            'off_end': m['off_end'].strftime('%d/%m/%Y %H:%M'),
+            'duration': m['duration'],
+            'on_magnitude': m['on_magnitude'],
+            'off_magnitude': m['off_magnitude'],
+            'tag': m['tag'],
+            'phase': m['phase']
+        })
+
+    save_events(formatted_matches, all_unmatched_on, all_unmatched_off, output_directory, house_id)
+
+    # Track matched IDs
+    matched_event_ids = set()
+    for m in all_matches:
+        matched_event_ids.add(m['on_event_id'])
+        matched_event_ids.add(m['off_event_id'])
+
+    # Update on_off CSV with matched status column
+    on_off_path = f"{input_directory_log}/on_off_{threshold}.csv"
+    on_off_df = pd.read_csv(on_off_path)
+    on_off_df['matched'] = on_off_df['event_id'].isin(matched_event_ids).astype(int)
+    on_off_df.to_csv(on_off_path, index=False)
+
+    logger.info(f"[Stack-based] Matching completed: {len(all_matches)} matches, {len(matched_event_ids)} matched events")
+
+
 if __name__ == "__main__":
     house_id = sys.argv[1]
     run_number = int(sys.argv[2])
     threshold = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_THRESHOLD
 
-    process_matches(house_id, run_number, threshold)
+    # Use --stack flag to use stack-based matching
+    if len(sys.argv) > 4 and sys.argv[4] == '--stack':
+        process_matches_stack_based(house_id, run_number, threshold)
+    else:
+        process_matches(house_id, run_number, threshold)
 

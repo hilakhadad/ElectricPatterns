@@ -1,43 +1,64 @@
 experiment_pipeline/
 ├── README.md                      # Main project documentation
 │
-├── Core Modules (Python files):
-│   ├── data_util.py              # Configuration & paths
-│   ├── on_off_log.py             # Event detection
-│   ├── new_matcher.py            # Event matching  
-│   ├── segmentation.py           # Data segmentation
-│   ├── eval_segmentation.py      # Evaluation
-│   └── visualization_with_mark.py # Visualization
-│
-├── INPUT/                         # Input data
-│   ├── readme.md
-│   └── HouseholdData/            # 166 household CSV files
-│       ├── example.csv
-│       ├── 1.csv, 2.csv, etc.
-│
-├── OUTPUT/                        # All pipeline outputs
-│   ├── readme.md
-│   ├── run_0/, run_1/, ...       # Results by run
-│   ├── logs/                     # Execution logs
-│   └── errors/                   # Error files
-│
-├── tests/                         # Test suite
-│   ├── readme.md
-│   ├── __init__.py
-│   ├── test_unit.py              # Unit tests
-│   ├── test_pipeline.py          # Integration tests
-│   └── run_all_tests.py          # Run all tests
-│
-├── docs/                          # Documentation
-│   ├── readme.md
-│   ├── getting-started.md        # Start here!
-│   ├── quick-start.md            # Quick reference
-│   ├── testing-guide.md          # Testing docs
-│   ├── refactoring-workflow.md   # Refactoring guide
-│   ├── output-structure.md       # Output structure
-│   └── summary.md                # Project summary
+├── src/                           # Source code (modular structure)
+│   ├── __init__.py               # Main exports
+│   │
+│   ├── core/                     # Configuration, paths, logging
+│   │   ├── __init__.py           # Exports all from submodules
+│   │   ├── config.py             # ExperimentConfig, EXPERIMENTS
+│   │   ├── paths.py              # Path constants, PathManager
+│   │   └── logging_setup.py      # setup_logging function
+│   │
+│   ├── detection/                # Event detection logic
+│   │   ├── __init__.py
+│   │   ├── sharp.py              # Sharp (single-minute) events
+│   │   ├── gradual.py            # Gradual (multi-minute) events
+│   │   ├── merger.py             # Merge overlapping events
+│   │   └── expander.py           # Expand events to include adjacent changes
+│   │
+│   ├── matching/                 # Event matching logic
+│   │   ├── __init__.py
+│   │   ├── stage1.py             # Stage 1 matching (exact)
+│   │   ├── stage2.py             # Stage 2 matching (tolerant)
+│   │   ├── stack_matcher.py      # Stack-based matching
+│   │   ├── validator.py          # Match validation
+│   │   └── io.py                 # File I/O utilities
+│   │
+│   ├── segmentation/             # Power segmentation
+│   │   ├── __init__.py
+│   │   ├── processor.py          # Core segmentation logic
+│   │   ├── summarizer.py         # Duration category summarization
+│   │   ├── errors.py             # Negative value logging
+│   │   └── evaluation.py         # Metrics calculation
+│   │
+│   ├── visualization/            # Plotting
+│   │   ├── __init__.py
+│   │   ├── interactive.py        # Plotly interactive plots
+│   │   ├── static.py             # Matplotlib static plots
+│   │   └── utils.py              # Helper functions
+│   │
+│   ├── pipeline/                 # Orchestration functions
+│   │   ├── __init__.py           # Exports process_* functions
+│   │   ├── detection.py          # process_detection()
+│   │   ├── matching.py           # process_matching()
+│   │   ├── segmentation.py       # process_segmentation()
+│   │   ├── evaluation.py         # process_evaluation()
+│   │   └── visualization.py      # process_visualization()
+│   │
+│   └── legacy/                   # Backup of original code
+│       ├── __init__.py
+│       ├── data_util.py          # Original configuration
+│       ├── detection_config.py   # Original detection config
+│       ├── on_off_log.py         # Original detection
+│       ├── new_matcher.py        # Original matching
+│       ├── segmentation.py       # Original segmentation
+│       ├── eval_segmentation.py  # Original evaluation
+│       └── visualization_with_mark.py  # Original visualization
 │
 └── scripts/                       # Utility scripts
-    ├── readme.md
-    ├── test_single_house.py      # Test single house
-    └── run_scripts.py            # Pipeline orchestrator
+   ├── readme.md
+   ├── test_single_house.py      # Test single house
+   ├── test_array_of_houses.py   # Batch processing
+   └── run_scripts.py            # Pipeline orchestrator
+
