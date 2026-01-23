@@ -58,21 +58,36 @@ def run_pipeline_for_house(
     core.paths.LOGS_DIRECTORY = f"{output_path}/logs/"
     core.paths.RAW_INPUT_DIRECTORY = input_path
 
-    # Reload modules that depend on core.paths
+    # Reload core modules that contain path variables
     import core.logging_setup
     importlib.reload(core.logging_setup)
 
     import core
     importlib.reload(core)
 
-    # Now import pipeline modules (they will use the updated paths)
-    from pipeline import (
-        process_detection,
-        process_matching,
-        process_segmentation,
-        process_evaluation,
-        process_visualization,
-    )
+    # Reload pipeline modules to pick up updated paths
+    # Must reload in correct order: pipeline first, then submodules
+    import pipeline
+    importlib.reload(pipeline)
+
+    import pipeline.detection
+    import pipeline.matching
+    import pipeline.segmentation
+    import pipeline.evaluation
+    import pipeline.visualization
+    importlib.reload(pipeline.detection)
+    importlib.reload(pipeline.matching)
+    importlib.reload(pipeline.segmentation)
+    importlib.reload(pipeline.evaluation)
+    importlib.reload(pipeline.visualization)
+
+    # Now get the reloaded functions
+    process_detection = pipeline.detection.process_detection
+    process_matching = pipeline.matching.process_matching
+    process_segmentation = pipeline.segmentation.process_segmentation
+    process_evaluation = pipeline.evaluation.process_evaluation
+    process_visualization = pipeline.visualization.process_visualization
+
     from core import get_experiment, save_experiment_metadata
 
     # Load experiment config
@@ -175,7 +190,7 @@ def run_pipeline_for_house(
 # ============================================================================
 # STANDALONE CONFIGURATION
 # ============================================================================
-HOUSE_ID = "125"
+HOUSE_ID = "140_debug"
 EXPERIMENT_NAME = "exp005_asymmetric_windows"
 MAX_ITERATIONS = 2
 

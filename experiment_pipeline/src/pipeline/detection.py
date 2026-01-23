@@ -77,12 +77,18 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
     data.drop(columns=['sum'], inplace=True, errors='ignore')
     data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
 
+    # Sort by timestamp for efficient processing
+    data = data.sort_values('timestamp').reset_index(drop=True)
+
+    # Create indexed version for fast lookups
+    data_indexed = data.set_index('timestamp')
+
     phases = ['w1', 'w2', 'w3']
     results = pd.DataFrame()
 
     for phase in tqdm(phases, desc=f"Detecting events for {house_id}"):
         on_events, off_events = _detect_phase_events(
-            data, phase, threshold, off_threshold_factor,
+            data, data_indexed, phase, threshold, off_threshold_factor,
             use_gradual, gradual_window, progressive_search, logger
         )
 
@@ -121,9 +127,14 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
     logger.info(f"Detection completed for house {house_id}, run {run_number}")
 
 
-def _detect_phase_events(data, phase, threshold, off_threshold_factor,
+def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_factor,
                          use_gradual, gradual_window, progressive_search, logger):
-    """Detect ON and OFF events for a single phase."""
+    """Detect ON and OFF events for a single phase.
+
+    Args:
+        data: DataFrame with timestamp column (for boolean indexing)
+        data_indexed: Same DataFrame but with timestamp as index (for fast lookups)
+    """
     diff_col = f'{phase}_diff'
     on_col = f"{phase}_{threshold}_on"
     off_col = f"{phase}_{threshold}_off"
@@ -133,6 +144,9 @@ def _detect_phase_events(data, phase, threshold, off_threshold_factor,
     off_threshold = int(threshold * off_threshold_factor)
     data[on_col] = np.where(data[diff_col] >= threshold, data[diff_col], 0)
     data[off_col] = np.where(data[diff_col] <= -off_threshold, data[diff_col], 0)
+
+    # Update indexed version with new columns
+    data_indexed[diff_col] = data.set_index('timestamp')[diff_col]
 
     # Group consecutive events
     is_on = f'{on_col}_magnitude'
@@ -154,19 +168,15 @@ def _detect_phase_events(data, phase, threshold, off_threshold_factor,
         .reset_index(drop=True)
     )
 
-    # Calculate magnitude as: value at end - value before start
+    # Add placeholder magnitude for expand_event (it recalculates from phase values)
     if len(results_on) > 0:
-        results_on['magnitude'] = results_on.apply(
-            lambda row: _calc_magnitude(data, phase, row['start'], row['end']), axis=1
-        )
+        results_on['magnitude'] = 0
     if len(results_off) > 0:
-        results_off['magnitude'] = results_off.apply(
-            lambda row: _calc_magnitude(data, phase, row['start'], row['end']), axis=1
-        )
+        results_off['magnitude'] = 0
 
-    # Expand events
-    results_on = results_on.apply(lambda x: expand_event(x, data, 'on', diff_col), axis=1)
-    results_off = results_off.apply(lambda x: expand_event(x, data, 'off', diff_col), axis=1)
+    # Expand events - use indexed data for fast lookups
+    results_on = results_on.apply(lambda x: expand_event(x, data_indexed, 'on', diff_col), axis=1)
+    results_off = results_off.apply(lambda x: expand_event(x, data_indexed, 'off', diff_col), axis=1)
 
     # Add gradual detection
     if use_gradual:
@@ -187,10 +197,10 @@ def _detect_phase_events(data, phase, threshold, off_threshold_factor,
             logger.info(f"    Found {len(gradual_off)} gradual OFF events")
             results_off = pd.concat([results_off, gradual_off], ignore_index=True)
 
-        # Merge overlapping
+        # Merge overlapping (pass indexed data for magnitude recalculation)
         before_on, before_off = len(results_on), len(results_off)
-        results_on = merge_overlapping_events(results_on, max_gap_minutes=0)
-        results_off = merge_overlapping_events(results_off, max_gap_minutes=0)
+        results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase)
+        results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase)
         if len(results_on) < before_on:
             logger.info(f"    Merged {before_on - len(results_on)} overlapping ON events")
         if len(results_off) < before_off:

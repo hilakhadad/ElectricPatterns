@@ -5,6 +5,10 @@ Finds matches where:
 - Same phase
 - Similar magnitudes between ON and OFF
 - Power never drops significantly below baseline (device stays on)
+
+Performance optimizations:
+- Pre-filter candidates by magnitude similarity in initial query
+- Sort by magnitude similarity first to find best matches faster
 """
 import pandas as pd
 from .validator import is_valid_event_removal
@@ -15,9 +19,12 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
     """
     Stage 2 matcher: finds matches when there's noise (other devices) between ON and OFF.
 
+    Uses progressive window search: starts with small time window and expands
+    gradually to find the closest match first.
+
     Criteria:
     1. Same phase
-    2. OFF within time window (6 hours)
+    2. OFF within time window (progressive: 15min -> 30min -> 1hr -> 2hr -> 4hr -> max)
     3. ON and OFF magnitudes are similar (±max_magnitude_diff)
     4. Power never drops below baseline - 200W (device stays on)
 
@@ -39,75 +46,69 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
     on_end = on_event['end']
     on_magnitude = abs(on_event['magnitude'])
 
-    logger.info(f"[Stage 2] Processing unmatched ON event: ID={on_id}, Phase={phase}, Magnitude={on_magnitude}")
+    logger.debug(f"[Stage 2] Processing {on_id}, Phase={phase}, Magnitude={on_magnitude}W")
 
-    # Find OFF events in same phase within time window
-    candidates = off_events[
-        (off_events['phase'] == phase) &
-        (off_events['start'] > on_end) &
-        (off_events['start'] - on_end <= pd.Timedelta(hours=max_time_diff))
-    ]
+    # Progressive window search: start small and expand
+    # Windows in minutes: 15min, 30min, 1hr, 2hr, 4hr, then max_time_diff
+    window_steps_minutes = [15, 30, 60, 120, 240, max_time_diff * 60]
 
-    if candidates.empty:
-        logger.info(f"[Stage 2] No OFF events found for {on_id} within time window.")
-        return None, None
+    for window_minutes in window_steps_minutes:
+        if window_minutes > max_time_diff * 60:
+            break
 
-    # Filter by magnitude similarity
-    candidates = candidates.copy()
-    candidates['magnitude_diff'] = abs(abs(candidates['magnitude']) - on_magnitude)
-    candidates = candidates[candidates['magnitude_diff'] <= max_magnitude_diff]
+        # Pre-filter by phase, time, AND magnitude similarity in one query
+        candidates = off_events[
+            (off_events['phase'] == phase) &
+            (off_events['start'] > on_end) &
+            (off_events['start'] - on_end <= pd.Timedelta(minutes=window_minutes)) &
+            (abs(abs(off_events['magnitude']) - on_magnitude) <= max_magnitude_diff)
+        ]
 
-    if candidates.empty:
-        logger.info(f"[Stage 2] No OFF events with similar magnitude found for {on_id}.")
-        return None, None
-
-    # Sort by magnitude similarity first, then by time
-    candidates['time_diff'] = (candidates['start'] - on_end).abs()
-    candidates = candidates.sort_values(by=['magnitude_diff', 'time_diff'])
-
-    logger.info(f"[Stage 2] Found {len(candidates)} magnitude-compatible OFF events for {on_id}.")
-
-    for _, off_event in candidates.iterrows():
-        off_start = off_event['start']
-        off_id = off_event['event_id']
-        off_magnitude = abs(off_event['magnitude'])
-
-        logger.info(f"[Stage 2] Checking {on_id} with {off_id}: ON={on_magnitude}W, OFF={off_magnitude}W")
-
-        # Get data between ON and OFF
-        event_range = (data['timestamp'] > on_end) & (data['timestamp'] < off_start)
-        phase_data = data.loc[event_range, phase]
-
-        if phase_data.empty:
+        if candidates.empty:
             continue
 
-        # Check that power never drops significantly below baseline
-        # (device must stay on the whole time)
-        baseline_power = phase_data.iloc[0]
-        min_power = phase_data.min()
-        min_allowed = baseline_power - 200  # Allow 200W tolerance
+        candidates = candidates.copy()
+        candidates['magnitude_diff'] = abs(abs(candidates['magnitude']) - on_magnitude)
+        candidates['time_diff'] = (candidates['start'] - on_end).abs()
+        # Sort by magnitude similarity first, then by time
+        candidates = candidates.sort_values(by=['magnitude_diff', 'time_diff'])
 
-        if min_power < min_allowed:
-            logger.info(f"[Stage 2] Rejected {on_id}-{off_id}: power dropped to {min_power}W (baseline={baseline_power}W)")
-            continue
+        for _, off_event in candidates.iterrows():
+            off_start = off_event['start']
+            off_id = off_event['event_id']
 
-        # Validate that removal won't create negative values
-        off_event_dict = off_event.to_dict()
-        off_event_dict['phase'] = phase
-        on_event_dict = {
-            'start': on_event['start'],
-            'end': on_end,
-            'magnitude': on_magnitude,
-            'phase': phase,
-            'event_id': on_id
-        }
+            # Get data between ON and OFF
+            event_range = (data['timestamp'] > on_end) & (data['timestamp'] < off_start)
+            phase_data = data.loc[event_range, phase]
 
-        if not is_valid_event_removal(data, on_event_dict, off_event_dict, logger):
-            logger.info(f"[Stage 2] Rejected {on_id}-{off_id}: would create negative values")
-            continue
+            if phase_data.empty:
+                continue
 
-        logger.info(f"[Stage 2] Matched {on_id} with {off_id} as NOISY: ON={on_magnitude}W, OFF={off_magnitude}W")
-        return off_event, "NOISY"
+            # Check that power never drops significantly below baseline
+            baseline_power = phase_data.iloc[0]
+            min_power = phase_data.min()
+            min_allowed = baseline_power - 200
 
-    logger.info(f"[Stage 2] No suitable noisy match found for {on_id}.")
+            if min_power < min_allowed:
+                logger.debug(f"[Stage 2] Rejected {on_id}-{off_id}: power dropped below baseline")
+                continue
+
+            # Validate that removal won't create negative values
+            off_event_dict = off_event.to_dict()
+            off_event_dict['phase'] = phase
+            on_event_dict = {
+                'start': on_event['start'],
+                'end': on_end,
+                'magnitude': on_magnitude,
+                'phase': phase,
+                'event_id': on_id
+            }
+
+            if not is_valid_event_removal(data, on_event_dict, off_event_dict, logger):
+                logger.debug(f"[Stage 2] Rejected {on_id}-{off_id}: negative residuals")
+                continue
+
+            logger.info(f"Matched NOISY: {on_id} <-> {off_id} (window={window_minutes}m)")
+            return off_event, "NOISY"
+
     return None, None

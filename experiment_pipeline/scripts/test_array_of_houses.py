@@ -31,7 +31,7 @@ _INPUT_PATH = _SCRIPT_DIR / "INPUT" / "HouseholdData"
 
 # Auto-detect all houses from INPUT directory
 # HOUSE_IDS = sorted([f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit()])
-HOUSE_IDS = ["1", "1001", "2049", "2035"]
+HOUSE_IDS = ["5012", "5011", "330", "319", "253", "2080", "140", "49", "6005", "1", "1001", "2035", "2049"]
 
 # Experiment name (must match one in detection_config.py)
 EXPERIMENT_NAME = "exp005_asymmetric_windows"

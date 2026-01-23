@@ -44,12 +44,12 @@ def plot_interactive(
 
     fig = make_subplots(
         rows=4, cols=len(phases),
-        shared_xaxes=True, shared_yaxes=True,
+        shared_xaxes=True, shared_yaxes=False,
         subplot_titles=[f"Phase {phase}" for phase in phases]
     )
 
-    _add_legend_entries(fig)
     _add_data_traces(fig, df, phases)
+    _add_legend_entries(fig, len(phases))
 
     if events is not None:
         _add_event_markers(fig, events, phases)
@@ -62,8 +62,8 @@ def plot_interactive(
     logger.info(f"Interactive plot saved to {filename}")
 
 
-def _add_legend_entries(fig: go.Figure) -> None:
-    """Add invisible traces for consistent legend."""
+def _add_legend_entries(fig: go.Figure, num_phases: int) -> None:
+    """Add invisible traces for consistent legend using secondary axes to avoid subplot interference."""
     legend_items = [
         ('Original', COLORS['original']),
         ('Remaining', COLORS['remaining']),
@@ -72,25 +72,36 @@ def _add_legend_entries(fig: go.Figure) -> None:
         ('Long duration', COLORS['long']),
     ]
 
+    # Use xaxis='x' and yaxis='y' but with xref/yref='paper' to avoid subplot interference
     for name, color in legend_items:
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode='lines',
-            name=name, line=dict(color=color), showlegend=True
+            name=name, line=dict(color=color), showlegend=True,
+            xaxis='x99', yaxis='y99'
         ))
 
     # Event markers legend
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode='lines+markers',
-        name='Matched event', line=dict(dash='dash', color='green'), showlegend=True
+        name='Matched event', line=dict(dash='dash', color='green'), showlegend=True,
+        xaxis='x99', yaxis='y99'
     ))
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode='lines+markers',
-        name='Unmatched ON', line=dict(dash='dash', color='red'), showlegend=True
+        name='Unmatched ON', line=dict(dash='dash', color='red'), showlegend=True,
+        xaxis='x99', yaxis='y99'
     ))
     fig.add_trace(go.Scatter(
         x=[None], y=[None], mode='lines+markers',
-        name='Unmatched OFF', line=dict(dash='dash', color='blue'), showlegend=True
+        name='Unmatched OFF', line=dict(dash='dash', color='blue'), showlegend=True,
+        xaxis='x99', yaxis='y99'
     ))
+
+    # Add hidden axes for legend traces
+    fig.update_layout(
+        xaxis99=dict(visible=False, overlaying='x'),
+        yaxis99=dict(visible=False, overlaying='y')
+    )
 
 
 def _add_data_traces(fig: go.Figure, df: pd.DataFrame, phases: List[str]) -> None:

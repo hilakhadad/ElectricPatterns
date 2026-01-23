@@ -79,41 +79,25 @@ def detect_sharp_events(
     df[is_on] = (df[on_col] == 0).cumsum() * (df[on_col] != 0)
     df[is_off] = (df[off_col] == 0).cumsum() * (df[off_col] != 0)
 
-    # Aggregate into events - use phase value difference (end - start) for magnitude
+    # Aggregate into events
     results_on = (
         df[df[on_col] != 0]
         .groupby(is_on)
-        .agg(
-            start=('timestamp', 'min'),
-            end=('timestamp', 'max'),
-            value_start=(phase, 'first'),
-            value_end=(phase, 'last')
-        )
+        .agg(start=('timestamp', 'min'), end=('timestamp', 'max'))
         .reset_index(drop=True)
     )
+    # Add placeholder magnitude - expand_event will calculate the correct value
     if len(results_on) > 0:
-        # Calculate magnitude as: value at end - value at (start - 1 minute)
-        results_on['magnitude'] = results_on.apply(
-            lambda row: _calc_magnitude(df, phase, row['start'], row['end']), axis=1
-        )
-        results_on = results_on.drop(columns=['value_start', 'value_end'])
+        results_on['magnitude'] = 0
 
     results_off = (
         df[df[off_col] != 0]
         .groupby(is_off)
-        .agg(
-            start=('timestamp', 'min'),
-            end=('timestamp', 'max'),
-            value_start=(phase, 'first'),
-            value_end=(phase, 'last')
-        )
+        .agg(start=('timestamp', 'min'), end=('timestamp', 'max'))
         .reset_index(drop=True)
     )
     if len(results_off) > 0:
-        results_off['magnitude'] = results_off.apply(
-            lambda row: _calc_magnitude(df, phase, row['start'], row['end']), axis=1
-        )
-        results_off = results_off.drop(columns=['value_start', 'value_end'])
+        results_off['magnitude'] = 0
 
     # Expand events to include adjacent small changes
     if len(results_on) > 0:

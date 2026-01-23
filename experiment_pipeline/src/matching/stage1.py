@@ -5,15 +5,25 @@ Finds matches where:
 - Same phase
 - OFF event occurs after ON event
 - Power between ON and OFF is stable (no significant deviations)
+
+Performance optimizations:
+- Pre-filter candidates by magnitude similarity (skip mismatches early)
+- Sort by magnitude similarity first to find best matches faster
 """
 import pandas as pd
 from .validator import is_valid_event_removal
+
+# Maximum magnitude difference to even consider a match
+MAX_MAGNITUDE_DIFF_FILTER = 350  # watts
 
 
 def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
                max_time_diff: int, max_magnitude_diff: int, logger):
     """
     Find a matching OFF event for an ON event (Stage 1 - clean matching).
+
+    Uses progressive window search: starts with small time window and expands
+    gradually to find the closest match first.
 
     Matches are classified as:
     - SPIKE: ON and OFF are within 2 minutes of each other
@@ -35,63 +45,76 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
     on_start = on_event['start']
     on_end = on_event['end']
 
-    logger.info(f"Processing ON event: ID={on_id}, Phase={phase}, End Time={on_end}")
+    logger.debug(f"Processing ON event: ID={on_id}, Phase={phase}, End Time={on_end}")
 
-    candidates = off_events[
-        (off_events['phase'] == phase) &
-        (off_events['start'] > on_end) &
-        (off_events['start'] - on_end <= pd.Timedelta(hours=max_time_diff))
-    ]
+    # Progressive window search: start small and expand
+    # Windows in minutes: 15min, 30min, 1hr, 2hr, 4hr, then max_time_diff
+    window_steps_minutes = [15, 30, 60, 120, 240, max_time_diff * 60]
+    on_magnitude = abs(on_event['magnitude'])
 
-    if candidates.empty:
-        logger.info(f"No matching OFF events found for {on_id} within the allowed time window.")
-        return None, None
+    for window_minutes in window_steps_minutes:
+        if window_minutes > max_time_diff * 60:
+            break
 
-    candidates = candidates.copy()
-    candidates['time_diff'] = (candidates['start'] - on_end).abs()
-    candidates = candidates.sort_values(by='time_diff')
+        # Pre-filter by phase, time, AND magnitude similarity
+        candidates = off_events[
+            (off_events['phase'] == phase) &
+            (off_events['start'] > on_end) &
+            (off_events['start'] - on_end <= pd.Timedelta(minutes=window_minutes)) &
+            (abs(abs(off_events['magnitude']) - on_magnitude) <= MAX_MAGNITUDE_DIFF_FILTER)
+        ]
 
-    logger.info(f"Found {len(candidates)} potential OFF events for {on_id}. Sorting by closest time difference.")
-
-    for _, off_event in candidates.iterrows():
-        off_end = off_event['end']
-        off_start = off_event['start']
-        off_id = off_event['event_id']
-        logger.info(f"Checking for {on_id} OFF event {off_id} at {off_start} for match.")
-
-        # Check for SPIKE match (very short duration)
-        if (off_end - on_start).total_seconds() / 60 <= 2:
-            if not is_valid_event_removal(data, on_event, off_event, logger):
-                logger.warning(
-                    f"Skipping incorrect match for ON event {on_id} and OFF event {off_id} due to negative residuals.")
-                continue
-            else:
-                logger.info(f"On {on_id} and off {off_id} - matched as SPIKE: ON at {on_end}, OFF at {off_start}")
-                return off_event, "SPIKE"
-
-        # Check for NON-M match (stable power between events)
-        event_range = (data['timestamp'] > on_end) & (data['timestamp'] < off_start)
-        phase_data = data.loc[event_range, phase]
-
-        if phase_data.empty:
-            logger.info(f"No data found in the time range between On {on_id} and off {off_id} events.")
+        if candidates.empty:
             continue
 
-        baseline_power = phase_data.iloc[0]
-        max_deviation = (phase_data - baseline_power).max()
-        min_deviation = (phase_data - baseline_power).min()
+        candidates = candidates.copy()
+        candidates['magnitude_diff'] = abs(abs(candidates['magnitude']) - on_magnitude)
+        candidates['time_diff'] = (candidates['start'] - on_end).abs()
+        # Sort by magnitude similarity first, then by time
+        candidates = candidates.sort_values(by=['magnitude_diff', 'time_diff'])
 
-        logger.info(f"Between On {on_id} and off {off_id} events - Max deviation: {max_deviation}, Min deviation: {min_deviation}, Magnitude: {max_magnitude_diff}")
+        # Log candidates summary on first window that has candidates
+        if len(candidates) > 0 and window_minutes == window_steps_minutes[0]:
+            summary = ", ".join([
+                f"{row['event_id']}({abs(row['magnitude']):.0f}W, +{row['time_diff'].total_seconds()/60:.0f}m)"
+                for _, row in candidates.head(5).iterrows()
+            ])
+            if len(candidates) > 5:
+                summary += f", ... +{len(candidates)-5} more"
+            logger.info(f"{on_id}({on_magnitude:.0f}W) candidates[{window_minutes}m]: {summary}")
 
-        if abs(max_deviation) <= max_magnitude_diff and abs(min_deviation) <= max_magnitude_diff:
-            if not is_valid_event_removal(data, on_event, off_event, logger):
-                logger.warning(
-                    f"Skipping incorrect match for ON event {on_id} and OFF event {off_id} due to negative residuals.")
+        for _, off_event in candidates.iterrows():
+            off_end = off_event['end']
+            off_start = off_event['start']
+            off_id = off_event['event_id']
+
+            # Check for SPIKE match (very short duration)
+            if (off_end - on_start).total_seconds() / 60 <= 2:
+                if is_valid_event_removal(data, on_event, off_event, logger):
+                    logger.info(f"Matched SPIKE: {on_id} <-> {off_id}")
+                    return off_event, "SPIKE"
+                else:
+                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals")
+                    continue
+
+            # Check for NON-M match (stable power between events)
+            event_range = (data['timestamp'] > on_end) & (data['timestamp'] < off_start)
+            phase_data = data.loc[event_range, phase]
+
+            if phase_data.empty:
                 continue
-            else:
-                logger.info(
-                    f"On {on_id} and off {off_id} events - matched as NON-M: ON at {on_end}, OFF at {off_start}")
-                return off_event, "NON-M"
 
-    logger.info(f"No suitable OFF event found matching the criteria of {on_id}.")
+            baseline_power = phase_data.iloc[0]
+            max_deviation = (phase_data - baseline_power).max()
+            min_deviation = (phase_data - baseline_power).min()
+
+            if abs(max_deviation) <= max_magnitude_diff and abs(min_deviation) <= max_magnitude_diff:
+                if is_valid_event_removal(data, on_event, off_event, logger):
+                    logger.info(f"Matched NON-M: {on_id} <-> {off_id} (window={window_minutes}m)")
+                    return off_event, "NON-M"
+                else:
+                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals")
+                    continue
+
+    logger.debug(f"No match found for {on_id}")
     return None, None

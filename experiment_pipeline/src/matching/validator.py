@@ -10,14 +10,15 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
     """
     Validate that removing a matched ON-OFF pair won't create negative power values.
 
-    Checks both:
-    - Remaining power (what's left after removing event) must not be negative
-    - Event power itself must not be negative
+    Checks:
+    1. Magnitude matching - ON and OFF magnitudes must be similar (within 350W)
+    2. Remaining power (what's left after removing event) must not be negative
+    3. Event power itself must not be negative
 
     Args:
         data: DataFrame with power data and diff columns
         on_event: ON event dict with start, end, magnitude, phase, event_id
-        off_event: OFF event dict with start, end, event_id
+        off_event: OFF event dict with start, end, magnitude, event_id
         logger: Logger instance
 
     Returns:
@@ -30,11 +31,24 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
     power_col = phase
     diff_col = f"{phase}_diff"
 
+    on_magnitude = abs(on_event['magnitude'])
+    # Handle both dict and pandas Series for off_event
+    try:
+        off_magnitude = abs(off_event['magnitude'])
+    except (KeyError, TypeError):
+        off_magnitude = on_magnitude
+
+    # Check magnitude matching - reject if difference is too large
+    magnitude_diff = abs(on_magnitude - off_magnitude)
+    if magnitude_diff > 350:
+        logger.debug(f"Validator rejected {on_id}-{off_id}: magnitude mismatch ({on_magnitude}W vs {off_magnitude}W, diff={magnitude_diff}W)")
+        return False
+
     on_range = (data['timestamp'] >= on_event['start']) & (data['timestamp'] <= on_event['end'])
     event_range = (data['timestamp'] > on_event['end']) & (data['timestamp'] < off_event['start'])
     off_range = (data['timestamp'] >= off_event['start']) & (data['timestamp'] <= off_event['end'] - pd.Timedelta(minutes=1))
 
-    magnitude = on_event['magnitude']
+    magnitude = on_magnitude
 
     try:
         on_seg = data.loc[on_range, diff_col].cumsum()
@@ -47,30 +61,14 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
         logger.error(f"Error adjusting data ranges of {on_id} and {off_id}: {e}")
         return False
 
-    # Check remaining power (what's left after removing event) - must not be negative
-    if (on_remain < 0).any():
-        logger.warning(f"Negative remaining in ON period for {on_id}. Skipping match with {off_id}.")
-        return False
-
-    if (event_remain < 0).any():
-        logger.warning(f"Negative remaining in event period between {on_id} and {off_id}. Skipping match.")
-        return False
-
-    if (off_remain < 0).any():
-        logger.warning(f"Negative remaining in OFF period for {off_id}. Skipping match with {on_id}.")
+    # Check remaining power - must not be negative
+    if (on_remain < 0).any() or (event_remain < 0).any() or (off_remain < 0).any():
+        logger.debug(f"Validator rejected {on_id}-{off_id}: negative remaining power")
         return False
 
     # Check event power itself - must not be negative
-    if (on_seg < 0).any():
-        logger.warning(f"Negative event power in ON period for {on_id}. Skipping match with {off_id}.")
-        return False
-
-    if (event_seg < 0).any():
-        logger.warning(f"Negative event power in event period between {on_id} and {off_id}. Skipping match.")
-        return False
-
-    if (off_seg < 0).any():
-        logger.warning(f"Negative event power in OFF period for {off_id}. Skipping match with {on_id}.")
+    if (on_seg < 0).any() or (event_seg < 0).any() or (off_seg < 0).any():
+        logger.debug(f"Validator rejected {on_id}-{off_id}: negative event power")
         return False
 
     return True

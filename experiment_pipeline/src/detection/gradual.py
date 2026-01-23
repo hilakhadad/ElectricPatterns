@@ -12,14 +12,25 @@ def _calc_magnitude_from_phase(df: pd.DataFrame, phase: str, start: pd.Timestamp
     """
     Calculate event magnitude as the difference between power at end and power before start.
     """
-    # Get value at end of event
-    end_row = df[df['timestamp'] == end]
-    value_end = end_row[phase].values[0] if len(end_row) > 0 else 0
-
-    # Get value before start of event (1 minute before)
     before_start = start - pd.Timedelta(minutes=1)
-    before_row = df[df['timestamp'] == before_start]
-    value_before = before_row[phase].values[0] if len(before_row) > 0 else 0
+
+    # Use index-based lookup if timestamp is the index
+    if df.index.name == 'timestamp':
+        try:
+            value_end = df.loc[end, phase]
+        except KeyError:
+            value_end = 0
+        try:
+            value_before = df.loc[before_start, phase]
+        except KeyError:
+            value_before = 0
+    else:
+        # Fallback to boolean indexing
+        end_mask = df['timestamp'] == end
+        value_end = df.loc[end_mask, phase].values[0] if end_mask.any() else 0
+
+        before_mask = df['timestamp'] == before_start
+        value_before = df.loc[before_mask, phase].values[0] if before_mask.any() else 0
 
     return value_end - value_before
 
