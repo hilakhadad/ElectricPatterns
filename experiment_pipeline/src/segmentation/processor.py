@@ -84,10 +84,19 @@ def _process_single_event(
     off_range = (data['timestamp'] >= event['off_start']) & (data['timestamp'] <= event['off_end'] - pd.Timedelta(minutes=1))
 
     magnitude = event['on_magnitude']
-    is_noisy = event.get('tag', '') == 'NOISY'
+    tag = event.get('tag', '')
+    is_noisy = tag == 'NOISY'
+    is_partial = tag == 'PARTIAL'
 
     # Process ON segment
-    on_seg = data.loc[on_range, diff_col].cumsum()
+    # For PARTIAL matches: the ON event magnitude may be larger than match_magnitude
+    # We only extract match_magnitude, not the full ON ramp
+    if is_partial:
+        # For partial: extract only match_magnitude worth of the ON ramp
+        on_cumsum = data.loc[on_range, diff_col].cumsum()
+        on_seg = on_cumsum.clip(upper=magnitude)  # Don't extract more than match_magnitude
+    else:
+        on_seg = data.loc[on_range, diff_col].cumsum()
     on_remain = data.loc[on_range, remaining_col] - on_seg
 
     if (on_remain < 0).any():
@@ -99,6 +108,10 @@ def _process_single_event(
     if is_noisy:
         current_remaining = data.loc[event_range, remaining_col]
         event_seg = current_remaining.clip(upper=magnitude)
+    elif is_partial:
+        # For partial: constant magnitude extraction (device consumes match_magnitude)
+        # The remainder stays in remaining_power
+        event_seg = pd.Series(magnitude, index=data.loc[event_range].index)
     else:
         event_seg = magnitude + data.loc[event_range, diff_col].cumsum()
 
@@ -112,6 +125,13 @@ def _process_single_event(
     # Process OFF segment
     if is_noisy:
         off_seg, off_remain = _process_noisy_off_segment(data, event, remaining_col)
+    elif is_partial:
+        # For partial: extract only match_magnitude worth of the OFF ramp
+        # The remainder (difference between original OFF and match) stays
+        off_cumsum = data.loc[off_range, diff_col].cumsum()
+        # OFF cumsum is negative, we want to extract up to -magnitude
+        off_seg = (magnitude + off_cumsum).clip(lower=0)
+        off_remain = data.loc[off_range, remaining_col] - off_seg
     else:
         off_seg = magnitude + data.loc[off_range, diff_col].cumsum()
         off_remain = data.loc[off_range, remaining_col] - off_seg

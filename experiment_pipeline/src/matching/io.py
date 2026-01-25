@@ -44,3 +44,30 @@ def save_events(matches: List[dict], unmatched_on: List[dict], unmatched_off: Li
         )
 
     print(f"Results saved to {output_directory}")
+
+
+def save_remainder_events(remainder_events: List[dict], output_directory: str, house_id: str) -> None:
+    """
+    Save remainder events from partial matching to CSV for next iteration.
+
+    Remainder events are created when Stage 3 partial matching finds a match
+    between events with different magnitudes. The remainder represents the
+    unmatched portion that needs to find a match in the next iteration.
+
+    Args:
+        remainder_events: List of remainder event dicts
+        output_directory: Directory to save file
+        house_id: House identifier for filename
+    """
+    if not remainder_events:
+        return
+
+    os.makedirs(output_directory, exist_ok=True)
+
+    df = pd.DataFrame(remainder_events)
+    df.to_csv(
+        os.path.join(output_directory, f"remainder_{house_id}.csv"),
+        index=False,
+        date_format='%d/%m/%Y %H:%M'
+    )
+    print(f"Saved {len(remainder_events)} remainder events to {output_directory}/remainder_{house_id}.csv")

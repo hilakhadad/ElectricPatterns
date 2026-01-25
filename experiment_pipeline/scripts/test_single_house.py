@@ -191,7 +191,7 @@ def run_pipeline_for_house(
 # STANDALONE CONFIGURATION
 # ============================================================================
 HOUSE_ID = "140_debug"
-EXPERIMENT_NAME = "exp005_asymmetric_windows"
+EXPERIMENT_NAME = "exp006_partial_matching"
 MAX_ITERATIONS = 2
 
 
