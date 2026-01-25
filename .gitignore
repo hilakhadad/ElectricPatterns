@@ -20,14 +20,17 @@ logs/
 errors/
 user_request_plots/
 output/
+INPUT/
 *.log
 
 # Experiment pipeline data
 experiment_pipeline/old_run_files/
 experiment_pipeline/archive/
-experiment_pipeline/INPUT/
 experiment_pipeline/OUTPUT/
 experiment_pipeline/docs/
+
+# House analysis outputs
+house_analysis/OUTPUT/
 
 # Session documentation (contains Hebrew, keep local only)
 experiment_pipeline/EXPERIMENTS.md

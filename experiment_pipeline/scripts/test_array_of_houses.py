@@ -27,7 +27,8 @@ except ImportError:
 # ============================================================================
 
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
-_INPUT_PATH = _SCRIPT_DIR / "INPUT" / "HouseholdData"
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+_INPUT_PATH = _PROJECT_ROOT / "INPUT" / "HouseholdData"
 
 # Auto-detect all houses from INPUT directory
 # HOUSE_IDS = sorted([f.stem for f in _INPUT_PATH.glob("*.csv") if f.stem.isdigit()])

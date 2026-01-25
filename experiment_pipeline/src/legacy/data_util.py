@@ -12,8 +12,9 @@ STOP_AT_50_PERCENT = 50  # Stop threshold adjustments when separation reaches 50
 import sys
 from pathlib import Path
 _BASE_DIR = Path(__file__).parent.parent.absolute()  # Go up from src/ to experiment_pipeline/
+_PROJECT_ROOT = _BASE_DIR.parent  # role_based_segregation_dev/
 
-RAW_INPUT_DIRECTORY = str(_BASE_DIR / "INPUT" / "HouseholdData")
+RAW_INPUT_DIRECTORY = str(_PROJECT_ROOT / "INPUT" / "HouseholdData")
 
 # All outputs go to OUTPUT directory
 OUTPUT_ROOT = str(_BASE_DIR / "OUTPUT")

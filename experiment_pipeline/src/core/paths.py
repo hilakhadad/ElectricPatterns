@@ -13,9 +13,10 @@ import os
 # =============================================================================
 
 _BASE_DIR = Path(__file__).parent.parent.parent.absolute()  # experiment_pipeline/
+_PROJECT_ROOT = _BASE_DIR.parent  # role_based_segregation_dev/
 
-# Input paths
-RAW_INPUT_DIRECTORY = str(_BASE_DIR / "INPUT" / "HouseholdData")
+# Input paths (shared across all modules)
+RAW_INPUT_DIRECTORY = str(_PROJECT_ROOT / "INPUT" / "HouseholdData")
 
 # Output paths
 OUTPUT_ROOT = str(_BASE_DIR / "OUTPUT")

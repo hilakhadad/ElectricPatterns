@@ -45,7 +45,7 @@ def run_pipeline_for_house(
         dict with results: {'success': bool, 'iterations': int, 'error': str or None}
     """
     if input_path is None:
-        input_path = str(_SCRIPT_DIR / "INPUT" / "HouseholdData")
+        input_path = str(_SCRIPT_DIR.parent / "INPUT" / "HouseholdData")
 
     # Reload core.paths to update global paths for this run
     import core.paths
