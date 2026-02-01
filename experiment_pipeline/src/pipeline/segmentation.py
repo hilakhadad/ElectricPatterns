@@ -1,121 +1,140 @@
 """
 Segmentation pipeline step.
 
-Separates power consumption into device-specific time series.
+Separates power consumption into device-specific time series - processes month by month.
 """
 import pandas as pd
 from tqdm import tqdm
 import os
+from pathlib import Path
 
-from core import (
-    setup_logging, RAW_INPUT_DIRECTORY, INPUT_DIRECTORY,
-    OUTPUT_BASE_PATH, ERRORS_DIRECTORY, LOGS_DIRECTORY
-)
+import core
+from core import setup_logging, load_power_data, find_house_data_path
 from segmentation import process_phase_segmentation, summarize_segmentation, log_negative_values
 
 
-def process_segmentation(house_id: str, run_number: int) -> None:
+def process_segmentation(house_id: str, run_number: int, skip_large_file: bool = True) -> None:
     """
-    Process segmentation for a house.
+    Process segmentation for a house - processes month by month.
 
     Args:
         house_id: House identifier
         run_number: Current run number
+        skip_large_file: If True, skip writing the large segmented_{id}.csv file
     """
-    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Segmentation process for house {house_id}, run {run_number}")
 
     # Paths
-    input_dir = f"{INPUT_DIRECTORY}/run_{run_number}/HouseholdData/" if run_number != 0 else RAW_INPUT_DIRECTORY
-    events_dir = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
-    output_dir = events_dir
+    input_dir = f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData/" if run_number != 0 else core.RAW_INPUT_DIRECTORY
+    output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+    matches_dir = Path(output_dir) / "matches"
+    summarized_dir = Path(output_dir) / "summarized"
+    next_input_dir = Path(f"{core.INPUT_DIRECTORY}/run_{run_number + 1}/HouseholdData/{house_id}")
 
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(summarized_dir, exist_ok=True)
+    os.makedirs(next_input_dir, exist_ok=True)
 
-    data_path = f"{input_dir}/{house_id}.csv"
-    events_path = f"{events_dir}/matches_{house_id}.csv"
-    output_path = f"{output_dir}/segmented_{house_id}.csv"
-    summarized_path = f"{output_dir}/summarized_{house_id}.csv"
-    next_input_path = f"{INPUT_DIRECTORY}/run_{run_number + 1}/HouseholdData/{house_id}.csv"
-
-    os.makedirs(os.path.dirname(next_input_path), exist_ok=True)
-
-    # Skip if outputs exist
-    if os.path.isfile(output_path) and os.path.isfile(summarized_path):
-        logger.info(f"Files exist, skipping")
-        return
-
-    # Validate inputs
-    if not os.path.exists(data_path):
-        logger.error(f"Data file not found: {data_path}")
-        return
-    if not os.path.exists(events_path):
-        logger.error(f"Events file not found: {events_path}")
-        return
-
-    # Load data
+    # Find data path
     try:
-        data = pd.read_csv(data_path, parse_dates=['timestamp'])
-        events = pd.read_csv(events_path, parse_dates=['on_start', 'on_end', 'off_start', 'off_end'], dayfirst=True)
-    except Exception as e:
-        logger.error(f"Failed to read files: {e}")
+        data_path = find_house_data_path(input_dir, house_id)
+    except FileNotFoundError as e:
+        logger.error(str(e))
         return
 
-    # Preprocess
-    data.rename(columns={'1': 'w1', '2': 'w2', '3': 'w3'}, inplace=True)
-    data.drop(columns=['sum'], inplace=True, errors='ignore')
-    data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+    # Get list of matches monthly files
+    if not matches_dir.is_dir():
+        logger.error(f"Matches folder not found: {matches_dir}")
+        return
+
+    matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.csv"))
+    if not matches_files:
+        logger.error(f"No matches files found in {matches_dir}")
+        return
+
+    # Get list of data monthly files
+    data_path = Path(data_path)
+    if data_path.is_dir():
+        data_files = {f.stem: f for f in data_path.glob("*.csv")}
+    else:
+        data_files = {data_path.stem: data_path}
 
     phases = ['w1', 'w2', 'w3']
-    all_new_columns = {}
 
-    # Process each phase
-    for phase in tqdm(phases, desc=f"Segmentation for {house_id}"):
-        data, new_cols, _ = process_phase_segmentation(data, events, phase, logger)
-        all_new_columns.update(new_cols)
+    # Process each monthly file
+    for matches_file in tqdm(matches_files, desc=f"Segmentation {house_id}", leave=False):
+        # Extract month/year from filename: matches_140_01_2023.csv
+        parts = matches_file.stem.split('_')
+        if len(parts) >= 4:
+            month, year = int(parts[-2]), int(parts[-1])
+        else:
+            continue
 
-    # Save segmented data
-    data = pd.concat([data, pd.DataFrame(all_new_columns)], axis=1)
-    try:
-        data.to_csv(output_path, index=False)
-        logger.info(f"Segmented data saved to {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to save: {e}")
-        return
+        # Skip if summarized file already exists
+        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.csv"
+        if summary_file.exists():
+            logger.info(f"Skipping {month:02d}/{year} - summarized file already exists")
+            continue
 
-    # Create summary
-    summary_df = summarize_segmentation(data, phases)
+        # Find corresponding data file
+        data_file_key = f"{house_id}_{month:02d}_{year}"
+        if data_file_key not in data_files:
+            data_file_key = house_id
+            if data_file_key not in data_files:
+                logger.warning(f"Data file not found for {month:02d}/{year}")
+                continue
 
-    # Log negative values
-    for source, cols in [
-        ('original', [f'original_{p}' for p in phases]),
-        ('remaining', [f'remaining_{p}' for p in phases]),
-        ('short_duration', [f'short_duration_{p}' for p in phases]),
-        ('medium_duration', [f'medium_duration_{p}' for p in phases]),
-        ('long_duration', [f'long_duration_{p}' for p in phases]),
-    ]:
-        log_negative_values(house_id, run_number, summary_df, cols, source, ERRORS_DIRECTORY, logger)
+        # Load matches for this month
+        events = pd.read_csv(matches_file)
+        # Explicitly convert dates to ensure datetime format
+        for col in ['on_start', 'on_end', 'off_start', 'off_end']:
+            events[col] = pd.to_datetime(events[col], format='%d/%m/%Y %H:%M', errors='coerce')
+        if events.empty:
+            continue
 
-    # Save summary
-    try:
-        summary_df.to_csv(summarized_path, index=False)
-        logger.info(f"Summary saved to {summarized_path}")
-    except Exception as e:
-        logger.error(f"Failed to save summary: {e}")
-        return
+        # Load power data for this month
+        data = load_power_data(data_files[data_file_key])
+        data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
 
-    # Save next input
-    try:
+        if data.empty:
+            continue
+
+        all_new_columns = {}
+
+        # Process each phase
+        for phase in phases:
+            data, new_cols, _ = process_phase_segmentation(data, events, phase, logger)
+            all_new_columns.update(new_cols)
+
+        # Add new columns
+        data = pd.concat([data, pd.DataFrame(all_new_columns)], axis=1)
+
+        # Create summary
+        summary_df = summarize_segmentation(data, phases)
+
+        # Log negative values
+        for source, cols in [
+            ('original', [f'original_{p}' for p in phases]),
+            ('remaining', [f'remaining_{p}' for p in phases]),
+            ('short_duration', [f'short_duration_{p}' for p in phases]),
+            ('medium_duration', [f'medium_duration_{p}' for p in phases]),
+            ('long_duration', [f'long_duration_{p}' for p in phases]),
+        ]:
+            log_negative_values(house_id, run_number, summary_df, cols, source, core.ERRORS_DIRECTORY, logger)
+
+        # Save summary for this month
+        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.csv"
+        summary_df.to_csv(summary_file, index=False)
+
+        # Save next input for this month
         next_input = data[['timestamp', 'remaining_power_w1', 'remaining_power_w2', 'remaining_power_w3']].copy()
         next_input.rename(columns={
             'remaining_power_w1': '1',
             'remaining_power_w2': '2',
             'remaining_power_w3': '3'
         }, inplace=True)
-        next_input.to_csv(next_input_path, index=False)
-        logger.info(f"Next input saved to {next_input_path}")
-    except Exception as e:
-        logger.error(f"Failed to save next input: {e}")
-        return
+
+        next_input_file = next_input_dir / f"{house_id}_{month:02d}_{year}.csv"
+        next_input.to_csv(next_input_file, index=False)
 
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")

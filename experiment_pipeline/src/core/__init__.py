@@ -36,6 +36,16 @@ from .logging_setup import (
     PipelineLogger,
 )
 
+# Data loading
+from .data_loader import load_power_data, find_house_data_path
+
+# Monthly I/O helpers
+from .monthly_io import (
+    save_dataframe_by_month,
+    load_dataframe_from_folder,
+    find_output_path,
+)
+
 __all__ = [
     # Config
     'ExperimentConfig',
@@ -64,4 +74,11 @@ __all__ = [
     'setup_pipeline_logger',
     'get_logger',
     'PipelineLogger',
+    # Data loading
+    'load_power_data',
+    'find_house_data_path',
+    # Monthly I/O
+    'save_dataframe_by_month',
+    'load_dataframe_from_folder',
+    'find_output_path',
 ]

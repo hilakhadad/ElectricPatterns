@@ -1,230 +1,205 @@
 """
 Matching pipeline step.
 
-Matches ON events to OFF events.
+Matches ON events to OFF events - processes month by month.
 """
 import pandas as pd
+import numpy as np
 from tqdm import tqdm
 import os
+from pathlib import Path
 
-from core import (
-    setup_logging, RAW_INPUT_DIRECTORY, INPUT_DIRECTORY,
-    OUTPUT_BASE_PATH, DEFAULT_THRESHOLD, LOGS_DIRECTORY
-)
-from matching import find_match, find_noisy_match, find_partial_match, save_events, save_remainder_events
+import core
+from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path
+from matching import find_match, find_noisy_match, find_partial_match
 
 
 def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD) -> None:
     """
-    Match ON events to OFF events for a house.
+    Match ON events to OFF events for a house - processes month by month.
 
     Args:
         house_id: House identifier
         run_number: Current run number
         threshold: Detection threshold in watts
     """
-    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Matching process for house {house_id}, run {run_number}")
 
     # Paths
-    data_dir = RAW_INPUT_DIRECTORY if run_number == 0 else f"{INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
-    log_dir = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
-    output_dir = log_dir
+    data_dir = core.RAW_INPUT_DIRECTORY if run_number == 0 else f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
+    output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+    on_off_dir = Path(output_dir) / "on_off"
+    matches_dir = Path(output_dir) / "matches"
+    unmatched_on_dir = Path(output_dir) / "unmatched_on"
+    unmatched_off_dir = Path(output_dir) / "unmatched_off"
 
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(matches_dir, exist_ok=True)
+    os.makedirs(unmatched_on_dir, exist_ok=True)
+    os.makedirs(unmatched_off_dir, exist_ok=True)
 
-    data_path = f"{data_dir}/{house_id}.csv"
-    log_path = f"{log_dir}/on_off_{threshold}.csv"
-
-    if not os.path.exists(data_path) or not os.path.exists(log_path):
-        logger.error(f"Missing input files for house {house_id}")
+    # Find data path
+    try:
+        data_path = find_house_data_path(data_dir, house_id)
+    except FileNotFoundError as e:
+        logger.error(str(e))
         return
 
-    # Load data
-    data = pd.read_csv(data_path, parse_dates=['timestamp'])
-    log = pd.read_csv(log_path, parse_dates=['start', 'end'])
+    # Get list of on_off monthly files
+    if not on_off_dir.is_dir():
+        logger.error(f"On/off folder not found: {on_off_dir}")
+        return
 
-    data.rename(columns={'1': 'w1', '2': 'w2', '3': 'w3'}, inplace=True)
-    data.drop(columns=['sum'], inplace=True, errors='ignore')
+    on_off_files = sorted(on_off_dir.glob(f"on_off_{threshold}_*.csv"))
+    if not on_off_files:
+        logger.error(f"No on_off files found in {on_off_dir}")
+        return
+
+    # Get list of data monthly files
+    data_path = Path(data_path)
+    if data_path.is_dir():
+        data_files = {f.stem: f for f in data_path.glob("*.csv")}
+    else:
+        data_files = {data_path.stem: data_path}
 
     phases = ['w1', 'w2', 'w3']
-    matches = []
-    unmatched_on = []
-    unmatched_off = log[log['event'] == 'off'].to_dict('records')
-    matched_event_ids = set()
+    total_matches = 0
+    total_unmatched_on = 0
+    total_unmatched_off = 0
 
-    # Stage 1: Clean matching
-    for phase in phases:
-        data[f"{phase}_diff"] = data[phase].diff()
+    # Process each monthly file
+    for on_off_file in tqdm(on_off_files, desc=f"Matching {house_id}", leave=False):
+        # Extract month/year from filename: on_off_1500_01_2023.csv
+        parts = on_off_file.stem.split('_')
+        if len(parts) >= 4:
+            month, year = int(parts[-2]), int(parts[-1])
+        else:
+            continue
 
-        on_events = log[(log['phase'] == phase) & (log['event'] == 'on')].to_dict('records')
-        off_events = log[(log['phase'] == phase) & (log['event'] == 'off')]
+        # Skip if matches file already exists
+        matches_file = matches_dir / f"matches_{house_id}_{month:02d}_{year}.csv"
+        if matches_file.exists():
+            logger.info(f"Skipping {month:02d}/{year} - matches file already exists")
+            continue
 
-        for on_event in tqdm(on_events, desc=f"Phase {phase}", total=len(on_events)):
-            matched_off, tag = find_match(data, on_event, off_events, max_time_diff=6, max_magnitude_diff=350, logger=logger)
+        # Find corresponding data file
+        data_file_key = f"{house_id}_{month:02d}_{year}"
+        if data_file_key not in data_files:
+            data_file_key = house_id
+            if data_file_key not in data_files:
+                logger.warning(f"Data file not found for {month:02d}/{year}")
+                continue
+
+        # Load on_off events for this month
+        on_off_df = pd.read_csv(on_off_file)
+        # Explicitly convert dates to ensure datetime format
+        on_off_df['start'] = pd.to_datetime(on_off_df['start'], format='%d/%m/%Y %H:%M', errors='coerce')
+        on_off_df['end'] = pd.to_datetime(on_off_df['end'], format='%d/%m/%Y %H:%M', errors='coerce')
+        if on_off_df.empty:
+            continue
+
+        # Load power data for this month
+        data = load_power_data(data_files[data_file_key])
+
+        # Pre-compute diff columns
+        for phase in phases:
+            data[f"{phase}_diff"] = data[phase].diff()
+
+        # Run matching for this month
+        matches = []
+        unmatched_on = []
+        matched_event_ids = set()
+        used_off_ids = set()
+
+        # Stage 1: Clean matching
+        for phase in phases:
+            on_events = on_off_df[(on_off_df['phase'] == phase) & (on_off_df['event'] == 'on')].to_dict('records')
+            off_events_df = on_off_df[(on_off_df['phase'] == phase) & (on_off_df['event'] == 'off')]
+
+            for on_event in on_events:
+                available_off = off_events_df[~off_events_df['event_id'].isin(used_off_ids)]
+                matched_off, tag = find_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
+
+                if matched_off is not None:
+                    off_id = matched_off['event_id']
+                    used_off_ids.add(off_id)
+                    matches.append(_format_match(on_event, matched_off, tag, phase))
+                    matched_event_ids.add(on_event['event_id'])
+                    matched_event_ids.add(off_id)
+                else:
+                    unmatched_on.append(on_event)
+
+        # Stage 2: Noisy matching
+        all_off_events = on_off_df[on_off_df['event'] == 'off']
+        still_unmatched_on = []
+
+        for on_event in unmatched_on:
+            available_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)]
+            if available_off.empty:
+                still_unmatched_on.append(on_event)
+                continue
+
+            matched_off, tag = find_noisy_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
 
             if matched_off is not None:
                 off_id = matched_off['event_id']
-                off_events = off_events[off_events['event_id'] != off_id]
-
-                matches.append(_format_match(on_event, matched_off, tag, phase))
+                used_off_ids.add(off_id)
+                matches.append(_format_match(on_event, matched_off, tag, on_event['phase']))
                 matched_event_ids.add(on_event['event_id'])
                 matched_event_ids.add(off_id)
-                unmatched_off = [e for e in unmatched_off if e['event_id'] != off_id]
             else:
-                unmatched_on.append(on_event)
+                still_unmatched_on.append(on_event)
 
-    # Stage 2: Noisy matching
-    logger.info(f"Stage 2: {len(unmatched_on)} unmatched ON events")
+        unmatched_on = still_unmatched_on
 
-    remaining_off_df = pd.DataFrame(unmatched_off)
-    if not remaining_off_df.empty:
-        remaining_off_df['start'] = pd.to_datetime(remaining_off_df['start'])
-        remaining_off_df['end'] = pd.to_datetime(remaining_off_df['end'])
+        # Stage 3: Partial matching
+        final_unmatched_on = []
+        for on_event in unmatched_on:
+            available_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)]
+            if available_off.empty:
+                final_unmatched_on.append(on_event)
+                continue
 
-    still_unmatched_on = []
-    for on_event in tqdm(unmatched_on, desc="Noisy matching"):
-        if remaining_off_df.empty:
-            still_unmatched_on.append(on_event)
-            continue
+            matched_off, tag, remainder = find_partial_match(
+                data, on_event, available_off,
+                max_time_diff=6, max_magnitude_diff=350, logger=logger
+            )
 
-        matched_off, tag = find_noisy_match(data, on_event, remaining_off_df, max_time_diff=6, max_magnitude_diff=350, logger=logger)
+            if matched_off is not None:
+                off_id = matched_off['event_id']
+                used_off_ids.add(off_id)
+                matches.append(_format_partial_match(on_event, matched_off, tag, on_event['phase']))
+                matched_event_ids.add(on_event['event_id'])
+                matched_event_ids.add(off_id)
+            else:
+                final_unmatched_on.append(on_event)
 
-        if matched_off is not None:
-            off_id = matched_off['event_id']
-            remaining_off_df = remaining_off_df[remaining_off_df['event_id'] != off_id]
+        unmatched_on = final_unmatched_on
+        final_unmatched_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)].to_dict('records')
 
-            matches.append(_format_match(on_event, matched_off, tag, on_event['phase']))
-            matched_event_ids.add(on_event['event_id'])
-            matched_event_ids.add(off_id)
-        else:
-            still_unmatched_on.append(on_event)
+        # Update on_off with matched status
+        on_off_df['matched'] = on_off_df['event_id'].isin(matched_event_ids).astype(int)
 
-    unmatched_on = still_unmatched_on
-    unmatched_off = remaining_off_df.to_dict('records') if not remaining_off_df.empty else []
+        # Save results for this month
+        if matches:
+            matches_df = pd.DataFrame(matches)
+            matches_df.to_csv(matches_dir / f"matches_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            total_matches += len(matches)
 
-    logger.info(f"After Stage 2: Matched={len(matches)}, Unmatched ON={len(unmatched_on)}, Unmatched OFF={len(unmatched_off)}")
+        if unmatched_on:
+            unmatched_on_df = pd.DataFrame(unmatched_on)
+            unmatched_on_df.to_csv(unmatched_on_dir / f"unmatched_on_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            total_unmatched_on += len(unmatched_on)
 
-    # Stage 3: Partial matching for events with significant magnitude difference
-    logger.info(f"Stage 3: {len(unmatched_on)} unmatched ON events")
+        if final_unmatched_off:
+            unmatched_off_df = pd.DataFrame(final_unmatched_off)
+            unmatched_off_df.to_csv(unmatched_off_dir / f"unmatched_off_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            total_unmatched_off += len(final_unmatched_off)
 
-    remainder_events = []  # Collect remainders for next iteration
+        # Save updated on_off
+        on_off_df.to_csv(on_off_file, index=False, date_format='%d/%m/%Y %H:%M')
 
-    remaining_off_df = pd.DataFrame(unmatched_off)
-    if not remaining_off_df.empty:
-        remaining_off_df['start'] = pd.to_datetime(remaining_off_df['start'])
-        remaining_off_df['end'] = pd.to_datetime(remaining_off_df['end'])
-
-    final_unmatched_on = []
-    for on_event in tqdm(unmatched_on, desc="Partial matching"):
-        if remaining_off_df.empty:
-            final_unmatched_on.append(on_event)
-            continue
-
-        matched_off, tag, remainder = find_partial_match(
-            data, on_event, remaining_off_df,
-            max_time_diff=6, max_magnitude_diff=350, logger=logger
-        )
-
-        if matched_off is not None:
-            off_id = matched_off['event_id']
-            remaining_off_df = remaining_off_df[remaining_off_df['event_id'] != off_id]
-
-            matches.append(_format_partial_match(on_event, matched_off, tag, on_event['phase']))
-            matched_event_ids.add(on_event['event_id'])
-            matched_event_ids.add(off_id)
-
-            if remainder:
-                remainder_events.append(remainder)
-        else:
-            final_unmatched_on.append(on_event)
-
-    unmatched_on = final_unmatched_on
-    unmatched_off = remaining_off_df.to_dict('records') if not remaining_off_df.empty else []
-
-    logger.info(f"Final: Matched={len(matches)}, Unmatched ON={len(unmatched_on)}, Unmatched OFF={len(unmatched_off)}, Remainders={len(remainder_events)}")
-
-    # Save results
-    save_events(matches, unmatched_on, unmatched_off, output_dir, house_id)
-
-    # Save remainder events for next iteration
-    if remainder_events:
-        save_remainder_events(remainder_events, output_dir, house_id)
-        logger.info(f"Saved {len(remainder_events)} remainder events")
-
-    # Update on_off CSV with matched status AND split partial match events
-    on_off_df = pd.read_csv(log_path, parse_dates=['start', 'end'])
-
-    # For partial matches, we need to split the original event into matched + remainder
-    # This ensures the Event Markers visualization shows the split correctly
-    split_events_to_add = []
-    events_to_remove = set()
-
-    for remainder in remainder_events:
-        original_event_id = remainder['event_id'].replace('_remainder', '')
-
-        # Find the original event
-        original_mask = on_off_df['event_id'] == original_event_id
-        if not original_mask.any():
-            continue
-
-        original_event = on_off_df[original_mask].iloc[0]
-        original_magnitude = abs(original_event['magnitude'])
-        remainder_magnitude = abs(remainder['magnitude'])
-        match_magnitude = original_magnitude - remainder_magnitude
-
-        # Mark original event for removal
-        events_to_remove.add(original_event_id)
-
-        # Create matched portion event (will be green - matched)
-        matched_event = {
-            'start': original_event['start'],
-            'end': original_event['end'],
-            'magnitude': match_magnitude if original_event['magnitude'] > 0 else -match_magnitude,
-            'phase': original_event['phase'],
-            'event_id': f"{original_event_id}_matched",
-            'event': original_event['event'],
-            'duration': original_event.get('duration', 0),
-            'matched': 1  # Will be green
-        }
-        split_events_to_add.append(matched_event)
-
-        # Create remainder event (will be red - unmatched)
-        remainder_for_csv = {
-            'start': remainder['start'],
-            'end': remainder['end'],
-            'magnitude': remainder['magnitude'],
-            'phase': remainder['phase'],
-            'event_id': remainder['event_id'],
-            'event': remainder['event'],
-            'duration': remainder.get('duration', 0),
-            'matched': 0  # Will be red
-        }
-        split_events_to_add.append(remainder_for_csv)
-
-        logger.info(f"Split event {original_event_id}: matched={match_magnitude}W (green), remainder={remainder_magnitude}W (red)")
-
-    # Remove original events that were split
-    on_off_df = on_off_df[~on_off_df['event_id'].isin(events_to_remove)]
-
-    # Add split events
-    if split_events_to_add:
-        split_df = pd.DataFrame(split_events_to_add)
-        on_off_df = pd.concat([on_off_df, split_df], ignore_index=True)
-
-    # Update matched status for remaining events (preserve matched status for split events)
-    def get_matched_status(row):
-        # If this row already has a matched status (from split events), use it
-        if 'matched' in row.index and pd.notna(row.get('matched')):
-            return int(row['matched'])
-        # Otherwise, check if event_id is in matched set
-        return 1 if row['event_id'] in matched_event_ids else 0
-
-    on_off_df['matched'] = on_off_df.apply(get_matched_status, axis=1).astype(int)
-
-    on_off_df.to_csv(log_path, index=False, date_format='%d/%m/%Y %H:%M')
-    logger.info(f"Updated {log_path} with matched status ({len(matched_event_ids)} matched, {len(split_events_to_add)} split events added)")
-
+    logger.info(f"Total: {total_matches} matches, {total_unmatched_on} unmatched ON, {total_unmatched_off} unmatched OFF")
     logger.info(f"Matching completed for house {house_id}, run {run_number}")
 
 
@@ -261,9 +236,9 @@ def _format_partial_match(on_event, off_event, tag, phase):
         'off_start': off_event['start'].strftime('%d/%m/%Y %H:%M'),
         'off_end': off_event['end'].strftime('%d/%m/%Y %H:%M'),
         'duration': duration,
-        'on_magnitude': match_magnitude,  # Use match magnitude, not original
-        'off_magnitude': match_magnitude,  # Same for both
-        'original_on_magnitude': on_mag,   # Keep original for reference
+        'on_magnitude': match_magnitude,
+        'off_magnitude': match_magnitude,
+        'original_on_magnitude': on_mag,
         'original_off_magnitude': off_mag,
         'tag': tag,
         'phase': phase

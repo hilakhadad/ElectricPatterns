@@ -99,25 +99,38 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None) 
     # Overall quality score (0-100)
     quality_score = 100
 
-    # Deduct for missing data
+    # Deduct for missing data (up to 15 points)
     for col in phase_cols:
-        if f'{col}_missing_pct' in metrics:
-            quality_score -= min(metrics.get(f'{col}_missing_pct', 0), 10)
+        missing_pct = metrics.get(f'{col}_missing_pct', 0)
+        if missing_pct > 0:
+            quality_score -= min(missing_pct * 0.5, 5)  # Up to 5 per phase
 
-    # Deduct for negative values
+    # Deduct for negative values (up to 20 points)
     total_negatives = sum(metrics.get(f'{col}_negative_count', 0) for col in phase_cols)
     if total_negatives > 0:
-        quality_score -= min(total_negatives / 10, 20)
+        quality_score -= min(5 + total_negatives / 50, 20)
 
-    # Deduct for excessive zeros
+    # Deduct for excessive zeros (up to 15 points)
     for col in phase_cols:
         zero_pct = metrics.get(f'{col}_zero_pct', 0)
-        if zero_pct > 50:  # More than 50% zeros is suspicious
-            quality_score -= 10
+        if zero_pct > 20:  # More than 20% zeros is suspicious
+            quality_score -= min((zero_pct - 20) * 0.3, 5)
 
-    # Deduct for outliers
+    # Deduct for outliers (up to 15 points)
     total_outliers = sum(metrics.get(f'{col}_outliers_3sd', 0) for col in phase_cols)
-    quality_score -= min(total_outliers / 100, 10)
+    outlier_pct = sum(metrics.get(f'{col}_outliers_3sd_pct', 0) for col in phase_cols) / len(phase_cols)
+    if outlier_pct > 0.5:  # More than 0.5% outliers
+        quality_score -= min(outlier_pct * 5, 15)
+
+    # Deduct for large jumps (up to 10 points)
+    total_large_jumps = sum(metrics.get(f'{col}_jumps_over_2000W', 0) for col in phase_cols)
+    if total_large_jumps > 100:
+        quality_score -= min((total_large_jumps - 100) / 50, 10)
+
+    # Deduct for duplicate timestamps (up to 5 points)
+    dup_ts = metrics.get('duplicate_timestamps', 0)
+    if dup_ts > 0:
+        quality_score -= min(dup_ts / 10, 5)
 
     metrics['quality_score'] = max(0, min(100, quality_score))
 

@@ -6,13 +6,14 @@ Calculates metrics comparing original vs remaining consumption.
 import pandas as pd
 import os
 
-from core import setup_logging, OUTPUT_BASE_PATH, LOGS_DIRECTORY
+import core
+from core import setup_logging
 from segmentation.evaluation import calculate_phase_metrics, save_negative_values
 
 
 def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
     """
-    Evaluate segmentation results.
+    Evaluate segmentation results - processes monthly files.
 
     Args:
         house_id: House identifier
@@ -22,38 +23,54 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
     Returns:
         dict: Evaluation results per phase
     """
-    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    from pathlib import Path
+
+    logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Evaluation for house {house_id}, run {run_number}")
 
-    # Paths
-    output_dir = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
-    current_path = f"{output_dir}/summarized_{house_id}.csv"
-    baseline_dir = f"{OUTPUT_BASE_PATH}/run_0/house_{house_id}"
-    baseline_path = f"{baseline_dir}/summarized_{house_id}.csv"
-    eval_path = f"{output_dir}/evaluation_history_{house_id}.csv"
+    # Paths - now using monthly folder structure
+    output_dir = Path(f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}")
+    summarized_dir = output_dir / "summarized"
+    baseline_dir = Path(f"{core.OUTPUT_BASE_PATH}/run_0/house_{house_id}") / "summarized"
+    eval_path = output_dir / f"evaluation_history_{house_id}.csv"
 
-    prev_path = None
+    prev_summarized_dir = None
     prev_eval_path = None
     if run_number > 0:
-        prev_dir = f"{OUTPUT_BASE_PATH}/run_{run_number - 1}/house_{house_id}"
-        prev_path = f"{prev_dir}/summarized_{house_id}.csv"
-        prev_eval_path = f"{prev_dir}/evaluation_history_{house_id}.csv"
+        prev_dir = Path(f"{core.OUTPUT_BASE_PATH}/run_{run_number - 1}/house_{house_id}")
+        prev_summarized_dir = prev_dir / "summarized"
+        prev_eval_path = prev_dir / f"evaluation_history_{house_id}.csv"
 
-    # Load data
-    if not os.path.exists(current_path):
-        logger.error(f"File not found: {current_path}")
+    # Load data - concatenate all monthly files
+    if not summarized_dir.is_dir():
+        logger.error(f"Summarized folder not found: {summarized_dir}")
+        return None
+
+    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+    if not summarized_files:
+        logger.error(f"No summarized files found in {summarized_dir}")
         return None
 
     try:
-        current_data = pd.read_csv(current_path, parse_dates=['timestamp'])
-        baseline_data = current_data if run_number == 0 else pd.read_csv(baseline_path, parse_dates=['timestamp'])
+        # Load and concatenate current data
+        current_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in summarized_files], ignore_index=True)
 
+        # Load baseline data
+        if run_number == 0:
+            baseline_data = current_data
+        else:
+            baseline_files = sorted(baseline_dir.glob(f"summarized_{house_id}_*.csv"))
+            baseline_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in baseline_files], ignore_index=True)
+
+        # Load previous run data
         prev_data = None
         prev_eval = None
         if run_number > 0:
-            if os.path.exists(prev_path):
-                prev_data = pd.read_csv(prev_path, parse_dates=['timestamp'])
-            if os.path.exists(prev_eval_path):
+            if prev_summarized_dir and prev_summarized_dir.is_dir():
+                prev_files = sorted(prev_summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+                if prev_files:
+                    prev_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in prev_files], ignore_index=True)
+            if prev_eval_path and prev_eval_path.exists():
                 prev_eval = pd.read_csv(prev_eval_path)
     except Exception as e:
         logger.error(f"Failed to read data: {e}")
@@ -86,7 +103,7 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
             negative_mask = current_remaining < 0
             save_negative_values(
                 current_data, current_remaining, negative_mask,
-                house_id, run_number, phase, OUTPUT_BASE_PATH
+                house_id, run_number, phase, core.OUTPUT_BASE_PATH
             )
 
         result = {

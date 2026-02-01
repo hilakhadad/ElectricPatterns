@@ -68,11 +68,11 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
         if candidates.empty:
             continue
 
-        candidates = candidates.copy()
-        candidates['magnitude_diff'] = abs(abs(candidates['magnitude']) - on_magnitude)
-        candidates['time_diff'] = (candidates['start'] - on_end).abs()
-        # Sort by time first for partial matches (closest in time is best)
-        candidates = candidates.sort_values(by=['time_diff', 'magnitude_diff'])
+        # Use .assign() to add columns without explicit copy
+        candidates = candidates.assign(
+            magnitude_diff=abs(abs(candidates['magnitude']) - on_magnitude),
+            time_diff=(candidates['start'] - on_end).abs()
+        ).sort_values(by=['time_diff', 'magnitude_diff'])
 
         for _, off_event in candidates.iterrows():
             off_start = off_event['start']

@@ -16,6 +16,11 @@ from .validator import is_valid_event_removal
 # Maximum magnitude difference to even consider a match
 MAX_MAGNITUDE_DIFF_FILTER = 350  # watts
 
+# If magnitude diff is below this threshold, skip stability check and match directly
+# This handles cases where an appliance has matching ON/OFF but other devices caused
+# power fluctuations during the event's "on" period
+SMALL_MAGNITUDE_DIFF_THRESHOLD = 100  # watts
+
 
 def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
                max_time_diff: int, max_magnitude_diff: int, logger):
@@ -67,11 +72,11 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
         if candidates.empty:
             continue
 
-        candidates = candidates.copy()
-        candidates['magnitude_diff'] = abs(abs(candidates['magnitude']) - on_magnitude)
-        candidates['time_diff'] = (candidates['start'] - on_end).abs()
-        # Sort by magnitude similarity first, then by time
-        candidates = candidates.sort_values(by=['magnitude_diff', 'time_diff'])
+        # Use .assign() to add columns without explicit copy
+        candidates = candidates.assign(
+            magnitude_diff=abs(abs(candidates['magnitude']) - on_magnitude),
+            time_diff=(candidates['start'] - on_end).abs()
+        ).sort_values(by=['magnitude_diff', 'time_diff'])
 
         # Log candidates summary on first window that has candidates
         if len(candidates) > 0 and window_minutes == window_steps_minutes[0]:
@@ -95,6 +100,21 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
                     return off_event, "SPIKE"
                 else:
                     logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals")
+                    continue
+
+            # Get magnitude difference for this candidate
+            off_magnitude = abs(off_event['magnitude'])
+            mag_diff = abs(on_magnitude - off_magnitude)
+
+            # Small magnitude difference fallback: if magnitudes match very closely,
+            # skip stability check and rely only on validator
+            # This handles cases where other devices cause fluctuations during the event
+            if mag_diff <= SMALL_MAGNITUDE_DIFF_THRESHOLD:
+                if is_valid_event_removal(data, on_event, off_event, logger):
+                    logger.info(f"Matched CLOSE-MAG: {on_id} <-> {off_id} (diff={mag_diff:.0f}W)")
+                    return off_event, "NON-M"  # Tag as NON-M for compatibility
+                else:
+                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals (close-mag fallback)")
                     continue
 
             # Check for NON-M match (stable power between events)

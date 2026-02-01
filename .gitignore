@@ -32,6 +32,9 @@ experiment_pipeline/docs/
 # House analysis outputs
 house_analysis/OUTPUT/
 
+# Experiment analysis outputs
+experiment_analysis/OUTPUT/
+
 # Session documentation (contains Hebrew, keep local only)
 experiment_pipeline/EXPERIMENTS.md
 experiment_pipeline/SESSION_SUMMARY.md

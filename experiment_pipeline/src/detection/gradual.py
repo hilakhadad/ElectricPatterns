@@ -159,12 +159,24 @@ def detect_gradual_events(
     result_df = pd.DataFrame(events).sort_values('start').reset_index(drop=True)
     result_df = result_df.drop_duplicates(subset=['start', 'end'], keep='first').reset_index(drop=True)
 
-    # Recalculate magnitude using actual phase values (not sum of diffs)
+    # Recalculate magnitude using actual phase values (vectorized)
     if phase in df.columns and len(result_df) > 0:
-        result_df['magnitude'] = result_df.apply(
-            lambda row: _calc_magnitude_from_phase(df, phase, row['start'], row['end']),
-            axis=1
-        )
+        # Create indexed version for O(1) lookups
+        df_indexed = df.set_index('timestamp')
+        magnitudes = []
+        for _, row in result_df.iterrows():
+            start, end = row['start'], row['end']
+            before_start = start - pd.Timedelta(minutes=1)
+            try:
+                val_end = df_indexed.loc[end, phase]
+            except KeyError:
+                val_end = 0
+            try:
+                val_before = df_indexed.loc[before_start, phase]
+            except KeyError:
+                val_before = 0
+            magnitudes.append(val_end - val_before)
+        result_df['magnitude'] = magnitudes
 
     return result_df
 

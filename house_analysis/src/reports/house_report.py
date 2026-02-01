@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from ..metrics import (
+from metrics import (
     calculate_coverage_metrics,
     calculate_power_statistics,
     calculate_temporal_patterns,
     calculate_data_quality_metrics
 )
-from ..metrics.temporal import calculate_flat_segments
+from metrics.temporal import calculate_flat_segments
 
 
 def analyze_single_house(data: pd.DataFrame, house_id: str,
@@ -80,10 +80,13 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     power = analysis.get('power_statistics', {})
     temporal = analysis.get('temporal_patterns', {})
 
+    flat = analysis.get('flat_segments', {})
+
     # Coverage flags
     flags['low_coverage'] = coverage.get('coverage_ratio', 1) < 0.8
     flags['short_duration'] = coverage.get('days_span', 365) < 30
     flags['has_large_gaps'] = coverage.get('max_gap_minutes', 0) > 60
+    flags['many_gaps'] = coverage.get('pct_gaps_over_2min', 0) > 5  # More than 5% gaps over 2min
 
     # Quality flags
     flags['has_negative_values'] = any(
@@ -94,20 +97,27 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
         quality.get(f'{c}_outliers_3sd_pct', 0) > 1
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
     )
+    flags['many_large_jumps'] = any(
+        quality.get(f'{c}_jumps_over_2000W', 0) > 500
+        for c in ['w1', 'w2', 'w3', '1', '2', '3']
+    )
     flags['low_quality_score'] = quality.get('quality_score', 100) < 70
 
     # Power flags
     flags['unbalanced_phases'] = power.get('phase_balance_ratio', 1) > 3
     flags['single_active_phase'] = power.get('active_phases', 3) == 1
-    flags['high_baseload'] = any(
-        power.get(f'phase_{c}_share_0_100', 0) < 0.1
+    flags['very_high_power'] = power.get('total_max', 0) > 20000  # Over 20kW max
+
+    # Flat segments flags (potential metering issues)
+    flags['many_flat_segments'] = any(
+        flat.get(f'phase_{c}_flat_pct', 0) > 30  # More than 30% flat
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
-        if f'phase_{c}_share_0_100' in power
+        if f'phase_{c}_flat_pct' in flat
     )
 
     # Temporal flags
     flags['unusual_night_ratio'] = any(
-        temporal.get(f'phase_{c}_night_day_ratio', 1) > 2
+        temporal.get(f'phase_{c}_night_day_ratio', 1) > 3  # Night 3x higher than day
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
         if f'phase_{c}_night_day_ratio' in temporal
     )

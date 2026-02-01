@@ -8,13 +8,16 @@ import logging
 import importlib
 from pathlib import Path
 from datetime import datetime
+from tqdm import tqdm
 
-# Fix encoding for Windows console
+# Fix encoding for Windows console (safer approach that won't close stdout)
 if sys.platform == 'win32':
-    import io
-    if hasattr(sys.stdout, 'buffer'):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleOutputCP(65001)  # UTF-8
+    except Exception:
+        pass  # Ignore if it fails
 
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -28,7 +31,8 @@ def run_pipeline_for_house(
     output_path: str,
     max_iterations: int = 2,
     input_path: str = None,
-    quiet: bool = False
+    quiet: bool = False,
+    skip_visualization: bool = False
 ) -> dict:
     """
     Run the full pipeline for a single house.
@@ -88,7 +92,7 @@ def run_pipeline_for_house(
     process_evaluation = pipeline.evaluation.process_evaluation
     process_visualization = pipeline.visualization.process_visualization
 
-    from core import get_experiment, save_experiment_metadata
+    from core import get_experiment, save_experiment_metadata, find_house_data_path
 
     # Load experiment config
     try:
@@ -133,47 +137,65 @@ def run_pipeline_for_house(
         logger.info(f"ITERATION {run_number} of {max_iterations}")
         logger.info(f"{'#'*60}")
 
-        # Check input file
+        # Check input file/folder (supports both old CSV and new monthly folder structure)
         if run_number == 0:
-            input_file = f"{input_path}/{house_id}.csv"
+            input_dir = input_path
         else:
-            input_file = f"{output_path}/run_{run_number}/HouseholdData/{house_id}.csv"
+            input_dir = f"{output_path}/run_{run_number}/HouseholdData"
 
-        if not os.path.exists(input_file):
+        try:
+            input_data_path = find_house_data_path(input_dir, house_id)
+            logger.info(f"Found input: {input_data_path}")
+        except FileNotFoundError as e:
             if run_number == 0:
-                return {'success': False, 'iterations': 0, 'error': f"Input file not found: {input_file}"}
+                return {'success': False, 'iterations': 0, 'error': str(e)}
             else:
                 logger.info(f"No more data for iteration {run_number}, stopping")
                 break
 
         try:
-            # Step 1: Detection
-            logger.info("Step 1: Detecting ON/OFF events...")
+            import time
+            step_times = {}
+
+            # Count input files for progress display
+            if input_data_path.is_dir():
+                num_files = len(list(input_data_path.glob("*.csv")))
+            else:
+                num_files = 1
+
+            # Define pipeline steps
+            steps = [
+                ('Detection', lambda: process_detection(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)),
+                ('Matching', lambda: process_matching(house_id=house_id, run_number=run_number, threshold=threshold)),
+                ('Segmentation', lambda: process_segmentation(house_id=house_id, run_number=run_number, skip_large_file=True)),
+                ('Evaluation', lambda: process_evaluation(house_id=house_id, run_number=run_number, threshold=threshold)),
+            ]
+
+            if not skip_visualization:
+                steps.append(('Visualization', lambda: process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)))
+
             output_dir = f"{output_path}/run_{run_number}/house_{house_id}"
             os.makedirs(output_dir, exist_ok=True)
-            process_detection(house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)
 
-            # Step 2: Matching
-            logger.info("Step 2: Matching events...")
-            process_matching(house_id=house_id, run_number=run_number, threshold=threshold)
+            # Run pipeline steps with progress bar
+            pbar = tqdm(steps, desc=f"House {house_id} iter {run_number} ({num_files} files)", leave=False)
+            for step_name, step_func in pbar:
+                pbar.set_postfix_str(step_name)
+                t0 = time.time()
+                step_func()
+                step_times[step_name.lower()] = time.time() - t0
+                logger.info(f"  {step_name} took {step_times[step_name.lower()]:.1f}s")
 
-            # Step 3: Segmentation
-            logger.info("Step 3: Segmenting data...")
-            process_segmentation(house_id=house_id, run_number=run_number)
-
-            # Step 4: Evaluation
-            logger.info("Step 4: Evaluating results...")
-            process_evaluation(house_id=house_id, run_number=run_number, threshold=threshold)
-
-            # Step 5: Visualization
-            logger.info("Step 5: Creating visualizations...")
-            process_visualization(house_id=house_id, run_number=run_number, threshold=threshold)
+            total_time = sum(step_times.values())
+            logger.info(f"  Iteration {run_number} total: {total_time:.1f}s")
 
             iterations_completed += 1
 
-            # Check for next iteration
-            next_input = f"{output_path}/run_{run_number + 1}/HouseholdData/{house_id}.csv"
-            if not os.path.exists(next_input):
+            # Check for next iteration (supports both folder and file structure)
+            try:
+                next_input_dir = f"{output_path}/run_{run_number + 1}/HouseholdData"
+                find_house_data_path(next_input_dir, house_id)
+            except FileNotFoundError:
                 logger.info("No more events found, stopping iterations")
                 break
 

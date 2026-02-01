@@ -8,11 +8,10 @@ import numpy as np
 from tqdm import tqdm
 import os
 
-from core import (
-    setup_logging, RAW_INPUT_DIRECTORY, INPUT_DIRECTORY,
-    OUTPUT_BASE_PATH, DEFAULT_THRESHOLD, LOGS_DIRECTORY
-)
-from detection import merge_overlapping_events, expand_event
+from pathlib import Path
+import core
+from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path
+from detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
 from detection.gradual import detect_gradual_events
 
 
@@ -32,17 +31,18 @@ def _calc_magnitude(df: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.T
     return value_end - value_before
 
 
-def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, config=None) -> None:
+def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, config=None, input_file: str = None) -> None:
     """
-    Detect ON/OFF events for a house.
+    Detect ON/OFF events for a house - processes month by month.
 
     Args:
         house_id: House identifier
         run_number: Current run number
         threshold: Detection threshold in watts
         config: Optional ExperimentConfig with advanced parameters
+        input_file: Optional specific file to process (processes all files if None)
     """
-    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Detection process for house {house_id}, run {run_number}, threshold {threshold}W")
 
     # Extract config parameters
@@ -59,71 +59,116 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         progressive_search = False
 
     # Determine input path
-    input_dir = RAW_INPUT_DIRECTORY if run_number < 1 else f"{INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
-    file_path = f"{input_dir}/{house_id}.csv"
+    input_dir = core.RAW_INPUT_DIRECTORY if run_number < 1 else f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
 
-    if not os.path.exists(file_path):
-        logger.error(f"File not found: {file_path}")
-        return
-
-    # Load data
     try:
-        data = pd.read_csv(file_path, parse_dates=['timestamp'])
-    except Exception as e:
-        logger.error(f"Failed to read {file_path}: {e}")
+        data_path = find_house_data_path(input_dir, house_id)
+    except FileNotFoundError as e:
+        logger.error(str(e))
         return
 
-    data.rename(columns={'1': 'w1', '2': 'w2', '3': 'w3'}, inplace=True)
-    data.drop(columns=['sum'], inplace=True, errors='ignore')
-    data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+    # Output directory
+    output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+    on_off_dir = f"{output_dir}/on_off"
+    os.makedirs(on_off_dir, exist_ok=True)
 
-    # Sort by timestamp for efficient processing
-    data = data.sort_values('timestamp').reset_index(drop=True)
-
-    # Create indexed version for fast lookups
-    data_indexed = data.set_index('timestamp')
+    # Get list of monthly files (or single file)
+    data_path = Path(data_path)
+    if input_file:
+        # Process only the specified file
+        input_path = Path(input_file)
+        if not input_path.exists():
+            logger.error(f"Input file not found: {input_file}")
+            return
+        monthly_files = [input_path]
+    elif data_path.is_dir():
+        monthly_files = sorted(data_path.glob("*.csv"))
+    else:
+        monthly_files = [data_path]
 
     phases = ['w1', 'w2', 'w3']
-    results = pd.DataFrame()
-
-    for phase in tqdm(phases, desc=f"Detecting events for {house_id}"):
-        on_events, off_events = _detect_phase_events(
-            data, data_indexed, phase, threshold, off_threshold_factor,
-            use_gradual, gradual_window, progressive_search, logger
-        )
-
-        on_events['phase'] = phase
-        on_events['event'] = 'on'
-        off_events['phase'] = phase
-        off_events['event'] = 'off'
-
-        results = pd.concat([results, on_events, off_events], ignore_index=True)
-
-    results = results.sort_values(by='start')
-
-    # Save results
-    output_dir = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = f"{output_dir}/on_off_{threshold}.csv"
-
-    # Filter by minimum magnitude
     partial_threshold = threshold * 0.8
-    filtered = results[abs(results['magnitude']) >= partial_threshold].copy()
+    total_events = 0
+    event_counters = {(phase, event): 0 for phase in phases for event in ['on', 'off']}
 
-    # Add event IDs
-    filtered['event_counter'] = filtered.groupby(['phase', 'event']).cumcount() + 1
-    filtered['event_id'] = filtered.apply(
-        lambda row: f"{row['event']}_{row['phase']}_{row['event_counter']}", axis=1
-    )
-    filtered.drop(columns=['event_counter'], inplace=True)
-    filtered = filtered.sort_values(by='start')
+    # Process each monthly file
+    for monthly_file in tqdm(monthly_files, desc=f"Detection {house_id}", leave=False):
+        # Check if output already exists (skip if so)
+        if monthly_file.stem != house_id:
+            parts = monthly_file.stem.split('_')
+            if len(parts) >= 3:
+                file_month, file_year = int(parts[-2]), int(parts[-1])
+                output_file = Path(f"{on_off_dir}/on_off_{threshold}_{file_month:02d}_{file_year}.csv")
+                if output_file.exists():
+                    logger.info(f"Skipping {file_month:02d}/{file_year} - on_off file already exists")
+                    continue
 
-    try:
-        filtered.to_csv(output_path, index=False)
-        logger.info(f"Saved {len(filtered)} events to {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to save: {e}")
+        try:
+            data = load_power_data(monthly_file)
+        except Exception as e:
+            logger.error(f"Failed to read {monthly_file}: {e}")
+            continue
 
+        data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+        if data.empty:
+            continue
+
+        data = data.sort_values('timestamp').reset_index(drop=True)
+        data_indexed = data.set_index('timestamp')
+
+        month_results = pd.DataFrame()
+
+        for phase in phases:
+            on_events, off_events = _detect_phase_events(
+                data, data_indexed, phase, threshold, off_threshold_factor,
+                use_gradual, gradual_window, progressive_search, logger
+            )
+
+            on_events['phase'] = phase
+            on_events['event'] = 'on'
+            off_events['phase'] = phase
+            off_events['event'] = 'off'
+
+            month_results = pd.concat([month_results, on_events, off_events], ignore_index=True)
+
+        if month_results.empty:
+            continue
+
+        # Filter by minimum magnitude
+        filtered = month_results[abs(month_results['magnitude']) >= partial_threshold].copy()
+        if filtered.empty:
+            continue
+
+        filtered = filtered.sort_values(by='start')
+
+        # Add event IDs with global counter
+        event_ids = []
+        for _, row in filtered.iterrows():
+            key = (row['phase'], row['event'])
+            event_counters[key] += 1
+            event_ids.append(f"{row['event']}_{row['phase']}_{event_counters[key]}")
+        filtered['event_id'] = event_ids
+
+        # Extract month/year from filename or data
+        if monthly_file.stem != house_id:
+            # Filename format: house_id_MM_YYYY.csv
+            parts = monthly_file.stem.split('_')
+            if len(parts) >= 3:
+                month, year = int(parts[-2]), int(parts[-1])
+            else:
+                # Fall back to data
+                month = filtered['start'].iloc[0].month
+                year = filtered['start'].iloc[0].year
+        else:
+            month = filtered['start'].iloc[0].month
+            year = filtered['start'].iloc[0].year
+
+        # Save this month's results
+        output_file = f"{on_off_dir}/on_off_{threshold}_{month:02d}_{year}.csv"
+        filtered.to_csv(output_file, index=False, date_format='%d/%m/%Y %H:%M')
+        total_events += len(filtered)
+
+    logger.info(f"Saved {total_events} events to {on_off_dir}/ ({len(monthly_files)} monthly files)")
     logger.info(f"Detection completed for house {house_id}, run {run_number}")
 
 
@@ -177,6 +222,24 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
     # Expand events - use indexed data for fast lookups
     results_on = results_on.apply(lambda x: expand_event(x, data_indexed, 'on', diff_col), axis=1)
     results_off = results_off.apply(lambda x: expand_event(x, data_indexed, 'off', diff_col), axis=1)
+
+    # Merge consecutive ON events (appliances turning on in stages, e.g., AC compressor)
+    if len(results_on) > 1:
+        before_merge = len(results_on)
+        results_on = merge_consecutive_on_events(
+            results_on, results_off, max_gap_minutes=2, data=data_indexed, phase=phase
+        )
+        if len(results_on) < before_merge:
+            logger.info(f"  Merged {before_merge - len(results_on)} consecutive ON events for {phase}")
+
+    # Merge consecutive OFF events (appliances turning off in stages)
+    if len(results_off) > 1:
+        before_merge = len(results_off)
+        results_off = merge_consecutive_off_events(
+            results_off, results_on, max_gap_minutes=2, data=data_indexed, phase=phase
+        )
+        if len(results_off) < before_merge:
+            logger.info(f"  Merged {before_merge - len(results_off)} consecutive OFF events for {phase}")
 
     # Add gradual detection
     if use_gradual:

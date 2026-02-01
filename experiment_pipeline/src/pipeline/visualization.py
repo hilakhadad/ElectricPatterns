@@ -7,40 +7,61 @@ import pandas as pd
 import os
 from tqdm import tqdm
 
-from core import setup_logging, OUTPUT_BASE_PATH, LOGS_DIRECTORY, DEFAULT_THRESHOLD
+import core
+from core import setup_logging, DEFAULT_THRESHOLD
 from visualization import plot_interactive, split_by_day_night
 from visualization.utils import get_plot_directory
 
 
 def process_visualization(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD) -> None:
     """
-    Create visualizations for segmentation results.
+    Create visualizations for segmentation results - processes monthly files.
 
     Args:
         house_id: House identifier
         run_number: Current run number
         threshold: Power threshold in watts
     """
-    logger = setup_logging(house_id, run_number, LOGS_DIRECTORY)
+    from pathlib import Path
+
+    logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Visualization for house {house_id}, run {run_number}")
 
-    seg_dir = f"{OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
+    seg_dir = Path(f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}")
+    on_off_dir = seg_dir / "on_off"
+    summarized_dir = seg_dir / "summarized"
 
-    # Load event data
-    events_path = f"{seg_dir}/on_off_{threshold}.csv"
-    events = pd.read_csv(events_path)
-    events['start'] = pd.to_datetime(events['start'], format='mixed', dayfirst=True)
-    events['end'] = pd.to_datetime(events['end'], format='mixed', dayfirst=True)
+    # Load event data from monthly files
+    on_off_files = sorted(on_off_dir.glob(f"on_off_{threshold}_*.csv"))
+    if not on_off_files:
+        logger.error(f"No on_off files found in {on_off_dir}")
+        return
 
-    # Load summarized data
-    file_path = f"{seg_dir}/summarized_{house_id}.csv"
-    if not os.path.exists(file_path):
-        logger.error(f"File not found: {file_path}")
+    events = pd.concat([pd.read_csv(f) for f in on_off_files], ignore_index=True)
+    events['start'] = pd.to_datetime(events['start'], format='%d/%m/%Y %H:%M', errors='coerce')
+    events['end'] = pd.to_datetime(events['end'], format='%d/%m/%Y %H:%M', errors='coerce')
+
+    # Load summarized data from monthly files
+    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+    if not summarized_files:
+        logger.error(f"No summarized files found in {summarized_dir}")
         return
 
     try:
         phases = ['w1', 'w2', 'w3']
-        _create_segment_plots(file_path, phases, logger, events)
+        # Process each monthly file separately
+        for summarized_file in tqdm(summarized_files, desc=f"Visualizing {house_id}", leave=False):
+            # Get events for this month
+            parts = summarized_file.stem.split('_')
+            if len(parts) >= 4:
+                month, year = int(parts[-2]), int(parts[-1])
+                # Filter events for this month
+                month_events = events[
+                    (events['start'].dt.month == month) &
+                    (events['start'].dt.year == year)
+                ]
+                _create_segment_plots(str(summarized_file), phases, logger, month_events)
+
         logger.info(f"Visualization completed for house {house_id}, run {run_number}")
     except Exception as e:
         logger.error(f"Error: {e}")

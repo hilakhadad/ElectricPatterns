@@ -77,6 +77,7 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
         analyze_single_house, generate_house_report, load_house_data,
         aggregate_all_houses, generate_summary_report, create_comparison_table
     )
+    from visualization import generate_html_report
 
     houses = list_available_houses(input_dir)
     if not houses:
@@ -119,6 +120,11 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
         comparison_path = aggregate_dir / f'comparison_table_{timestamp}.csv'
         comparison_df = create_comparison_table(all_analyses, str(comparison_path))
         print(f"Comparison table saved to: {comparison_path}")
+
+        # Generate HTML report
+        html_path = aggregate_dir / f'report_{timestamp}.html'
+        generate_html_report(all_analyses, str(html_path))
+        print(f"HTML report saved to: {html_path}")
 
         # Print summary
         print("\n" + "=" * 60)
