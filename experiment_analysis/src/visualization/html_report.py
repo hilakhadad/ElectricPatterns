@@ -187,7 +187,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
 
         rows.append(f"""
         <tr>
-            <td><a href="house_reports/house_{house_id}.html" class="house-link"><strong>{house_id}</strong></a></td>
+            <td><a href="house_reports/house_{house_id}.html" target="_blank" style="text-decoration: none; color: #1976d2;"><strong>{house_id}</strong></a></td>
             <td>{iterations.get('iterations_completed', 0)}</td>
             <td>{iterations.get('first_iter_matching_rate', 0):.1%}</td>
             <td>{seg.get('segmentation_ratio', 0):.1%}</td>
