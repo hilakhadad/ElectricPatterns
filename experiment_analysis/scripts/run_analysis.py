@@ -73,13 +73,24 @@ def find_latest_experiment() -> Path:
         for item in search_dir.iterdir():
             if item.is_dir():
                 # Check if it looks like an experiment directory
-                # Structure: experiment_dir/house_X/run_0/...
+                # Support two structures:
+                # 1. New structure: experiment_dir/run_0/, run_1/, etc.
+                # 2. Old structure: experiment_dir/house_X/run_0/...
+
+                # Check for new structure (run_X directories at top level)
+                has_run_dirs = any(
+                    d.is_dir() and d.name.startswith("run_")
+                    for d in item.iterdir()
+                )
+
+                # Check for old structure (house_X/run_0)
                 has_house_dirs = any(
                     (item / d.name / "run_0").exists()
                     for d in item.iterdir()
                     if d.is_dir() and d.name.startswith("house_")
                 )
-                if has_house_dirs:
+
+                if has_run_dirs or has_house_dirs:
                     experiment_dirs.append(item)
 
     if not experiment_dirs:

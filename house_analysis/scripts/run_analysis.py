@@ -23,37 +23,74 @@ DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "OUTPUT"
 
 
 def list_available_houses(input_dir: Path) -> list:
-    """List all available house CSV files."""
+    """List all available houses (looks for subfolders containing CSV files)."""
     houses = []
     if input_dir.exists():
-        for f in input_dir.glob("*.csv"):
-            house_id = f.stem
-            houses.append(house_id)
+        # Look for subfolders (each subfolder is a house)
+        for folder in input_dir.iterdir():
+            if folder.is_dir():
+                # Check if folder contains CSV files
+                csv_files = list(folder.glob("*.csv"))
+                if csv_files:
+                    houses.append(folder.name)
     return sorted(houses)
+
+
+def load_house_data_from_folder(house_folder: Path):
+    """Load and concatenate all CSV files from a house folder."""
+    import pandas as pd
+
+    csv_files = sorted(house_folder.glob("*.csv"))
+    if not csv_files:
+        return None
+
+    dfs = []
+    for f in csv_files:
+        df = pd.read_csv(f, parse_dates=['timestamp'])
+        dfs.append(df)
+
+    data = pd.concat(dfs, ignore_index=True)
+    data = data.sort_values('timestamp').reset_index(drop=True)
+
+    # Rename columns if needed (some files use '1','2','3' instead of 'w1','w2','w3')
+    if '1' in data.columns and 'w1' not in data.columns:
+        data = data.rename(columns={'1': 'w1', '2': 'w2', '3': 'w3'})
+
+    return data
 
 
 def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path) -> dict:
     """Run analysis on a single house."""
-    from reports import analyze_single_house, generate_house_report, load_house_data
+    from reports import analyze_single_house, generate_house_report
+    from visualization import generate_single_house_html_report
 
-    input_file = input_dir / f"{house_id}.csv"
-    if not input_file.exists():
-        print(f"Error: File not found: {input_file}")
+    # Look for house folder
+    house_folder = input_dir / house_id
+    if not house_folder.exists() or not house_folder.is_dir():
+        print(f"Error: House folder not found: {house_folder}")
         return None
 
     print(f"Analyzing house {house_id}...")
 
-    # Load data
-    data = load_house_data(str(input_file))
+    # Load data from all monthly files in the folder
+    data = load_house_data_from_folder(house_folder)
+    if data is None or len(data) == 0:
+        print(f"Error: No data files found in {house_folder}")
+        return None
     print(f"  Loaded {len(data)} rows")
 
     # Run analysis
     analysis = analyze_single_house(data, house_id)
 
-    # Generate report
+    # Generate JSON report
     house_output_dir = output_dir / "per_house"
     report_path = generate_house_report(analysis, str(house_output_dir), format='json')
-    print(f"  Report saved to: {report_path}")
+    print(f"  JSON report saved to: {report_path}")
+
+    # Generate HTML report for this house
+    html_path = house_output_dir / f"house_{house_id}.html"
+    generate_single_house_html_report(analysis, str(html_path))
+    print(f"  HTML report saved to: {html_path}")
 
     # Print summary
     coverage = analysis.get('coverage', {})
@@ -81,10 +118,16 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
 
     houses = list_available_houses(input_dir)
     if not houses:
-        print(f"No house files found in {input_dir}")
+        print(f"No house folders found in {input_dir}")
         return
 
+    # Create timestamped run folder
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_output_dir = output_dir / f"run_{timestamp}"
+    os.makedirs(run_output_dir, exist_ok=True)
+
     print(f"Found {len(houses)} houses to analyze")
+    print(f"Output directory: {run_output_dir}")
     print("=" * 60)
 
     all_analyses = []
@@ -93,7 +136,7 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
     for i, house_id in enumerate(houses, 1):
         print(f"\n[{i}/{len(houses)}] ", end="")
         try:
-            analysis = run_single_house_analysis(house_id, input_dir, output_dir)
+            analysis = run_single_house_analysis(house_id, input_dir, run_output_dir)
             if analysis:
                 all_analyses.append(analysis)
         except Exception as e:
@@ -109,20 +152,19 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
         # Aggregate
         aggregate = aggregate_all_houses(all_analyses)
 
-        # Save reports
-        aggregate_dir = output_dir / "aggregate"
+        # Save reports - aggregate dir is inside run folder
+        aggregate_dir = run_output_dir / "aggregate"
         output_paths = generate_summary_report(aggregate, str(aggregate_dir))
 
         print(f"Aggregate report saved to: {output_paths.get('json', aggregate_dir)}")
 
         # Create comparison table
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        comparison_path = aggregate_dir / f'comparison_table_{timestamp}.csv'
+        comparison_path = aggregate_dir / 'comparison_table.csv'
         comparison_df = create_comparison_table(all_analyses, str(comparison_path))
         print(f"Comparison table saved to: {comparison_path}")
 
         # Generate HTML report
-        html_path = aggregate_dir / f'report_{timestamp}.html'
+        html_path = aggregate_dir / 'report.html'
         generate_html_report(all_analyses, str(html_path))
         print(f"HTML report saved to: {html_path}")
 

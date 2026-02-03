@@ -76,6 +76,29 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
         logger.error(f"Failed to read data: {e}")
         return None
 
+    # Merge data on timestamp for proper alignment
+    # This ensures we compare the same timestamps across runs
+    if run_number == 0:
+        merged_data = baseline_data.copy()
+    else:
+        # Merge baseline with current on timestamp
+        merged_data = baseline_data[['timestamp']].merge(
+            current_data,
+            on='timestamp',
+            how='left',
+            suffixes=('', '_current')
+        )
+        # Add baseline columns
+        for col in baseline_data.columns:
+            if col != 'timestamp' and col not in merged_data.columns:
+                merged_data[col] = baseline_data.set_index('timestamp')[col].reindex(merged_data['timestamp']).values
+
+        # Merge previous run data if exists
+        if prev_data is not None:
+            prev_cols = {f'remaining_{p}': f'prev_remaining_{p}' for p in ['w1', 'w2', 'w3']}
+            prev_subset = prev_data[['timestamp'] + [f'remaining_{p}' for p in ['w1', 'w2', 'w3']]].rename(columns=prev_cols)
+            merged_data = merged_data.merge(prev_subset, on='timestamp', how='left')
+
     # Calculate metrics
     phases = ['w1', 'w2', 'w3']
     results_list = []
@@ -90,19 +113,32 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
             logger.warning(f"Column {original_col} not found")
             continue
 
-        baseline_original = baseline_data[original_col]
-        current_remaining = current_data[remaining_col]
-        prev_remaining = prev_data[remaining_col] if prev_data is not None else None
+        # Use merged data - now properly aligned by timestamp
+        baseline_original = merged_data[original_col] if original_col in merged_data.columns else baseline_data[original_col]
+        current_remaining = merged_data[remaining_col] if remaining_col in merged_data.columns else None
+        prev_remaining = merged_data[f'prev_remaining_{phase}'] if f'prev_remaining_{phase}' in merged_data.columns else None
 
         metrics = calculate_phase_metrics(
             baseline_original, current_remaining, prev_remaining, threshold, run_number
         )
 
+        # Check for negative values in duration columns too
+        duration_cols = [f'short_duration_{phase}', f'medium_duration_{phase}', f'long_duration_{phase}']
+        for col in duration_cols:
+            if col in merged_data.columns:
+                neg_mask = merged_data[col] < 0
+                neg_count = neg_mask.sum()
+                neg_power = merged_data.loc[neg_mask, col].sum()
+                if neg_count > 0:
+                    metrics['minutes_negative'] += neg_count
+                    metrics['power_negative'] += neg_power
+                    logger.warning(f"Phase {phase} - NEGATIVE in {col}: {neg_count} min, {neg_power:.0f}W")
+
         if metrics['minutes_negative'] > 0:
-            logger.warning(f"Phase {phase} - NEGATIVE: {metrics['minutes_negative']} min, {metrics['power_negative']:.0f}W")
+            logger.warning(f"Phase {phase} - TOTAL NEGATIVE: {metrics['minutes_negative']} min, {metrics['power_negative']:.0f}W")
             negative_mask = current_remaining < 0
             save_negative_values(
-                current_data, current_remaining, negative_mask,
+                merged_data, current_remaining, negative_mask,
                 house_id, run_number, phase, core.OUTPUT_BASE_PATH
             )
 

@@ -163,6 +163,21 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
         if 'on_magnitude' in matches_df.columns:
             monthly_stats[month_year]['matched_power'] = matches_df['on_magnitude'].abs().sum()
 
+        # Add matched minutes (sum of all match durations)
+        # Fix negative durations (events crossing midnight) by adding 1440 min
+        if 'duration' in matches_df.columns:
+            durations = matches_df['duration'].copy()
+            durations = durations.apply(lambda x: x + 1440 if x < 0 else x)
+            monthly_stats[month_year]['matched_minutes'] = float(durations.sum())
+        elif 'on_start' in matches_df.columns and 'off_end' in matches_df.columns:
+            # Fallback: calculate duration from timestamps (for older files without duration column)
+            on_starts = pd.to_datetime(matches_df['on_start'], dayfirst=True)
+            off_ends = pd.to_datetime(matches_df['off_end'], dayfirst=True)
+            durations = (off_ends - on_starts).dt.total_seconds() / 60
+            # Fix negative durations (events crossing midnight)
+            durations = durations.apply(lambda x: x + 1440 if x < 0 else x)
+            monthly_stats[month_year]['matched_minutes'] = float(durations.sum())
+
     # Convert to sorted list
     metrics['monthly_data'] = [
         monthly_stats[k] for k in sorted(monthly_stats.keys())
@@ -266,6 +281,7 @@ def create_monthly_comparison_table(analyses: List[Dict[str, Any]]) -> pd.DataFr
                 'matching_rate': m.get('matching_rate', 0),
                 'total_matches': m.get('total_matches', 0),
                 'matched_power': m.get('matched_power', 0),
+                'matched_minutes': m.get('matched_minutes', 0),
             })
 
     df = pd.DataFrame(rows)

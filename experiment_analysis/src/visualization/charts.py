@@ -197,6 +197,88 @@ def create_segmentation_ratio_distribution_chart(analyses: List[Dict[str, Any]])
     '''
 
 
+def create_minutes_segmentation_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
+    """
+    Create histogram showing distribution of minutes segmentation ratios.
+
+    Shows what portion of time was successfully explained by matches across houses.
+    Minutes ratio = matched_minutes / (total_days * 24 * 60) - NOT multiplied by 3
+
+    Args:
+        analyses: List of experiment analysis results
+
+    Returns:
+        HTML string with Plotly chart
+    """
+    valid = [a for a in analyses if a.get('status') != 'no_data']
+
+    if not valid:
+        return '<p>No data available</p>'
+
+    # Calculate minutes ratio for each house (NOT x3 - real time only)
+    ratios = []
+    for a in valid:
+        matching = a.get('first_iteration', {}).get('matching', {})
+        patterns = a.get('first_iteration', {}).get('patterns', {})
+        matched_minutes = matching.get('total_matched_minutes', 0)
+        total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+        if total_days > 0 and matched_minutes > 0:
+            total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
+            ratio = (matched_minutes / total_available_minutes) * 100
+            ratios.append(ratio)
+        else:
+            ratios.append(0)
+
+    if not ratios or all(r == 0 for r in ratios):
+        return '<p>No minutes data available</p>'
+
+    # Create bins (adjusted for higher percentages since NOT x3)
+    bins = {
+        '0-2%': 0, '2-5%': 0, '5-10%': 0, '10-20%': 0, '20%+': 0
+    }
+
+    for ratio in ratios:
+        if ratio < 2:
+            bins['0-2%'] += 1
+        elif ratio < 5:
+            bins['2-5%'] += 1
+        elif ratio < 10:
+            bins['5-10%'] += 1
+        elif ratio < 20:
+            bins['10-20%'] += 1
+        else:
+            bins['20%+'] += 1
+
+    chart_id = 'minutes-segmentation-dist-chart'
+
+    avg_ratio = sum(ratios) / len(ratios) if ratios else 0
+    min_ratio = min(ratios) if ratios else 0
+    max_ratio = max(ratios) if ratios else 0
+
+    data = {
+        'x': list(bins.keys()),
+        'y': list(bins.values()),
+        'type': 'bar',
+        'marker': {
+            'color': '#17a2b8'
+        }
+    }
+
+    layout = {
+        'title': f'Minutes Segmentation Distribution<br><sub>Avg: {avg_ratio:.2f}% | Range: {min_ratio:.2f}% - {max_ratio:.2f}% of time explained</sub>',
+        'xaxis': {'title': 'Minutes Segmentation Ratio'},
+        'yaxis': {'title': 'Number of Houses'},
+        'showlegend': False
+    }
+
+    return f'''
+    <div id="{chart_id}" style="width:100%;height:400px;"></div>
+    <script>
+        Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
+    </script>
+    '''
+
+
 def create_tag_breakdown_chart(analyses: List[Dict[str, Any]]) -> str:
     """
     Create pie chart showing match tag distribution across all houses.
@@ -262,82 +344,14 @@ def create_tag_breakdown_chart(analyses: List[Dict[str, Any]]) -> str:
 
 def create_iteration_contribution_chart(analyses: List[Dict[str, Any]]) -> str:
     """
-    Create chart showing what each iteration contributed IN ABSOLUTE NUMBERS.
+    DEPRECATED - Removed by user request.
 
-    Shows: Iteration 1 found X matches, Iteration 2 found Y additional matches, etc.
-    NOT relative to first iteration - just the raw additional contribution.
-
-    Args:
-        analyses: List of experiment analysis results
+    Was showing iteration contribution but deemed not useful.
 
     Returns:
-        HTML string with Plotly chart
+        Empty string
     """
-    valid = [a for a in analyses if a.get('status') != 'no_data']
-
-    if not valid:
-        return '<p>No data available</p>'
-
-    # Aggregate matches per iteration across all houses
-    iteration_matches = {}  # {iter_num: total_matches}
-
-    for a in valid:
-        iter_data = a.get('iterations', {}).get('iterations_data', [])
-        for i, iter_info in enumerate(iter_data):
-            matches = iter_info.get('matches', 0)
-            if i not in iteration_matches:
-                iteration_matches[i] = 0
-            iteration_matches[i] += matches
-
-    if not iteration_matches:
-        return '<p>No iteration data available</p>'
-
-    # Calculate additional contribution per iteration
-    sorted_iters = sorted(iteration_matches.keys())
-    contributions = []
-    cumulative = 0
-
-    for i in sorted_iters:
-        total_in_iter = iteration_matches[i]
-        # For iteration 0, contribution is all matches
-        # For later iterations, contribution is the new matches found
-        contribution = total_in_iter  # Already the new matches for that iteration
-        contributions.append(contribution)
-        cumulative += contribution
-
-    chart_id = 'iteration-contribution-chart'
-
-    iter_labels = [f'Iteration {i}' for i in sorted_iters]
-
-    # Create bar chart showing absolute contribution
-    data = {
-        'x': iter_labels,
-        'y': contributions,
-        'type': 'bar',
-        'marker': {
-            'color': ['#667eea'] + ['#28a745'] * (len(contributions) - 1)
-        },
-        'text': [f'{c:,}' for c in contributions],
-        'textposition': 'outside'
-    }
-
-    total = sum(contributions)
-    first_iter = contributions[0] if contributions else 0
-    additional = total - first_iter
-
-    layout = {
-        'title': f'Matches Found Per Iteration<br><sub>First: {first_iter:,} | Additional: {additional:,} ({100*additional/total if total > 0 else 0:.1f}% more)</sub>',
-        'xaxis': {'title': ''},
-        'yaxis': {'title': 'Number of Matches'},
-        'showlegend': False
-    }
-
-    return f'''
-    <div id="{chart_id}" style="width:100%;height:400px;"></div>
-    <script>
-        Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
-    </script>
-    '''
+    return ''
 
 
 def create_issues_summary_chart(analyses: List[Dict[str, Any]]) -> str:
@@ -423,18 +437,43 @@ def create_experiment_summary_table(analyses: List[Dict[str, Any]]) -> str:
     matching_rates = [a.get('iterations', {}).get('first_iter_matching_rate', 0) * 100 for a in valid]
     seg_ratios = [a.get('first_iteration', {}).get('segmentation', {}).get('segmentation_ratio', 0) * 100 for a in valid]
 
-    # Total matches and events
-    total_matches = sum(
-        a.get('first_iteration', {}).get('matching', {}).get('total_matches', 0)
-        for a in valid
-    )
-    total_on_events = sum(
-        a.get('first_iteration', {}).get('events', {}).get('total_on_events', 0)
-        for a in valid
-    )
+    # Calculate minutes segmentation ratio per house (NOT x3 - real time only)
+    # minutes_ratio = matched_minutes / (total_days * 24 * 60)
+    minutes_ratios = []
+    for a in valid:
+        matching = a.get('first_iteration', {}).get('matching', {})
+        patterns = a.get('first_iteration', {}).get('patterns', {})
+        matched_minutes = matching.get('total_matched_minutes', 0)
+        total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+        if total_days > 0 and matched_minutes > 0:
+            total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
+            minutes_ratio = (matched_minutes / total_available_minutes) * 100
+            minutes_ratios.append(minutes_ratio)
+        else:
+            minutes_ratios.append(0)
 
-    # Count houses with issues
-    issues_count = sum(1 for a in valid if any(a.get('flags', {}).values()))
+    # Count houses with specific issues (for detailed breakdown)
+    issue_counts = {}
+    issue_labels = {
+        'low_matching_rate': 'Low Matching Rate (<50%)',
+        'has_negative_values': 'Negative Power Values',
+        'low_segmentation': 'Low Segmentation (<30%)',
+        'has_damaged_phases': 'Damaged Phase(s)',
+        'few_matches': 'Few Matches (<10)',
+        'high_partial_ratio': 'High Partial Ratio (>30%)',
+        'many_remainders': 'Many Remainders (>20)',
+        'low_improvement': 'Low Improvement (<5%)',
+    }
+    for a in valid:
+        flags = a.get('flags', {})
+        for flag, has_issue in flags.items():
+            if has_issue and flag != 'has_recurring_patterns':  # Skip positive flag
+                label = issue_labels.get(flag, flag.replace('_', ' ').title())
+                issue_counts[label] = issue_counts.get(label, 0) + 1
+
+    total_issues_houses = sum(1 for a in valid if any(
+        v for k, v in a.get('flags', {}).items() if k != 'has_recurring_patterns'
+    ))
 
     # Count recurring patterns
     houses_with_patterns = sum(1 for a in valid
@@ -451,12 +490,21 @@ def create_experiment_summary_table(analyses: List[Dict[str, Any]]) -> str:
     # Count duration categories (matching segmentation definitions)
     # short: <= 2 min, medium: 3-24 min, long: >= 25 min
     duration_totals = {'short': 0, 'medium': 0, 'long': 0}
+    total_matches = 0
     for a in valid:
         matching = a.get('first_iteration', {}).get('matching', {})
         dur_breakdown = matching.get('duration_breakdown', {})
         duration_totals['short'] += dur_breakdown.get('short', 0)
         duration_totals['medium'] += dur_breakdown.get('medium', 0)
         duration_totals['long'] += dur_breakdown.get('long', 0)
+        total_matches += matching.get('total_matches', 0)
+
+    # Build issues detail HTML
+    issues_detail_html = ""
+    if issue_counts:
+        sorted_issues = sorted(issue_counts.items(), key=lambda x: x[1], reverse=True)
+        issues_items = [f"{label}: {count} ({100*count/len(valid):.1f}%)" for label, count in sorted_issues]
+        issues_detail_html = "<br><small style='color:#856404;'>" + " | ".join(issues_items) + "</small>"
 
     table_html = f'''
     <table style="width:100%; border-collapse: collapse; margin: 20px 0;">
@@ -470,25 +518,25 @@ def create_experiment_summary_table(analyses: List[Dict[str, Any]]) -> str:
             <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">{len(valid)} (of {total}, {no_data} had no data)</td>
         </tr>
         <tr style="background: #f8f9fa;">
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Total ON Events</td>
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">{total_on_events:,}</td>
-        </tr>
-        <tr>
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Total Matches</td>
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">{total_matches:,}</td>
-        </tr>
-        <tr style="background: #f8f9fa;">
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Matching Rate</td>
+            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Matching Rate (events)</td>
             <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">
                 <b>Avg: {sum(matching_rates)/len(matching_rates):.1f}%</b> |
                 Range: {min(matching_rates):.1f}% - {max(matching_rates):.1f}%
             </td>
         </tr>
         <tr>
-            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Segmentation Ratio</td>
+            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Segmentation Ratio (power)</td>
             <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">
                 <b>Avg: {sum(seg_ratios)/len(seg_ratios):.1f}%</b> |
                 Range: {min(seg_ratios):.1f}% - {max(seg_ratios):.1f}%
+            </td>
+        </tr>
+        <tr style="background: #f8f9fa;">
+            <td style="padding: 12px; border-bottom: 1px solid #dee2e6; font-weight: 600;">Segmentation Ratio (minutes)</td>
+            <td style="padding: 12px; border-bottom: 1px solid #dee2e6;">
+                <b>Avg: {sum(minutes_ratios)/len(minutes_ratios) if minutes_ratios else 0:.2f}%</b> |
+                Range: {min(minutes_ratios) if minutes_ratios else 0:.2f}% - {max(minutes_ratios) if minutes_ratios else 0:.2f}%
+                <br><small style="color:#666;">(matched_minutes from all phases / real time available)</small>
             </td>
         </tr>
 
@@ -530,7 +578,7 @@ def create_experiment_summary_table(analyses: List[Dict[str, Any]]) -> str:
 
         <tr style="background: #fff3cd;">
             <td style="padding: 12px; font-weight: 600;">Houses with Issues</td>
-            <td style="padding: 12px;">{issues_count} ({100*issues_count/len(valid):.1f}%)</td>
+            <td style="padding: 12px;">{total_issues_houses} ({100*total_issues_houses/len(valid):.1f}%){issues_detail_html}</td>
         </tr>
     </table>
     '''
