@@ -118,8 +118,22 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
             metrics['matches_by_phase'] = phase_counts  # Legacy key
 
         # Duration statistics
+        durations = None
         if 'duration' in matches_df.columns:
-            durations = matches_df['duration']
+            durations = matches_df['duration'].copy()
+        elif 'on_start' in matches_df.columns and 'off_end' in matches_df.columns:
+            # Fallback: calculate duration from timestamps (for older files without duration column)
+            on_starts = pd.to_datetime(matches_df['on_start'], dayfirst=True)
+            off_ends = pd.to_datetime(matches_df['off_end'], dayfirst=True)
+            durations = (off_ends - on_starts).dt.total_seconds() / 60
+
+        if durations is not None:
+            # Fix negative durations (events crossing midnight)
+            # Add 24 hours (1440 minutes) to negative values
+            negative_duration_count = int((durations < 0).sum())
+            metrics['negative_duration_count'] = negative_duration_count
+            durations = durations.apply(lambda x: x + 1440 if x < 0 else x)
+
             metrics['avg_match_duration'] = durations.mean()
             metrics['median_match_duration'] = durations.median()
             metrics['max_match_duration'] = durations.max()
@@ -127,11 +141,30 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
 
             # Duration breakdown matching segmentation categories:
             # short: <= 2 min, medium: 3-24 min, long: >= 25 min
+            short_mask = (durations <= 2)
+            medium_mask = ((durations > 2) & (durations <= 24))
+            long_mask = (durations > 24)
+
             metrics['duration_breakdown'] = {
-                'short': int((durations <= 2).sum()),
-                'medium': int(((durations > 2) & (durations <= 24)).sum()),
-                'long': int((durations > 24).sum()),
+                'short': int(short_mask.sum()),
+                'medium': int(medium_mask.sum()),
+                'long': int(long_mask.sum()),
             }
+
+            # Minutes breakdown by duration category (sum of minutes, not count)
+            short_minutes = float(durations[short_mask].sum())
+            medium_minutes = float(durations[medium_mask].sum())
+            long_minutes = float(durations[long_mask].sum())
+
+            metrics['duration_minutes_breakdown'] = {
+                'short': short_minutes,
+                'medium': medium_minutes,
+                'long': long_minutes,
+            }
+
+            # Total matched minutes = sum of all categories
+            # This is the source of truth (each minute counted once)
+            metrics['total_matched_minutes'] = short_minutes + medium_minutes + long_minutes
 
         # Magnitude statistics
         if 'on_magnitude' in matches_df.columns:
@@ -148,6 +181,17 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
                 '3500-5000': int(((magnitudes >= 3500) & (magnitudes < 5000)).sum()),
                 '5000+': int((magnitudes >= 5000).sum()),
             }
+
+            # Minutes breakdown by magnitude range (total minutes per range)
+            # Use durations calculated earlier (with fallback for older files)
+            if durations is not None:
+                metrics['magnitude_minutes_breakdown'] = {
+                    '1300-1800': float(durations[(magnitudes >= 1300) & (magnitudes < 1800)].sum()),
+                    '1800-2500': float(durations[(magnitudes >= 1800) & (magnitudes < 2500)].sum()),
+                    '2500-3500': float(durations[(magnitudes >= 2500) & (magnitudes < 3500)].sum()),
+                    '3500-5000': float(durations[(magnitudes >= 3500) & (magnitudes < 5000)].sum()),
+                    '5000+': float(durations[magnitudes >= 5000].sum()),
+                }
 
     # Unmatched analysis
     unmatched_on_df = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.csv")

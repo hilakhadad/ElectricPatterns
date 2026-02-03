@@ -31,7 +31,7 @@ echo "SLURM_JOB_NODELIST: \$SLURM_JOB_NODELIST"
 ### Start your code below ####
 module load anaconda				### load anaconda module (must be present when working with conda environments)
 source activate nilm_stat_env			### activate a conda environment, replace my_env with your conda environment
-python run_scripts.py 0 "$house_id"
+python test_single_house.py --experiment_name exp006_partial_matching --house_id $house_id --max_iterations 2
 EOT
 
     # Submit the job to SLURM

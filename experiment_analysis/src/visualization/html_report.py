@@ -14,10 +14,8 @@ from visualization.charts import (
     create_matching_rate_distribution_chart,
     create_segmentation_ratio_distribution_chart,
     create_tag_breakdown_chart,
-    create_iteration_contribution_chart,
     create_experiment_summary_table,
     create_duration_distribution_chart,
-    create_pattern_detection_chart,
     create_device_detection_chart,
 )
 
@@ -162,6 +160,15 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
             flag_icons.append('<span title="Has Recurring Patterns">🔄</span>')
         flags_display = ' '.join(flag_icons) if flag_icons else '-'
 
+        # Calculate minutes segmentation ratio (NOT x3 - real time only)
+        matched_minutes = matching.get('total_matched_minutes', 0)
+        total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+        if total_days > 0 and matched_minutes > 0:
+            total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
+            minutes_seg_ratio = matched_minutes / total_available_minutes
+        else:
+            minutes_seg_ratio = 0
+
         # Score badge - check for damaged phases first
         score = scores.get('overall_score', 0)
         has_damaged = flags.get('has_damaged_phases', False)
@@ -180,10 +187,11 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
 
         rows.append(f"""
         <tr>
-            <td><strong>{house_id}</strong></td>
+            <td><a href="house_reports/house_{house_id}.html" class="house-link"><strong>{house_id}</strong></a></td>
             <td>{iterations.get('iterations_completed', 0)}</td>
             <td>{iterations.get('first_iter_matching_rate', 0):.1%}</td>
             <td>{seg.get('segmentation_ratio', 0):.1%}</td>
+            <td>{minutes_seg_ratio:.2%}</td>
             <td style="font-size: 1.2em;">{devices}</td>
             <td>{score:.0f} {badge}</td>
             <td style="font-size: 1.2em;">{flags_display}</td>
@@ -205,9 +213,10 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
                 <th onclick="sortTable(1)">Iterations</th>
                 <th onclick="sortTable(2)">Match Rate<br><small>(events)</small></th>
                 <th onclick="sortTable(3)">Segmentation<br><small>(power)</small></th>
-                <th onclick="sortTable(4)">Devices</th>
-                <th onclick="sortTable(5)">Score</th>
-                <th onclick="sortTable(6)">Flags</th>
+                <th onclick="sortTable(4)">Segmentation<br><small>(minutes)</small></th>
+                <th onclick="sortTable(5)">Devices</th>
+                <th onclick="sortTable(6)">Score</th>
+                <th onclick="sortTable(7)">Flags</th>
             </tr>
         </thead>
         <tbody>
@@ -223,7 +232,7 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
     # Start with summary table (most important)
     summary_table = create_experiment_summary_table(analyses)
 
-    # Organize charts by category
+    # Organize charts by category (5 charts total)
     charts_by_category = {
         'Matching & Segmentation': [
             create_matching_rate_distribution_chart(analyses),
@@ -234,11 +243,7 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
             create_duration_distribution_chart(analyses),
         ],
         'Patterns & Devices': [
-            create_pattern_detection_chart(analyses),
             create_device_detection_chart(analyses),
-        ],
-        'Iterations': [
-            create_iteration_contribution_chart(analyses),
         ],
     }
 
@@ -425,6 +430,18 @@ def _build_html_document(title: str, summary: str, table: str,
         .badge-blue {{ background: #cce5ff; color: #004085; }}
         .badge-orange {{ background: #fff3cd; color: #856404; }}
         .badge-red {{ background: #f8d7da; color: #721c24; }}
+
+        /* House links in table */
+        .house-link {{
+            color: #667eea;
+            text-decoration: none;
+            transition: color 0.2s;
+        }}
+
+        .house-link:hover {{
+            color: #764ba2;
+            text-decoration: underline;
+        }}
 
         /* Chart containers */
         .chart-container {{
@@ -624,6 +641,9 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
         badge_class = 'badge-red'
         badge_text = 'Poor'
 
+    # Calculate minutes segmented ratio
+    total_minutes = matching.get('total_matched_minutes', 0)
+
     return f"""
     <div class="summary-grid">
         <div class="summary-card highlight">
@@ -643,9 +663,16 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
             <div class="summary-number">{iterations.get('iterations_completed', 0)}</div>
             <div class="summary-label">Iterations</div>
         </div>
-        <div class="summary-card">
-            <div class="summary-number">{seg.get('segmentation_ratio', 0):.1%}</div>
-            <div class="summary-label">Power Segmented</div>
+    </div>
+    <div class="segmentation-summary" style="display: flex; gap: 40px; justify-content: center; margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+        <div style="text-align: center;">
+            <div style="font-size: 1.5em; font-weight: bold; color: #28a745;">{seg.get('segmentation_ratio', 0):.1%}</div>
+            <div style="color: #666; font-size: 0.9em;">Power Segmented</div>
+        </div>
+        <div style="text-align: center;">
+            <div style="font-size: 1.5em; font-weight: bold; color: #17a2b8;">{total_minutes/60:.1f} hrs</div>
+            <div style="color: #666; font-size: 0.9em;">Total Matched Duration</div>
+            <div style="color: #999; font-size: 0.75em;">(sum across all 3 phases)</div>
         </div>
     </div>
     """
@@ -661,27 +688,40 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
 
     rows = []
     for i, d in enumerate(iter_data):
+        on_events = d.get('on_events', d.get('total_events', 0) // 2)
+        off_events = d.get('off_events', d.get('total_events', 0) // 2)
+        matches = d.get('total_matches', 0)
+        unmatched_on = d.get('unmatched_on', on_events - matches)
+        unmatched_off = d.get('unmatched_off', off_events - matches)
+        matched_minutes = d.get('matched_minutes', 0)
+
         rows.append(f"""
         <tr>
             <td>{i}</td>
-            <td>{d.get('total_events', 0)}</td>
-            <td>{d.get('total_matches', 0)}</td>
+            <td>ON: {on_events}<br>OFF: {off_events}</td>
+            <td>{matches}</td>
+            <td>ON: {unmatched_on}<br>OFF: {unmatched_off}</td>
             <td>{d.get('matching_rate', 0):.1%}</td>
             <td>{d.get('matched_power', 0)/1000:.1f} kW</td>
+            <td>{matched_minutes:.0f} min</td>
             <td>{d.get('negative_values', 0)}</td>
         </tr>
         """)
+
+    total_minutes = iterations.get('total_matched_minutes', 0)
 
     return f"""
     <table class="data-table">
         <thead>
             <tr>
-                <th>Iteration</th>
-                <th>Events</th>
+                <th>Iter</th>
+                <th>Events<br><small>(ON/OFF)</small></th>
                 <th>Matches</th>
+                <th>Unmatched<br><small>(ON/OFF)</small></th>
                 <th>Match Rate</th>
                 <th>Matched Power</th>
-                <th>Negative Values</th>
+                <th>Matched Minutes</th>
+                <th>Negative</th>
             </tr>
         </thead>
         <tbody>
@@ -697,7 +737,14 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
             <span class="metric-label">Total Matched Power:</span>
             <span class="metric-value">{iterations.get('total_matched_power', 0)/1000:.1f} kW</span>
         </div>
+        <div class="metric">
+            <span class="metric-label">Total Matched Minutes:</span>
+            <span class="metric-value">{total_minutes:.0f} min ({total_minutes/60:.1f} hrs)</span>
+        </div>
     </div>
+    <p style="font-size: 0.8em; color: #888; margin-top: 8px; text-align: center;">
+        Note: Minutes and power are summed across all 3 phases. Overlapping events on different phases are counted separately.
+    </p>
     """
 
 
@@ -720,6 +767,16 @@ def _generate_matching_section(analysis: Dict[str, Any]) -> str:
     phase_rows = ''.join(f"<tr><td>{phase}</td><td>{count}</td></tr>"
                          for phase, count in phase_breakdown.items())
 
+    # Calculate stats
+    total_on = matching.get('total_on_events', 0)
+    total_off = matching.get('total_off_events', 0)
+    matched_on = matching.get('matched_on_count', 0)
+    matched_off = matching.get('matched_off_count', matched_on)  # Usually same as ON
+    unmatched_on = matching.get('unmatched_on_count', total_on - matched_on)
+    unmatched_off = matching.get('unmatched_off_count', total_off - matched_off)
+    on_rate = matched_on / total_on if total_on > 0 else 0
+    off_rate = matched_off / total_off if total_off > 0 else 0
+
     return f"""
     <div class="two-columns">
         <div class="column">
@@ -737,82 +794,107 @@ def _generate_matching_section(analysis: Dict[str, Any]) -> str:
             </table>
         </div>
     </div>
-    <div class="metrics-row">
-        <div class="metric">
-            <span class="metric-label">ON Events:</span>
-            <span class="metric-value">{matching.get('total_on_events', 0)}</span>
-        </div>
-        <div class="metric">
-            <span class="metric-label">OFF Events:</span>
-            <span class="metric-value">{matching.get('total_off_events', 0)}</span>
-        </div>
-        <div class="metric">
-            <span class="metric-label">Matched ON:</span>
-            <span class="metric-value">{matching.get('matched_on_count', 0)} ({matching.get('on_matching_rate', 0):.1%})</span>
-        </div>
-        <div class="metric">
-            <span class="metric-label">Unmatched ON:</span>
-            <span class="metric-value">{matching.get('unmatched_on_count', 0)}</span>
-        </div>
-    </div>
+
+    <h4 style="margin-top: 20px;">Event Statistics</h4>
+    <table class="data-table small" style="max-width: 600px;">
+        <thead>
+            <tr>
+                <th></th>
+                <th>ON Events</th>
+                <th>OFF Events</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Total</strong></td>
+                <td>{total_on}</td>
+                <td>{total_off}</td>
+            </tr>
+            <tr>
+                <td><strong>Matched</strong></td>
+                <td>{matched_on} ({on_rate:.1%})</td>
+                <td>{matched_off} ({off_rate:.1%})</td>
+            </tr>
+            <tr>
+                <td><strong>Unmatched</strong></td>
+                <td>{unmatched_on}</td>
+                <td>{unmatched_off}</td>
+            </tr>
+        </tbody>
+    </table>
+    <p style="font-size: 0.85em; color: #666; margin-top: 10px;">
+        Note: ON and OFF event counts may differ due to detection algorithm sensitivity and edge effects.
+        Matching rate = matched / total events of that type.
+    </p>
     """
 
 
 def _generate_segmentation_section(analysis: Dict[str, Any]) -> str:
-    """Generate segmentation details section."""
+    """Generate segmentation details section - shows both power and minutes metrics."""
     first = analysis.get('first_iteration', {})
     seg = first.get('segmentation', {})
+    matching = first.get('matching', {})
+    patterns = first.get('patterns', {})
 
     if not seg:
         return '<p>No segmentation data available.</p>'
 
-    phase_breakdown = seg.get('phase_breakdown', {})
-
-    phase_rows = []
-    for phase, data in phase_breakdown.items():
-        phase_rows.append(f"""
-        <tr>
-            <td>{phase}</td>
-            <td>{data.get('total_power', 0)/1000:.1f} kW</td>
-            <td>{data.get('segmented_power', 0)/1000:.1f} kW</td>
-            <td>{data.get('remaining_power', 0)/1000:.1f} kW</td>
-            <td>{data.get('segmentation_ratio', 0):.1%}</td>
-        </tr>
-        """)
-
     neg_count = seg.get('negative_value_count', 0)
-    neg_warning = f'<div class="warning">Warning: {neg_count} negative values detected!</div>' if neg_count > 0 else ''
+    neg_warning = f'<div class="warning" style="margin-bottom: 15px;">⚠ Warning: {neg_count} negative values detected in remaining power!</div>' if neg_count > 0 else ''
+
+    # Power metrics
+    total_power = seg.get('total_power', 0) / 1000
+    segmented_power = seg.get('total_segmented_power', 0) / 1000
+    remaining_power = seg.get('total_remaining_power', 0) / 1000
+    power_seg_ratio = seg.get('segmentation_ratio', 0)
+
+    # Minutes metrics
+    # matched_minutes is sum across all 3 phases
+    # total_available is real time (NOT multiplied by 3)
+    matched_minutes = matching.get('total_matched_minutes', 0)
+    total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+
+    if total_days > 0:
+        total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
+        minutes_seg_ratio = matched_minutes / total_available_minutes if total_available_minutes > 0 else 0
+    else:
+        total_available_minutes = 0
+        minutes_seg_ratio = 0
 
     return f"""
     {neg_warning}
-    <table class="data-table">
-        <thead>
-            <tr>
-                <th>Phase</th>
-                <th>Total Power</th>
-                <th>Segmented</th>
-                <th>Remaining</th>
-                <th>Ratio</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(phase_rows)}
-        </tbody>
-    </table>
-    <div class="metrics-row">
-        <div class="metric">
-            <span class="metric-label">Total Power:</span>
-            <span class="metric-value">{seg.get('total_power', 0)/1000:.1f} kW</span>
+    <h4>Power Segmentation</h4>
+    <div class="summary-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 20px;">
+        <div class="summary-card">
+            <div class="summary-number" style="color: #333; font-size: 1.8em;">{total_power:.1f} kW</div>
+            <div class="summary-label">Total Power</div>
         </div>
-        <div class="metric">
-            <span class="metric-label">Segmented:</span>
-            <span class="metric-value">{seg.get('total_segmented_power', 0)/1000:.1f} kW ({seg.get('segmentation_ratio', 0):.1%})</span>
+        <div class="summary-card" style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);">
+            <div class="summary-number" style="color: #155724; font-size: 1.8em;">{segmented_power:.1f} kW</div>
+            <div class="summary-label">Segmented ({power_seg_ratio:.1%})</div>
         </div>
-        <div class="metric">
-            <span class="metric-label">Remaining:</span>
-            <span class="metric-value">{seg.get('total_remaining_power', 0)/1000:.1f} kW</span>
+        <div class="summary-card" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+            <div class="summary-number" style="color: #6c757d; font-size: 1.8em;">{remaining_power:.1f} kW</div>
+            <div class="summary-label">Remaining ({1-power_seg_ratio:.1%})</div>
         </div>
     </div>
+
+    <h4>Minutes Segmentation</h4>
+    <div class="summary-grid" style="grid-template-columns: repeat(2, 1fr);">
+        <div class="summary-card">
+            <div class="summary-number" style="color: #333; font-size: 1.8em;">{total_available_minutes/60:.0f} hrs</div>
+            <div class="summary-label">Total Time Available</div>
+            <div style="font-size: 0.75em; color: #888;">{total_days} days × 24 hrs</div>
+        </div>
+        <div class="summary-card" style="background: linear-gradient(135deg, #cce5ff 0%, #b8daff 100%);">
+            <div class="summary-number" style="color: #004085; font-size: 1.8em;">{matched_minutes/60:.0f} hrs</div>
+            <div class="summary-label">Matched ({minutes_seg_ratio:.1%})</div>
+            <div style="font-size: 0.75em; color: #666;">{matched_minutes:.0f} min (sum of 3 phases)</div>
+        </div>
+    </div>
+    <p style="font-size: 0.85em; color: #888; margin-top: 10px; text-align: center;">
+        Note: Matched minutes are summed across all 3 phases. Percentage can exceed 100% if events overlap.
+    </p>
     """
 
 
@@ -829,26 +911,12 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
     recurring = patterns.get('recurring_events', {})
     time_dist = patterns.get('time_distribution', {})
 
-    # Daily stats cards
+    # Daily stats - simplified to only show total days
+    total_days = daily_stats.get('total_days', 0)
     daily_html = f"""
-    <h4>Daily Statistics</h4>
-    <div class="summary-grid">
-        <div class="summary-card">
-            <div class="summary-number">{daily_stats.get('total_days', 0)}</div>
-            <div class="summary-label">Total Days</div>
-        </div>
-        <div class="summary-card">
-            <div class="summary-number">{daily_stats.get('avg_events_per_day', 0):.1f}</div>
-            <div class="summary-label">Avg Events/Day</div>
-        </div>
-        <div class="summary-card">
-            <div class="summary-number">{daily_stats.get('avg_matches_per_day', 0):.1f}</div>
-            <div class="summary-label">Avg Matches/Day</div>
-        </div>
-        <div class="summary-card">
-            <div class="summary-number">{daily_stats.get('avg_power_matched_per_day', 0)/1000:.1f}</div>
-            <div class="summary-label">Avg kW/Day Matched</div>
-        </div>
+    <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; display: inline-block;">
+        <span style="font-size: 1.5em; font-weight: bold; color: #2d3748;">{total_days}</span>
+        <span style="color: #666; margin-left: 10px;">Days of Data Analyzed</span>
     </div>
     """
 
@@ -867,15 +935,16 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
     ]
 
     if match_patterns:
-        # Build rows with expandable dates
+        # Build rows with expandable dates - show ALL patterns, numbered
         pattern_rows = []
-        for i, p in enumerate(match_patterns[:15]):
+        for i, p in enumerate(match_patterns):
             dates_list = p.get('dates', [])
             dates_preview = ', '.join(dates_list[:3]) + ('...' if len(dates_list) > 3 else '')
             all_dates = ', '.join(dates_list)
 
             pattern_rows.append(f"""
             <tr class="pattern-row" onclick="toggleDates('dates-{i}')">
+                <td><strong>{i+1}</strong></td>
                 <td>{p.get('avg_start_time', '')}</td>
                 <td>{p.get('phase', '')}</td>
                 <td>{p.get('magnitude', 0)}W</td>
@@ -885,7 +954,7 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
                 <td class="dates-cell">{dates_preview}</td>
             </tr>
             <tr id="dates-{i}" class="dates-row" style="display:none;">
-                <td colspan="7" class="dates-expanded">
+                <td colspan="8" class="dates-expanded">
                     <strong>All dates:</strong> {all_dates}
                 </td>
             </tr>
@@ -919,9 +988,11 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
         <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
             Click on a row to see all dates when this pattern occurred.
         </p>
+        <div style="max-height: 500px; overflow-y: auto;">
         <table class="data-table small">
             <thead>
                 <tr>
+                    <th>#</th>
                     <th>Start Time</th>
                     <th>Phase</th>
                     <th>Power</th>
@@ -933,6 +1004,7 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
             </thead>
             <tbody>{''.join(pattern_rows)}</tbody>
         </table>
+        </div>
 
         <div id="plotInstructions" style="display: none; margin-top: 15px; padding: 15px; background: #e3f2fd; border-radius: 8px; border-left: 4px solid #2196f3;">
             <h5 style="margin: 0 0 10px 0; color: #1976d2;">Generate Pattern Plots</h5>
@@ -991,29 +1063,58 @@ python generate_pattern_plots.py --house {house_id}
     device_usage_html = _generate_device_usage_html(device_usage)
 
 
-    # Time distribution
+    # Time distribution with ON/OFF breakdown
     by_period = time_dist.get('by_period', {})
+    by_period_on = time_dist.get('by_period_on', {})
+    by_period_off = time_dist.get('by_period_off', {})
+
     if by_period:
+        periods = [
+            ('Night', '00:00-06:00', 'night'),
+            ('Morning', '06:00-12:00', 'morning'),
+            ('Afternoon', '12:00-18:00', 'afternoon'),
+            ('Evening', '18:00-24:00', 'evening'),
+        ]
+
+        time_rows = []
+        for label, hours, key in periods:
+            total = by_period.get(key, 0)
+            on_count = by_period_on.get(key, 0)
+            off_count = by_period_off.get(key, 0)
+            time_rows.append(f"""
+            <tr>
+                <td><strong>{label}</strong><br><small style="color: #888;">{hours}</small></td>
+                <td style="text-align: center;">{total}</td>
+                <td style="text-align: center; color: #28a745;">{on_count}</td>
+                <td style="text-align: center; color: #dc3545;">{off_count}</td>
+            </tr>
+            """)
+
+        total_events = sum(by_period.values())
+        total_on = sum(by_period_on.values())
+        total_off = sum(by_period_off.values())
+
         time_html = f"""
         <h4>Time of Day Distribution</h4>
-        <div class="metrics-row" style="border-top: none; padding-top: 0;">
-            <div class="metric">
-                <span class="metric-label">Night (00-06):</span>
-                <span class="metric-value">{by_period.get('night', 0)}</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Morning (06-12):</span>
-                <span class="metric-value">{by_period.get('morning', 0)}</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Afternoon (12-18):</span>
-                <span class="metric-value">{by_period.get('afternoon', 0)}</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Evening (18-24):</span>
-                <span class="metric-value">{by_period.get('evening', 0)}</span>
-            </div>
-        </div>
+        <table class="data-table small" style="max-width: 500px;">
+            <thead>
+                <tr>
+                    <th>Period</th>
+                    <th style="text-align: center;">Total Events</th>
+                    <th style="text-align: center;">ON</th>
+                    <th style="text-align: center;">OFF</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(time_rows)}
+                <tr style="border-top: 2px solid #ddd; font-weight: bold;">
+                    <td>Total</td>
+                    <td style="text-align: center;">{total_events}</td>
+                    <td style="text-align: center; color: #28a745;">{total_on}</td>
+                    <td style="text-align: center; color: #dc3545;">{total_off}</td>
+                </tr>
+            </tbody>
+        </table>
         """
     else:
         time_html = ""
@@ -1036,25 +1137,37 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
 
     if central_activations:
         phases_str = ', '.join(central_ac.get('phases_used', []))
+        total_sessions = central_ac.get('total_count', len(central_activations))
 
-        # Build activation rows (now showing sessions)
+        # Build activation rows (now showing sessions) - show ALL
         activation_rows = []
-        for i, act in enumerate(central_activations[:50]):  # Limit to 50 rows
+        # Build copyable dates string for toggle
+        copyable_dates = []
+        for i, act in enumerate(central_activations):
             phase_mags = act.get('phase_magnitudes', {})
             phase_mag_str = ' | '.join(f"{p}: {m}W" for p, m in sorted(phase_mags.items())) if phase_mags else ''
             cycle_count = act.get('cycle_count', 1)
 
+            # Fix negative durations (events crossing midnight)
+            duration = act.get('duration_minutes', 0)
+            if duration < 0:
+                duration = duration + 1440  # Add 24 hours in minutes
+
             activation_rows.append(f"""
             <tr>
+                <td><strong>{i+1}</strong></td>
                 <td>{act.get('date', '')}</td>
                 <td>{act.get('on_time', '')}</td>
                 <td>{act.get('off_time', '')}</td>
-                <td>{act.get('duration_minutes', 0)} min</td>
+                <td>{duration:.0f} min</td>
                 <td>{act.get('total_magnitude', 0) or act.get('magnitude', 0)}W</td>
                 <td>{cycle_count}</td>
             </tr>
             """)
+            # Add to copyable format: date on_time-off_time
+            copyable_dates.append(f"{act.get('date', '')} {act.get('on_time', '')}-{act.get('off_time', '')}")
 
+        copyable_text = ', '.join(copyable_dates)
         status_badge = '<span class="badge badge-green">Detected</span>' if has_central else '<span class="badge badge-orange">Few activations</span>'
 
         html_parts.append(f"""
@@ -1076,10 +1189,14 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
         <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
             Sessions grouped by 1-hour gaps between compressor cycles. Events synchronized across all active phases (±10 min tolerance).
         </p>
+        <p style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
+            Showing all {len(central_activations)} sessions
+        </p>
         <div style="max-height: 400px; overflow-y: auto;">
         <table class="data-table small">
             <thead>
                 <tr>
+                    <th>#</th>
                     <th>Date</th>
                     <th>Start Time</th>
                     <th>End Time</th>
@@ -1091,6 +1208,21 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
             <tbody>{''.join(activation_rows)}</tbody>
         </table>
         </div>
+        <div style="margin-top: 10px;">
+            <button onclick="toggleCentralACCopyText()" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                Show Copyable Dates
+            </button>
+        </div>
+        <div id="central-ac-copy-text" style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+            <p style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Copy this text to use for generating plots:</p>
+            <textarea readonly style="width: 100%; height: 60px; font-family: monospace; font-size: 0.85em; padding: 5px; border: 1px solid #ced4da; border-radius: 3px;">{copyable_text}</textarea>
+        </div>
+        <script>
+            function toggleCentralACCopyText() {{
+                var div = document.getElementById('central-ac-copy-text');
+                div.style.display = div.style.display === 'none' ? 'block' : 'none';
+            }}
+        </script>
         """)
     else:
         html_parts.append("""
@@ -1117,22 +1249,32 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
             total_cycles = phase_data.get('total_cycles', 0)
             has_regular = total_count >= 3
 
-            # Build activation rows (now showing sessions)
+            # Build activation rows and copyable dates
             activation_rows = []
-            for act in activations[:50]:  # Limit to 50 rows
+            copyable_dates = []
+            for idx, act in enumerate(activations):
                 cycle_count = act.get('cycle_count', 1)
+                # Fix negative durations (events crossing midnight)
+                duration = act.get('duration_minutes', 0)
+                if duration < 0:
+                    duration = duration + 1440  # Add 24 hours in minutes
+
                 activation_rows.append(f"""
                 <tr>
+                    <td><strong>{idx+1}</strong></td>
                     <td>{act.get('date', '')}</td>
                     <td>{act.get('on_time', '')}</td>
                     <td>{act.get('off_time', '')}</td>
-                    <td>{act.get('duration_minutes', 0)} min</td>
+                    <td>{duration:.0f} min</td>
                     <td>{act.get('magnitude', 0)}W</td>
                     <td>{cycle_count}</td>
                 </tr>
                 """)
+                copyable_dates.append(f"{act.get('date', '')} {act.get('on_time', '')}-{act.get('off_time', '')}")
 
+            copyable_text = ', '.join(copyable_dates)
             status_badge = '<span class="badge badge-green">Detected</span>' if has_regular else '<span class="badge badge-orange">Few activations</span>'
+            copy_div_id = f'regular-ac-copy-{phase}'
 
             html_parts.append(f"""
             <h4>Regular AC (Single Phase - {phase}) {status_badge}</h4>
@@ -1153,10 +1295,14 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
             <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
                 Sessions grouped by 1-hour gaps. High-power events (>800W) on {phase} only, not part of central AC.
             </p>
+            <p style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
+                Showing all {len(activations)} sessions
+            </p>
             <div style="max-height: 400px; overflow-y: auto;">
             <table class="data-table small">
                 <thead>
                     <tr>
+                        <th>#</th>
                         <th>Date</th>
                         <th>Start Time</th>
                         <th>End Time</th>
@@ -1167,6 +1313,15 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
                 </thead>
                 <tbody>{''.join(activation_rows)}</tbody>
             </table>
+            </div>
+            <div style="margin-top: 10px;">
+                <button onclick="document.getElementById('{copy_div_id}').style.display = document.getElementById('{copy_div_id}').style.display === 'none' ? 'block' : 'none'" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                    Show Copyable Dates
+                </button>
+            </div>
+            <div id="{copy_div_id}" style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+                <p style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Copy this text to use for generating plots:</p>
+                <textarea readonly style="width: 100%; height: 60px; font-family: monospace; font-size: 0.85em; padding: 5px; border: 1px solid #ced4da; border-radius: 3px;">{copyable_text}</textarea>
             </div>
             """)
     elif has_central:
@@ -1198,20 +1353,29 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     avg_duration = boiler.get('avg_duration', 0)
     avg_magnitude = boiler.get('avg_magnitude', 0)
 
-    # Build activation rows
+    # Build activation rows and copyable dates
     activation_rows = []
-    for act in activations[:50]:  # Limit to 50 rows
+    copyable_dates = []
+    for idx, act in enumerate(activations):
+        # Fix negative durations (events crossing midnight)
+        duration = act.get('duration_minutes', 0)
+        if duration < 0:
+            duration = duration + 1440  # Add 24 hours in minutes
+
         activation_rows.append(f"""
         <tr>
+            <td><strong>{idx+1}</strong></td>
             <td>{act.get('date', '')}</td>
             <td>{act.get('on_time', '')}</td>
             <td>{act.get('off_time', '')}</td>
-            <td>{act.get('duration_minutes', 0)} min</td>
+            <td>{duration:.0f} min</td>
             <td>{act.get('magnitude', 0)}W</td>
             <td>{act.get('phase', '')}</td>
         </tr>
         """)
+        copyable_dates.append(f"{act.get('date', '')} {act.get('on_time', '')}-{act.get('off_time', '')}")
 
+    copyable_text = ', '.join(copyable_dates)
     status_badge = '<span class="badge badge-green">Detected</span>' if has_boiler else '<span class="badge badge-orange">Few activations</span>'
 
     return f"""
@@ -1233,10 +1397,14 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
         Isolated long-duration (≥25 min) high-power (≥1500W) events with no medium-duration events nearby
     </p>
+    <p style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
+        Showing all {len(activations)} activations
+    </p>
     <div style="max-height: 400px; overflow-y: auto;">
     <table class="data-table small">
         <thead>
             <tr>
+                <th>#</th>
                 <th>Date</th>
                 <th>ON Time</th>
                 <th>OFF Time</th>
@@ -1247,6 +1415,15 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
         </thead>
         <tbody>{''.join(activation_rows)}</tbody>
     </table>
+    </div>
+    <div style="margin-top: 10px;">
+        <button onclick="document.getElementById('boiler-copy-text').style.display = document.getElementById('boiler-copy-text').style.display === 'none' ? 'block' : 'none'" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+            Show Copyable Dates
+        </button>
+    </div>
+    <div id="boiler-copy-text" style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+        <p style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Copy this text to use for generating plots:</p>
+        <textarea readonly style="width: 100%; height: 60px; font-family: monospace; font-size: 0.85em; padding: 5px; border: 1px solid #ced4da; border-radius: 3px;">{copyable_text}</textarea>
     </div>
     """
 
@@ -1271,10 +1448,12 @@ def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
         return ""
 
     html_parts.append("""
-    <h4>Device Usage Patterns by Season and Time of Day</h4>
-    <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">
-        Breakdown of detected device activations by season (Winter: Dec-Feb, Summer: Jun-Aug) and time of day (Day: 06:00-18:00, Night: 18:00-06:00)
-    </p>
+    <div style="margin-top: 30px; margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
+        <h4 style="margin: 0 0 5px 0; color: white;">📊 Device Usage Patterns by Season and Time of Day</h4>
+        <p style="margin: 0; font-size: 0.9em; opacity: 0.9;">
+            Breakdown of detected device activations by season (Winter: Dec-Feb, Summer: Jun-Aug) and time of day (Day: 06:00-18:00, Night: 18:00-06:00)
+        </p>
+    </div>
     """)
 
     device_names = {
@@ -1313,35 +1492,38 @@ def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
         day_pct = (day / total_time * 100) if total_time > 0 else 0
         night_pct = (night / total_time * 100) if total_time > 0 else 0
 
+        # Choose icon based on device
+        device_icon = {'central_ac': '❄️', 'regular_ac': '🌀', 'boiler': '🔥'}.get(device, '⚡')
+
         html_parts.append(f"""
-        <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
-            <h5 style="margin: 0 0 10px 0; color: #2c3e50;">{device_name}</h5>
-            <div style="display: flex; flex-wrap: wrap; gap: 30px;">
+        <div style="margin-bottom: 20px; padding: 20px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); border-left: 4px solid #667eea;">
+            <h5 style="margin: 0 0 15px 0; color: #2c3e50; font-size: 1.1em;">{device_icon} {device_name}</h5>
+            <div style="display: flex; flex-wrap: wrap; gap: 40px;">
                 <div>
-                    <strong style="color: #666; font-size: 0.85em;">By Season:</strong>
-                    <div style="margin-top: 5px;">
-                        <span style="display: inline-block; padding: 3px 8px; background: #3498db; color: white; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Winter: {winter} ({winter_pct:.0f}%)
+                    <strong style="color: #555; font-size: 0.9em; display: block; margin-bottom: 8px;">By Season:</strong>
+                    <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                        <span style="display: inline-block; padding: 6px 12px; background: #3498db; color: white; border-radius: 20px; font-size: 0.85em;">
+                            ❄️ Winter: {winter} ({winter_pct:.0f}%)
                         </span>
-                        <span style="display: inline-block; padding: 3px 8px; background: #2ecc71; color: white; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Spring: {spring} ({spring_pct:.0f}%)
+                        <span style="display: inline-block; padding: 6px 12px; background: #2ecc71; color: white; border-radius: 20px; font-size: 0.85em;">
+                            🌸 Spring: {spring} ({spring_pct:.0f}%)
                         </span>
-                        <span style="display: inline-block; padding: 3px 8px; background: #e74c3c; color: white; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Summer: {summer} ({summer_pct:.0f}%)
+                        <span style="display: inline-block; padding: 6px 12px; background: #e74c3c; color: white; border-radius: 20px; font-size: 0.85em;">
+                            ☀️ Summer: {summer} ({summer_pct:.0f}%)
                         </span>
-                        <span style="display: inline-block; padding: 3px 8px; background: #f39c12; color: white; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Fall: {fall} ({fall_pct:.0f}%)
+                        <span style="display: inline-block; padding: 6px 12px; background: #f39c12; color: white; border-radius: 20px; font-size: 0.85em;">
+                            🍂 Fall: {fall} ({fall_pct:.0f}%)
                         </span>
                     </div>
                 </div>
                 <div>
-                    <strong style="color: #666; font-size: 0.85em;">By Time of Day:</strong>
-                    <div style="margin-top: 5px;">
-                        <span style="display: inline-block; padding: 3px 8px; background: #f1c40f; color: #333; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Day (06-18): {day} ({day_pct:.0f}%)
+                    <strong style="color: #555; font-size: 0.9em; display: block; margin-bottom: 8px;">By Time of Day:</strong>
+                    <div style="display: flex; flex-wrap: wrap; gap: 5px;">
+                        <span style="display: inline-block; padding: 6px 12px; background: #f1c40f; color: #333; border-radius: 20px; font-size: 0.85em;">
+                            ☀️ Day (06-18): {day} ({day_pct:.0f}%)
                         </span>
-                        <span style="display: inline-block; padding: 3px 8px; background: #2c3e50; color: white; border-radius: 4px; margin: 2px; font-size: 0.85em;">
-                            Night (18-06): {night} ({night_pct:.0f}%)
+                        <span style="display: inline-block; padding: 6px 12px; background: #2c3e50; color: white; border-radius: 20px; font-size: 0.85em;">
+                            🌙 Night (18-06): {night} ({night_pct:.0f}%)
                         </span>
                     </div>
                 </div>
@@ -1364,11 +1546,12 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
     rows = []
     for m in monthly_data:
         month = m.get('month', '?')
-        total_events = m.get('total_events', 0)
         on_events = m.get('on_events', 0)
+        off_events = m.get('off_events', on_events)  # Fallback to on_events if not available
         matches = m.get('total_matches', 0)
         matching_rate = m.get('matching_rate', 0)
         matched_power = m.get('matched_power', 0) / 1000 if m.get('matched_power') else 0
+        matched_minutes = m.get('matched_minutes', 0)
 
         # Highlight problematic months
         row_class = ' style="background-color: #fff3cd;"' if matching_rate < 0.4 else ''
@@ -1377,9 +1560,11 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
         <tr{row_class}>
             <td>{month}</td>
             <td>{on_events}</td>
+            <td>{off_events}</td>
             <td>{matches}</td>
             <td>{matching_rate:.1%}</td>
             <td>{matched_power:.1f} kW</td>
+            <td>{matched_minutes:.0f} min</td>
         </tr>
         """)
 
@@ -1408,9 +1593,11 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
             <tr>
                 <th>Month</th>
                 <th>ON Events</th>
+                <th>OFF Events</th>
                 <th>Matches</th>
                 <th>Match Rate</th>
                 <th>Matched Power</th>
+                <th>Matched Minutes</th>
             </tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
@@ -1435,7 +1622,7 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
 
 
 def _generate_flags_section(analysis: Dict[str, Any]) -> str:
-    """Generate flags/issues section."""
+    """Generate flags/issues section with colored badges."""
     flags = analysis.get('flags', {})
 
     if not flags:
@@ -1444,16 +1631,29 @@ def _generate_flags_section(analysis: Dict[str, Any]) -> str:
     active_flags = [(k, v) for k, v in flags.items() if v]
 
     if not active_flags:
-        return '<div class="success">No issues detected.</div>'
+        return '<div class="success" style="padding: 15px; background: #d4edda; border-radius: 8px; color: #155724;">✓ No issues detected.</div>'
 
-    flag_items = ''.join(
-        f'<li class="flag-item"><span class="flag-icon">⚠</span> {flag.replace("_", " ").title()}</li>'
-        for flag, _ in active_flags
-    )
+    # Define flag colors and icons
+    flag_config = {
+        'low_matching_rate': {'icon': '📉', 'color': '#dc3545', 'bg': '#f8d7da', 'label': 'Low Matching Rate'},
+        'has_negative_values': {'icon': '⚡', 'color': '#dc3545', 'bg': '#f8d7da', 'label': 'Negative Power Values'},
+        'low_segmentation': {'icon': '📊', 'color': '#856404', 'bg': '#fff3cd', 'label': 'Low Segmentation'},
+        'has_damaged_phases': {'icon': '🔌', 'color': '#dc3545', 'bg': '#f8d7da', 'label': 'Damaged Phase(s)'},
+        'has_recurring_patterns': {'icon': '🔄', 'color': '#155724', 'bg': '#d4edda', 'label': 'Recurring Patterns Detected'},
+    }
+
+    flag_items = []
+    for flag, _ in active_flags:
+        config = flag_config.get(flag, {'icon': '⚠', 'color': '#666', 'bg': '#f8f9fa', 'label': flag.replace("_", " ").title()})
+        flag_items.append(
+            f'<li class="flag-item" style="background: {config["bg"]}; border-left-color: {config["color"]};">'
+            f'<span class="flag-icon">{config["icon"]}</span> '
+            f'<span style="color: {config["color"]};">{config["label"]}</span></li>'
+        )
 
     return f"""
     <ul class="flags-list">
-        {flag_items}
+        {''.join(flag_items)}
     </ul>
     """
 
@@ -1505,49 +1705,56 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         </div>
         ''')
 
-    # Tag breakdown pie chart
-    tag_breakdown = first.get('matching', {}).get('tag_breakdown', {})
-    if tag_breakdown:
-        chart_id = 'tag-pie-chart'
-        colors = {'NON-M': '#28a745', 'NOISY': '#ffc107', 'PARTIAL': '#17a2b8'}
-        total_tags = sum(tag_breakdown.values())
+    # Minutes Distribution pie chart (alongside power chart)
+    matching = first.get('matching', {})
+    total_matched_minutes = matching.get('total_matched_minutes', 0)
+    if total_matched_minutes > 0:
+        chart_id = 'minutes-pie-chart'
+        # Get minutes by duration category
+        duration_minutes = matching.get('duration_minutes_breakdown', {})
+        short_min = duration_minutes.get('short', 0)
+        medium_min = duration_minutes.get('medium', 0)
+        long_min = duration_minutes.get('long', 0)
+        total_min = short_min + medium_min + long_min
 
-        # Create labels with counts and percentages
-        labels_with_pct = []
-        for tag, count in tag_breakdown.items():
-            pct = (count / total_tags * 100) if total_tags > 0 else 0
-            labels_with_pct.append(f'{tag}<br>{count} ({pct:.1f}%)')
+        if total_min > 0:
+            data = {
+                'values': [short_min, medium_min, long_min],
+                'labels': [
+                    f'Short (1-2 min)<br>{short_min:.0f} min',
+                    f'Medium (3-24 min)<br>{medium_min:.0f} min',
+                    f'Long (25+ min)<br>{long_min:.0f} min'
+                ],
+                'type': 'pie',
+                'marker': {'colors': ['#17a2b8', '#ffc107', '#dc3545']},
+                'textinfo': 'label+percent',
+                'textposition': 'inside',
+                'hole': 0.4,
+            }
 
-        data = {
-            'values': list(tag_breakdown.values()),
-            'labels': labels_with_pct,
-            'type': 'pie',
-            'marker': {'colors': [colors.get(k, '#6c757d') for k in tag_breakdown.keys()]},
-            'hole': 0.4,
-            'textinfo': 'label',
-            'textposition': 'inside'
-        }
+            layout = {
+                'title': 'Matched Minutes Distribution (sum of all 3 phases)',
+                'annotations': [{
+                    'text': f'{total_min:.0f} min<br>({total_min/60:.1f} hrs)',
+                    'x': 0.5, 'y': 0.5,
+                    'font': {'size': 12, 'color': '#333'},
+                    'showarrow': False
+                }]
+            }
 
-        layout = {
-            'title': 'Match Types',
-            'annotations': [{
-                'text': f'{total_tags}<br>Matches',
-                'x': 0.5, 'y': 0.5,
-                'font': {'size': 14, 'color': '#333'},
-                'showarrow': False
-            }]
-        }
+            charts_html.append(f'''
+            <div class="chart-container">
+                <div id="{chart_id}" style="width:100%;height:350px;"></div>
+                <script>
+                    Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
+                </script>
+                <p style="text-align: center; font-size: 0.8em; color: #888; margin-top: -10px;">
+                    Overlapping events on different phases are counted separately
+                </p>
+            </div>
+            ''')
 
-        charts_html.append(f'''
-        <div class="chart-container">
-            <div id="{chart_id}" style="width:100%;height:350px;"></div>
-            <script>
-                Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
-            </script>
-        </div>
-        ''')
-
-    # Duration breakdown chart (short/medium/long)
+    # Duration breakdown chart (short/medium/long) - MOVED BEFORE Match Types
     duration_breakdown = first.get('matching', {}).get('duration_breakdown', {})
     if duration_breakdown:
         chart_id = 'duration-chart'
@@ -1578,6 +1785,48 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
             'title': 'Match Duration Breakdown',
             'yaxis': {'title': 'Number of Matches'},
             'xaxis': {'title': ''},
+        }
+
+        charts_html.append(f'''
+        <div class="chart-container">
+            <div id="{chart_id}" style="width:100%;height:350px;"></div>
+            <script>
+                Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
+            </script>
+        </div>
+        ''')
+
+    # Tag breakdown pie chart - MOVED AFTER Duration
+    tag_breakdown = first.get('matching', {}).get('tag_breakdown', {})
+    if tag_breakdown:
+        chart_id = 'tag-pie-chart'
+        colors = {'NON-M': '#28a745', 'NOISY': '#ffc107', 'PARTIAL': '#17a2b8'}
+        total_tags = sum(tag_breakdown.values())
+
+        # Create labels with counts and percentages
+        labels_with_pct = []
+        for tag, count in tag_breakdown.items():
+            pct = (count / total_tags * 100) if total_tags > 0 else 0
+            labels_with_pct.append(f'{tag}<br>{count} ({pct:.1f}%)')
+
+        data = {
+            'values': list(tag_breakdown.values()),
+            'labels': labels_with_pct,
+            'type': 'pie',
+            'marker': {'colors': [colors.get(k, '#6c757d') for k in tag_breakdown.keys()]},
+            'hole': 0.4,
+            'textinfo': 'label',
+            'textposition': 'inside'
+        }
+
+        layout = {
+            'title': 'Match Types',
+            'annotations': [{
+                'text': f'{total_tags}<br>Matches',
+                'x': 0.5, 'y': 0.5,
+                'font': {'size': 14, 'color': '#333'},
+                'showarrow': False
+            }]
         }
 
         charts_html.append(f'''
@@ -1632,18 +1881,17 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         </div>
         ''')
 
-    # Magnitude histogram from magnitude breakdown
-    magnitude_breakdown = first.get('matching', {}).get('magnitude_breakdown', {})
-    if magnitude_breakdown:
-        chart_id = 'magnitude-hist-chart'
-        # Magnitude bins aligned with segmentation threshold (~1300W minimum)
+    # Magnitude Minutes bar chart (minutes by power range)
+    magnitude_minutes = first.get('matching', {}).get('magnitude_minutes_breakdown', {})
+    if magnitude_minutes:
+        chart_id = 'magnitude-minutes-chart'
         bins = ['1.3-1.8kW', '1.8-2.5kW', '2.5-3.5kW', '3.5-5kW', '5kW+']
         values = [
-            magnitude_breakdown.get('1300-1800', 0),
-            magnitude_breakdown.get('1800-2500', 0),
-            magnitude_breakdown.get('2500-3500', 0),
-            magnitude_breakdown.get('3500-5000', 0),
-            magnitude_breakdown.get('5000+', 0)
+            magnitude_minutes.get('1300-1800', 0),
+            magnitude_minutes.get('1800-2500', 0),
+            magnitude_minutes.get('2500-3500', 0),
+            magnitude_minutes.get('3500-5000', 0),
+            magnitude_minutes.get('5000+', 0)
         ]
         total = sum(values)
 
@@ -1651,7 +1899,7 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         labels_with_pct = []
         for bin_label, val in zip(bins, values):
             pct = (val / total * 100) if total > 0 else 0
-            labels_with_pct.append(f'{bin_label}<br>{val} ({pct:.0f}%)')
+            labels_with_pct.append(f'{bin_label}<br>{val:.0f} min ({pct:.0f}%)')
 
         data = {
             'x': labels_with_pct,
@@ -1661,8 +1909,8 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         }
 
         layout = {
-            'title': 'Match Magnitude Distribution',
-            'yaxis': {'title': 'Number of Matches'},
+            'title': 'Matched Minutes by Magnitude (sum of all 3 phases)',
+            'yaxis': {'title': 'Total Minutes'},
             'xaxis': {'title': ''},
         }
 

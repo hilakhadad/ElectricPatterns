@@ -83,16 +83,45 @@ def calculate_iteration_metrics(experiment_dir: Path, house_id: str,
         if on_off_df is not None:
             iter_data['total_events'] = len(on_off_df)
 
+            # Separate ON and OFF event counts
+            on_events = on_off_df[on_off_df['event'] == 'on'] if 'event' in on_off_df.columns else pd.DataFrame()
+            off_events = on_off_df[on_off_df['event'] == 'off'] if 'event' in on_off_df.columns else pd.DataFrame()
+            iter_data['on_events'] = len(on_events)
+            iter_data['off_events'] = len(off_events)
+
             if 'matched' in on_off_df.columns:
                 iter_data['matched_events'] = on_off_df['matched'].sum()
                 iter_data['unmatched_events'] = len(on_off_df) - on_off_df['matched'].sum()
                 iter_data['matching_rate'] = on_off_df['matched'].mean()
+
+                # Separate unmatched counts for ON and OFF
+                if len(on_events) > 0 and 'matched' in on_events.columns:
+                    iter_data['unmatched_on'] = len(on_events[on_events['matched'] == 0])
+                if len(off_events) > 0 and 'matched' in off_events.columns:
+                    iter_data['unmatched_off'] = len(off_events[off_events['matched'] == 0])
 
         if matches_df is not None:
             iter_data['total_matches'] = len(matches_df)
 
             if 'on_magnitude' in matches_df.columns:
                 iter_data['matched_power'] = matches_df['on_magnitude'].abs().sum()
+
+            # Add matched minutes (sum of all match durations)
+            # Fix negative durations (events crossing midnight) by adding 1440 min
+            if 'duration' in matches_df.columns:
+                durations = matches_df['duration'].copy()
+                durations = durations.apply(lambda x: x + 1440 if x < 0 else x)
+                iter_data['matched_minutes'] = float(durations.sum())
+                iter_data['negative_duration_count'] = int((matches_df['duration'] < 0).sum())
+            elif 'on_start' in matches_df.columns and 'off_end' in matches_df.columns:
+                # Fallback: calculate duration from timestamps (for older files without duration column)
+                on_starts = pd.to_datetime(matches_df['on_start'], dayfirst=True)
+                off_ends = pd.to_datetime(matches_df['off_end'], dayfirst=True)
+                durations = (off_ends - on_starts).dt.total_seconds() / 60
+                # Fix negative durations (events crossing midnight)
+                durations = durations.apply(lambda x: x + 1440 if x < 0 else x)
+                iter_data['matched_minutes'] = float(durations.sum())
+                iter_data['negative_duration_count'] = int((durations < 0).sum())
 
         # Try summarized (new) or segmented (old)
         seg_df = summarized_df
@@ -143,6 +172,12 @@ def calculate_iteration_metrics(experiment_dir: Path, house_id: str,
                 d.get('matched_power', 0) for d in iterations_data
             )
             metrics['total_matched_power'] = total_matched_power
+
+            # Cumulative matched minutes
+            total_matched_minutes = sum(
+                d.get('matched_minutes', 0) for d in iterations_data
+            )
+            metrics['total_matched_minutes'] = total_matched_minutes
 
             # Matching rate improvement
             first_rate = iterations_data[0].get('matching_rate', 0)

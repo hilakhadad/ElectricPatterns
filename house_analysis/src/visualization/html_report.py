@@ -20,7 +20,8 @@ from visualization.charts import (
 
 def generate_html_report(analyses: List[Dict[str, Any]],
                          output_path: str,
-                         title: str = "House Analysis Report") -> str:
+                         title: str = "House Analysis Report",
+                         per_house_dir: str = '../per_house') -> str:
     """
     Generate complete HTML report from house analyses.
 
@@ -28,13 +29,14 @@ def generate_html_report(analyses: List[Dict[str, Any]],
         analyses: List of analysis results from analyze_single_house
         output_path: Path to save the HTML file
         title: Report title
+        per_house_dir: Relative path to per-house HTML reports
 
     Returns:
         Path to the generated HTML file
     """
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
-    table_html = _generate_comparison_table(analyses)
+    table_html = _generate_comparison_table(analyses, per_house_dir)
     charts_html = _generate_charts_section(analyses)
     quality_tiers_html = _generate_quality_tiers_section(analyses)
 
@@ -110,8 +112,9 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     """
 
 
-def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
-    """Generate sortable comparison table HTML."""
+def _generate_comparison_table(analyses: List[Dict[str, Any]],
+                                per_house_dir: str = '../per_house') -> str:
+    """Generate sortable comparison table HTML with links to individual reports."""
     rows = []
 
     for a in analyses:
@@ -136,9 +139,12 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         else:
             badge = '<span class="badge badge-red">Poor</span>'
 
+        # Link to individual report
+        house_link = f'{per_house_dir}/house_{house_id}.html'
+
         rows.append(f"""
         <tr>
-            <td><strong>{house_id}</strong></td>
+            <td><a href="{house_link}" class="house-link"><strong>{house_id}</strong></a></td>
             <td>{coverage.get('days_span', 0)}</td>
             <td>{coverage.get('coverage_ratio', 0):.1%}</td>
             <td>{score:.0f} {badge}</td>
@@ -243,6 +249,188 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
         """)
 
     return f'<div class="tiers-grid">{"".join(html_parts)}</div>'
+
+
+def generate_single_house_html_report(analysis: Dict[str, Any],
+                                       output_path: str) -> str:
+    """
+    Generate HTML report for a single house.
+
+    Args:
+        analysis: Analysis results from analyze_single_house
+        output_path: Path to save the HTML file
+
+    Returns:
+        Path to the generated HTML file
+    """
+    house_id = analysis.get('house_id', 'unknown')
+    coverage = analysis.get('coverage', {})
+    quality = analysis.get('data_quality', {})
+    power = analysis.get('power_statistics', {})
+    temporal = analysis.get('temporal_patterns', {})
+    flags = analysis.get('flags', {})
+
+    # Quality badge
+    score = quality.get('quality_score', 0)
+    if score >= 90:
+        badge_class = 'badge-green'
+        badge_text = 'Excellent'
+    elif score >= 75:
+        badge_class = 'badge-blue'
+        badge_text = 'Good'
+    elif score >= 50:
+        badge_class = 'badge-orange'
+        badge_text = 'Fair'
+    else:
+        badge_class = 'badge-red'
+        badge_text = 'Poor'
+
+    # Active flags
+    active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
+    flags_html = ', '.join(active_flags) if active_flags else 'None'
+
+    # Create power chart for this house
+    power_chart = create_power_distribution_chart([analysis], house_id)
+
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>House {house_id} Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1000px; margin: 0 auto; }}
+        header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }}
+        .card {{
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }}
+        .card h2 {{ margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }}
+        .metric {{
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .metric-value {{ font-size: 1.8em; font-weight: bold; color: #667eea; }}
+        .metric-label {{ color: #666; font-size: 0.9em; }}
+        .badge {{
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-weight: bold;
+            display: inline-block;
+        }}
+        .badge-green {{ background: #d4edda; color: #155724; }}
+        .badge-blue {{ background: #cce5ff; color: #004085; }}
+        .badge-orange {{ background: #fff3cd; color: #856404; }}
+        .badge-red {{ background: #f8d7da; color: #721c24; }}
+        .flags {{ color: #e74c3c; }}
+        .back-link {{ margin-bottom: 15px; }}
+        .back-link a {{ color: #667eea; text-decoration: none; }}
+        .back-link a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="back-link">
+            <a href="javascript:history.back()">← Back to Summary</a>
+        </div>
+
+        <header>
+            <h1>House {house_id} Analysis</h1>
+            <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>
+        </header>
+
+        <div class="card">
+            <h2>Coverage & Quality</h2>
+            <div class="metrics-grid">
+                <div class="metric">
+                    <div class="metric-value">{coverage.get('days_span', 0)}</div>
+                    <div class="metric-label">Days of Data</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{coverage.get('coverage_ratio', 0):.1%}</div>
+                    <div class="metric-label">Coverage Ratio</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{quality.get('quality_score', 0):.0f}</div>
+                    <div class="metric-label">Quality Score</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{coverage.get('max_gap_minutes', 0):.0f}</div>
+                    <div class="metric-label">Max Gap (min)</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Power Statistics</h2>
+            <div class="metrics-grid">
+                <div class="metric">
+                    <div class="metric-value">{power.get('total_mean', 0):.0f}W</div>
+                    <div class="metric-label">Average Power</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{power.get('total_max', 0):.0f}W</div>
+                    <div class="metric-label">Max Power</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{power.get('phase_balance_ratio', 0):.2f}</div>
+                    <div class="metric-label">Phase Balance</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
+                    <div class="metric-label">Night/Day Ratio</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Power Distribution</h2>
+            {power_chart}
+        </div>
+
+        <div class="card">
+            <h2>Issues & Flags</h2>
+            <p class="flags">{flags_html}</p>
+        </div>
+
+        <footer style="text-align: center; color: #888; padding: 20px;">
+            Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        </footer>
+    </div>
+</body>
+</html>
+"""
+
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+    return output_path
 
 
 def _build_html_document(title: str, summary: str, table: str,
@@ -380,6 +568,15 @@ def _build_html_document(title: str, summary: str, table: str,
 
         .data-table tr:hover {{
             background: #f8f9fa;
+        }}
+
+        .house-link {{
+            color: #667eea;
+            text-decoration: none;
+        }}
+
+        .house-link:hover {{
+            text-decoration: underline;
         }}
 
         /* Badges */

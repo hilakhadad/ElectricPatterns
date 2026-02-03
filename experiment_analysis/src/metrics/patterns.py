@@ -698,6 +698,8 @@ def _calculate_time_distribution(on_off_df: pd.DataFrame) -> Dict[str, Any]:
     distribution = {
         'by_hour': {},
         'by_period': {},
+        'by_period_on': {},
+        'by_period_off': {},
         'peak_hour': None,
         'quiet_hour': None,
     }
@@ -728,9 +730,23 @@ def _calculate_time_distribution(on_off_df: pd.DataFrame) -> Dict[str, Any]:
         'evening': (18, 24),  # 18:00-24:00
     }
 
+    # Separate ON and OFF events
+    has_event_col = 'event' in on_off_df.columns
+    on_events = on_off_df[on_off_df['event'] == 'on'] if has_event_col else on_off_df
+    off_events = on_off_df[on_off_df['event'] == 'off'] if has_event_col else pd.DataFrame()
+
     for period_name, (start_h, end_h) in periods.items():
+        # Total count
         count = on_off_df[(on_off_df['hour'] >= start_h) & (on_off_df['hour'] < end_h)].shape[0]
         distribution['by_period'][period_name] = count
+
+        # ON events count
+        on_count = on_events[(on_events['hour'] >= start_h) & (on_events['hour'] < end_h)].shape[0] if len(on_events) > 0 else 0
+        distribution['by_period_on'][period_name] = on_count
+
+        # OFF events count
+        off_count = off_events[(off_events['hour'] >= start_h) & (off_events['hour'] < end_h)].shape[0] if len(off_events) > 0 else 0
+        distribution['by_period_off'][period_name] = off_count
 
     return distribution
 
@@ -1034,7 +1050,47 @@ def _summarize_session(session: Dict) -> Dict:
         'phase': phase,
         'phases': phases,
         'phase_magnitudes': phase_magnitudes,
+        '_raw_activations': activations,  # Keep raw data for validation
     }
+
+
+def _is_valid_ac_session(session: Dict, raw_activations: List[Dict],
+                          min_cycles: int = 2,
+                          min_session_duration: int = 30,
+                          max_magnitude_std_pct: float = 0.20) -> bool:
+    """
+    Validate if a session looks like real AC usage (not just any high-power device).
+
+    Args:
+        session: Session summary dict with cycle_count, duration_minutes, etc.
+        raw_activations: List of individual activations in this session
+        min_cycles: Minimum compressor cycles required (default 2)
+        min_session_duration: Minimum total session duration in minutes (default 30)
+        max_magnitude_std_pct: Maximum magnitude std as percentage of mean (default 20%)
+
+    Returns:
+        True if session looks like AC, False otherwise
+    """
+    # Check minimum cycles
+    cycle_count = session.get('cycle_count', 1)
+    if cycle_count < min_cycles:
+        return False
+
+    # Check minimum session duration
+    duration = session.get('duration_minutes', 0)
+    if duration < min_session_duration:
+        return False
+
+    # Check magnitude consistency (std < 20% of mean)
+    if raw_activations and len(raw_activations) >= 2:
+        magnitudes = [a.get('magnitude', 0) for a in raw_activations]
+        if magnitudes:
+            mean_mag = np.mean(magnitudes)
+            std_mag = np.std(magnitudes)
+            if mean_mag > 0 and (std_mag / mean_mag) > max_magnitude_std_pct:
+                return False
+
+    return True
 
 
 def detect_ac_patterns(experiment_dir: Path, house_id: str,
@@ -1199,7 +1255,14 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
     result['has_central_ac'] = len(central_sessions) >= 3  # Need at least 3 sessions
 
     # Find regular AC on ALL phases (not just w1), not part of central AC
+    # AC detection criteria:
+    # - Individual cycle: 800W+, duration 3-30 minutes
+    # - Session: 2+ cycles, 30+ min total, consistent magnitude (std < 20%)
     regular_ac_by_phase = {}
+
+    # AC cycle duration bounds (minutes)
+    MIN_CYCLE_DURATION = 3
+    MAX_CYCLE_DURATION = 30
 
     for phase in active_phases:
         if phase not in phase_matches:
@@ -1223,6 +1286,10 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
             off_end = match.get('off_end', match.get('off_start'))
             duration = match.get('duration', 0)
 
+            # Filter by cycle duration - AC compressor cycles are typically 3-30 min
+            if duration < MIN_CYCLE_DURATION or duration > MAX_CYCLE_DURATION:
+                continue
+
             activation = {
                 'date': on_start.strftime('%Y-%m-%d'),
                 'on_time': on_start.strftime('%H:%M'),
@@ -1240,12 +1307,24 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
             # Group into sessions (compressor cycles within 1 hour = same session)
             phase_sessions = _group_activations_into_sessions(phase_activations, gap_threshold_minutes=60)
 
-            regular_ac_by_phase[phase] = {
-                'activations': phase_sessions,  # Sessions, not individual cycles
-                'raw_activations': phase_activations,  # Keep raw data for reference
-                'total_count': len(phase_sessions),  # Session count
-                'total_cycles': len(phase_activations),  # Individual cycle count
-            }
+            # Filter sessions using AC validation criteria
+            valid_sessions = []
+            valid_raw_activations = []
+            for session in phase_sessions:
+                raw_acts = session.get('_raw_activations', [])
+                if _is_valid_ac_session(session, raw_acts):
+                    # Remove internal field before storing
+                    session_copy = {k: v for k, v in session.items() if not k.startswith('_')}
+                    valid_sessions.append(session_copy)
+                    valid_raw_activations.extend(raw_acts)
+
+            if valid_sessions:
+                regular_ac_by_phase[phase] = {
+                    'activations': valid_sessions,  # Sessions, not individual cycles
+                    'raw_activations': valid_raw_activations,  # Keep raw data for reference
+                    'total_count': len(valid_sessions),  # Session count
+                    'total_cycles': len(valid_raw_activations),  # Individual cycle count
+                }
 
     # Keep backwards compatibility with old format (combine all into regular_ac)
     all_regular_activations = []

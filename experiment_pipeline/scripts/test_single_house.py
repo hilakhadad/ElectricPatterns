@@ -210,33 +210,52 @@ def run_pipeline_for_house(
 
 
 # ============================================================================
-# STANDALONE CONFIGURATION
+# STANDALONE CONFIGURATION (defaults, can be overridden by CLI args)
 # ============================================================================
-HOUSE_ID = "140_debug"
-EXPERIMENT_NAME = "exp006_partial_matching"
-MAX_ITERATIONS = 2
+DEFAULT_HOUSE_ID = "140_debug"
+DEFAULT_EXPERIMENT_NAME = "exp006_partial_matching"
+DEFAULT_MAX_ITERATIONS = 2
 
 
 def main():
-    """Run pipeline with standalone configuration."""
+    """Run pipeline with command-line arguments or defaults."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run pipeline for a single house")
+    parser.add_argument("--house_id", type=str, default=DEFAULT_HOUSE_ID,
+                        help=f"House ID to process (default: {DEFAULT_HOUSE_ID})")
+    parser.add_argument("--experiment_name", type=str, default=DEFAULT_EXPERIMENT_NAME,
+                        help=f"Experiment name (default: {DEFAULT_EXPERIMENT_NAME})")
+    parser.add_argument("--max_iterations", type=int, default=DEFAULT_MAX_ITERATIONS,
+                        help=f"Max iterations (default: {DEFAULT_MAX_ITERATIONS})")
+    parser.add_argument("--output_path", type=str, default=None,
+                        help="Output directory (default: auto-generated)")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Suppress console output")
+    parser.add_argument("--skip_visualization", action="store_true",
+                        help="Skip visualization step")
+
+    args = parser.parse_args()
+
     from core import get_experiment
 
-    exp_config = get_experiment(EXPERIMENT_NAME)
+    exp_config = get_experiment(args.experiment_name)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{exp_config.exp_id}_{timestamp}")
+    output_path = args.output_path or str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{exp_config.exp_id}_{timestamp}")
 
     print(f"\n{'='*60}")
     print(f"Running Experiment: {exp_config.exp_id}")
-    print(f"House: {HOUSE_ID}")
+    print(f"House: {args.house_id}")
     print(f"Output: {output_path}")
     print(f"{'='*60}\n")
 
     result = run_pipeline_for_house(
-        house_id=HOUSE_ID,
-        experiment_name=EXPERIMENT_NAME,
+        house_id=args.house_id,
+        experiment_name=args.experiment_name,
         output_path=output_path,
-        max_iterations=MAX_ITERATIONS,
-        quiet=False
+        max_iterations=args.max_iterations,
+        quiet=args.quiet,
+        skip_visualization=args.skip_visualization
     )
 
     if result['success']:

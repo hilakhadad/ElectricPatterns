@@ -132,10 +132,14 @@ def _process_single_event(
         off_remain = data.loc[off_range, remaining_col] - off_seg
 
     # Check for negative values BEFORE applying - skip event if would create negatives
+    # Check both remaining power AND extracted event power
     would_create_negatives = (
         (on_remain < 0).any() or
         (event_remain < 0).any() or
-        (off_remain < 0).any()
+        (off_remain < 0).any() or
+        (on_seg < 0).any() or
+        (event_seg < 0).any() or
+        (off_seg < 0).any()
     )
 
     if would_create_negatives:
