@@ -151,6 +151,9 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
 
         # Stage 3: Partial matching
         final_unmatched_on = []
+        remainder_on_events = []
+        remainder_off_events = []
+
         for on_event in unmatched_on:
             available_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)]
             if available_off.empty:
@@ -168,11 +171,22 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
                 matches.append(_format_partial_match(on_event, matched_off, tag, on_event['phase']))
                 matched_event_ids.add(on_event['event_id'])
                 matched_event_ids.add(off_id)
+
+                # Collect remainder events for next iteration
+                if remainder is not None:
+                    if remainder['event'] == 'on':
+                        remainder_on_events.append(remainder)
+                    else:
+                        remainder_off_events.append(remainder)
             else:
                 final_unmatched_on.append(on_event)
 
-        unmatched_on = final_unmatched_on
-        final_unmatched_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)].to_dict('records')
+        # Add remainder events to unmatched lists
+        unmatched_on = final_unmatched_on + remainder_on_events
+        final_unmatched_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)].to_dict('records') + remainder_off_events
+
+        if remainder_on_events or remainder_off_events:
+            logger.info(f"  Created {len(remainder_on_events)} remainder ON + {len(remainder_off_events)} remainder OFF events")
 
         # Update on_off with matched status
         on_off_df['matched'] = on_off_df['event_id'].isin(matched_event_ids).astype(int)

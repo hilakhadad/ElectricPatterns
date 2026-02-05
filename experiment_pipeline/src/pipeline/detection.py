@@ -53,8 +53,8 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         progressive_search = getattr(config, 'progressive_window_search', False)
         logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}")
     else:
-        off_threshold_factor = 0.8
-        use_gradual = False
+        off_threshold_factor = 1.0
+        use_gradual = True
         gradual_window = 3
         progressive_search = False
 
