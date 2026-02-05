@@ -15,6 +15,13 @@ from visualization.charts import (
     create_day_night_scatter,
     create_issues_heatmap,
     create_power_distribution_chart,
+    create_hourly_pattern_chart,
+    create_phase_power_chart,
+    create_monthly_pattern_chart,
+    create_weekly_pattern_chart,
+    create_power_heatmap_chart,
+    create_power_histogram,
+    create_score_breakdown_chart,
 )
 
 
@@ -115,6 +122,24 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
 def _generate_comparison_table(analyses: List[Dict[str, Any]],
                                 per_house_dir: str = '../per_house') -> str:
     """Generate sortable comparison table HTML with links to individual reports."""
+    # Friendly flag names for display
+    flag_display_names = {
+        'low_coverage': 'Coverage < 80%',
+        'short_duration': 'Less Than 30 Days',
+        'has_large_gaps': 'Gaps Over 1 Hour',
+        'many_gaps': '>5% Gaps Over 2min',
+        'has_negative_values': 'Negative Values',
+        'many_outliers': '>1% Outliers (3σ)',
+        'many_large_jumps': '>500 Jumps Over 2kW',
+        'low_quality_score': 'Quality < 70',
+        'unbalanced_phases': 'Phase Ratio > 3',
+        'single_active_phase': 'Single Active Phase',
+        'very_high_power': 'Max Power > 20kW',
+        'many_flat_segments': '>70% Flat Readings',
+        'unusual_night_ratio': 'Night/Day > 3',
+        'has_dead_phase': 'Dead Phase (<1%)',
+    }
+
     rows = []
 
     for a in analyses:
@@ -125,12 +150,30 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         temporal = a.get('temporal_patterns', {})
         flags = a.get('flags', {})
 
-        # Count active flags
-        n_flags = sum(1 for v in flags.values() if v)
+        # Build issues list (excluding dead_phases_list which is not a boolean)
+        active_issues = []
+        for flag_key, flag_value in flags.items():
+            if flag_key == 'dead_phases_list':
+                continue  # Skip the list, use has_dead_phase instead
+            if flag_value:
+                display_name = flag_display_names.get(flag_key, flag_key.replace('_', ' ').title())
+                active_issues.append(display_name)
 
-        # Quality badge
+        # Create issues HTML - show as comma-separated colored badges
+        if active_issues:
+            issues_html = ', '.join(f'<span class="issue-tag">{issue}</span>' for issue in active_issues[:5])
+            if len(active_issues) > 5:
+                issues_html += f' <span class="issue-more">+{len(active_issues) - 5}</span>'
+        else:
+            issues_html = '<span class="no-issues">None</span>'
+
+        # Quality badge with special "Faulty" category
         score = quality.get('quality_score', 0)
-        if score >= 90:
+        has_dead_phase = flags.get('has_dead_phase', False)
+
+        if has_dead_phase:
+            badge = '<span class="badge badge-purple">Faulty</span>'
+        elif score >= 90:
             badge = '<span class="badge badge-green">Excellent</span>'
         elif score >= 75:
             badge = '<span class="badge badge-blue">Good</span>'
@@ -151,7 +194,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
             <td>{temporal.get('total_night_day_ratio', 0):.2f}</td>
-            <td>{n_flags}</td>
+            <td class="issues-cell">{issues_html}</td>
         </tr>
         """)
 
@@ -166,7 +209,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 <th onclick="sortTable(4)">Avg Power (W)</th>
                 <th onclick="sortTable(5)">Phase Balance</th>
                 <th onclick="sortTable(6)">Night/Day</th>
-                <th onclick="sortTable(7)">Issues</th>
+                <th>Issues</th>
             </tr>
         </thead>
         <tbody>
@@ -214,6 +257,7 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
 def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate quality tiers breakdown HTML."""
     tiers = {
+        'Faulty (Dead Phase)': [],
         'Excellent (90+)': [],
         'Good (75-89)': [],
         'Fair (50-74)': [],
@@ -223,8 +267,13 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
     for a in analyses:
         house_id = a.get('house_id', 'unknown')
         score = a.get('data_quality', {}).get('quality_score', 0)
+        flags = a.get('flags', {})
+        has_dead_phase = flags.get('has_dead_phase', False)
 
-        if score >= 90:
+        # Faulty takes priority over other tiers
+        if has_dead_phase:
+            tiers['Faulty (Dead Phase)'].append(house_id)
+        elif score >= 90:
             tiers['Excellent (90+)'].append(house_id)
         elif score >= 75:
             tiers['Good (75-89)'].append(house_id)
@@ -234,7 +283,7 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
             tiers['Poor (<50)'].append(house_id)
 
     html_parts = []
-    colors = {'Excellent (90+)': 'green', 'Good (75-89)': 'blue',
+    colors = {'Faulty (Dead Phase)': 'purple', 'Excellent (90+)': 'green', 'Good (75-89)': 'blue',
               'Fair (50-74)': 'orange', 'Poor (<50)': 'red'}
 
     for tier, houses in tiers.items():
@@ -289,8 +338,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
-    # Create power chart for this house
-    power_chart = create_power_distribution_chart([analysis], house_id)
+    # Create all charts for this house
+    hourly_chart = create_hourly_pattern_chart(analysis)
+    phase_chart = create_phase_power_chart(analysis)
+    monthly_chart = create_monthly_pattern_chart(analysis)
+    weekly_chart = create_weekly_pattern_chart(analysis)
+    heatmap_chart = create_power_heatmap_chart(analysis)
+    histogram_chart = create_power_histogram(analysis)
+    score_breakdown_chart = create_score_breakdown_chart(analysis)
 
     html_content = f"""
 <!DOCTYPE html>
@@ -337,6 +392,25 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         }}
         .metric-value {{ font-size: 1.8em; font-weight: bold; color: #667eea; }}
         .metric-label {{ color: #666; font-size: 0.9em; }}
+        .charts-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }}
+        .chart-card {{
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }}
+        .chart-full-width {{
+            grid-column: span 2;
+        }}
+        @media (max-width: 900px) {{
+            .charts-grid {{ grid-template-columns: 1fr; }}
+            .chart-full-width {{ grid-column: span 1; }}
+        }}
         .badge {{
             padding: 5px 12px;
             border-radius: 15px;
@@ -409,8 +483,30 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         </div>
 
         <div class="card">
-            <h2>Power Distribution</h2>
-            {power_chart}
+            <h2>Power Patterns & Analysis</h2>
+            <div class="charts-grid">
+                <div class="chart-card chart-full-width">
+                    {hourly_chart}
+                </div>
+                <div class="chart-card">
+                    {phase_chart}
+                </div>
+                <div class="chart-card">
+                    {histogram_chart}
+                </div>
+                <div class="chart-card">
+                    {weekly_chart}
+                </div>
+                <div class="chart-card">
+                    {monthly_chart}
+                </div>
+                <div class="chart-card">
+                    {score_breakdown_chart}
+                </div>
+                <div class="chart-card chart-full-width">
+                    {heatmap_chart}
+                </div>
+            </div>
         </div>
 
         <div class="card">
@@ -592,6 +688,31 @@ def _build_html_document(title: str, summary: str, table: str,
         .badge-blue {{ background: #cce5ff; color: #004085; }}
         .badge-orange {{ background: #fff3cd; color: #856404; }}
         .badge-red {{ background: #f8d7da; color: #721c24; }}
+        .badge-purple {{ background: #e2d5f1; color: #6f42c1; }}
+
+        /* Issue tags in table */
+        .issues-cell {{
+            max-width: 300px;
+        }}
+        .issue-tag {{
+            display: inline-block;
+            padding: 2px 6px;
+            margin: 1px;
+            background: #fee2e2;
+            color: #991b1b;
+            border-radius: 4px;
+            font-size: 0.7em;
+            white-space: nowrap;
+        }}
+        .issue-more {{
+            color: #666;
+            font-size: 0.8em;
+            font-style: italic;
+        }}
+        .no-issues {{
+            color: #28a745;
+            font-size: 0.85em;
+        }}
 
         /* Chart containers */
         .chart-container {{
@@ -605,31 +726,51 @@ def _build_html_document(title: str, summary: str, table: str,
         /* Quality tiers */
         .tiers-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+        }}
+
+        @media (max-width: 1000px) {{
+            .tiers-grid {{
+                grid-template-columns: repeat(3, 1fr);
+            }}
+        }}
+
+        @media (max-width: 600px) {{
+            .tiers-grid {{
+                grid-template-columns: repeat(2, 1fr);
+            }}
         }}
 
         .tier-card {{
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 5px solid;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid;
         }}
 
+        .tier-card h4 {{
+            font-size: 0.85em;
+            margin: 0 0 5px 0;
+        }}
+
+        .tier-purple {{ background: #e2d5f1; border-color: #6f42c1; }}
         .tier-green {{ background: #d4edda; border-color: #28a745; }}
         .tier-blue {{ background: #cce5ff; border-color: #007bff; }}
         .tier-orange {{ background: #fff3cd; border-color: #ffc107; }}
         .tier-red {{ background: #f8d7da; border-color: #dc3545; }}
 
         .tier-count {{
-            font-size: 1.5em;
+            font-size: 1.3em;
             font-weight: bold;
-            margin: 10px 0;
+            margin: 8px 0;
         }}
 
         .tier-houses {{
-            font-size: 0.9em;
+            font-size: 0.75em;
             color: #666;
             word-break: break-word;
+            max-height: 80px;
+            overflow-y: auto;
         }}
 
         footer {{

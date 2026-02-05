@@ -45,11 +45,11 @@ def calculate_segmentation_metrics(experiment_dir: Path, house_id: str,
     # Check new structure: summarized/ subfolder with monthly files
     summarized_dir = house_dir / "summarized"
     if summarized_dir.exists():
-        summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+        summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
     else:
-        summarized_files = list(house_dir.glob("summarized_*.csv"))
+        summarized_files = list(house_dir.glob("summarized_*.pkl"))
 
-    segmented_files = list(house_dir.glob("segmented_*.csv"))
+    segmented_files = list(house_dir.glob("segmented_*.pkl"))
 
     # Prefer summarized file (much smaller ~80MB vs 1.2GB)
     if summarized_files:
@@ -60,24 +60,24 @@ def calculate_segmentation_metrics(experiment_dir: Path, house_id: str,
         metrics['error'] = 'No segmented/summarized file found'
         return metrics
 
-    # Read only first few rows to get column names (from first file)
-    sample_df = pd.read_csv(data_files[0], nrows=5)
+    # Read first file to get column names
+    sample_df = pd.read_pickle(data_files[0])
     columns = list(sample_df.columns)
 
-    # Calculate sums using chunked reading to avoid memory issues
+    # Calculate sums
     chunk_sums = {col: 0 for col in columns if col != 'timestamp'}
     negative_counts = {col: 0 for col in columns if 'remaining' in col.lower()}
     total_rows = 0
 
     # Process all files (handles monthly structure)
     for data_file in data_files:
-        for chunk in pd.read_csv(data_file, chunksize=100000):
-            total_rows += len(chunk)
-            for col in chunk_sums.keys():
-                if col in chunk.columns:
-                    chunk_sums[col] += chunk[col].sum()
-                    if col in negative_counts:
-                        negative_counts[col] += (chunk[col] < 0).sum()
+        df = pd.read_pickle(data_file)
+        total_rows += len(df)
+        for col in chunk_sums.keys():
+            if col in df.columns:
+                chunk_sums[col] += df[col].sum()
+                if col in negative_counts:
+                    negative_counts[col] += (df[col] < 0).sum()
 
     # Create a mock dataframe-like structure for compatibility
     class MockDF:

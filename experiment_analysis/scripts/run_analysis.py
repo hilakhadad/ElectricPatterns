@@ -111,7 +111,7 @@ def main():
                         help='Output directory (default: experiment_analysis/OUTPUT)')
     parser.add_argument('--max-iterations', type=int, default=10,
                         help='Maximum iterations to analyze per house (default: 10)')
-    parser.add_argument('--fast', action='store_true', default=True,
+    parser.add_argument('--fast', action='store_true', default=False,
                         help='Fast mode: skip expensive pattern analysis for quicker results')
     parser.add_argument('--full', action='store_true',
                         help='Full mode: include pattern analysis (slower but complete)')

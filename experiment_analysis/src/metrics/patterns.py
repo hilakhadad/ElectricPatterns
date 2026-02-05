@@ -26,11 +26,11 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str):
     if subdir.exists():
         files = sorted(subdir.glob(pattern))
         if files:
-            return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+            return pd.concat([pd.read_pickle(f) for f in files], ignore_index=True)
     # Fallback: try files directly in house_dir
     files = list(house_dir.glob(pattern))
     if files:
-        return pd.read_csv(files[0])
+        return pd.read_pickle(files[0])
     return None
 
 
@@ -60,7 +60,7 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
         return metrics
 
     # Load on_off events
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.csv")
+    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         return metrics
 
@@ -70,7 +70,7 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
             on_off_df[col] = pd.to_datetime(on_off_df[col], format='%d/%m/%Y %H:%M', errors='coerce')
 
     # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.csv")
+    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is not None:
         for col in ['on_start', 'on_end', 'off_start', 'off_end']:
             if col in matches_df.columns:
@@ -842,7 +842,7 @@ def find_periodic_patterns(experiment_dir: Path, house_id: str,
     """
     house_dir = _get_house_dir(experiment_dir, house_id, run_number)
 
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.csv")
+    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         return {'error': 'No data'}
 
@@ -1132,7 +1132,7 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
         return result
 
     # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.csv")
+    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is None or len(matches_df) == 0:
         return result
 
@@ -1476,7 +1476,7 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
         return result
 
     # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.csv")
+    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is None or len(matches_df) == 0:
         return result
 

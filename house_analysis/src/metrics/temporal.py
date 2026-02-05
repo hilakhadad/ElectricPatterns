@@ -82,12 +82,32 @@ def calculate_temporal_patterns(data: pd.DataFrame, phase_cols: list = None) -> 
         else:
             metrics[f'{prefix}_hourly_cv'] = 0
 
+        # Store detailed hourly pattern for charts
+        hourly_std = data.groupby('hour')[col].std()
+        metrics[f'{prefix}_hourly_pattern'] = {
+            'hours': list(range(24)),
+            'mean': [float(hourly_mean.get(h, 0)) for h in range(24)],
+            'std': [float(hourly_std.get(h, 0)) for h in range(24)]
+        }
+
+        # Weekly pattern (by day of week)
+        weekly_mean = data.groupby('day_of_week')[col].mean()
+        metrics[f'{prefix}_weekly_pattern'] = {
+            'days': list(range(7)),
+            'mean': [float(weekly_mean.get(d, 0)) for d in range(7)]
+        }
+
         # Monthly pattern (seasonal)
         if data['month'].nunique() > 1:
             monthly_mean = data.groupby('month')[col].mean()
             metrics[f'{prefix}_peak_month'] = int(monthly_mean.idxmax())
             metrics[f'{prefix}_min_month'] = int(monthly_mean.idxmin())
             metrics[f'{prefix}_monthly_range'] = monthly_mean.max() - monthly_mean.min()
+            # Store detailed monthly pattern for charts
+            metrics[f'{prefix}_monthly_pattern'] = {
+                'months': sorted(monthly_mean.index.tolist()),
+                'mean': [float(monthly_mean.get(m, 0)) for m in sorted(monthly_mean.index)]
+            }
 
     # Total power patterns
     sum_cols = [c for c in phase_cols if c in data.columns]
@@ -104,6 +124,38 @@ def calculate_temporal_patterns(data: pd.DataFrame, phase_cols: list = None) -> 
         hourly_total = data.groupby('hour')['total_power'].mean()
         metrics['total_peak_hour'] = int(hourly_total.idxmax())
         metrics['total_min_hour'] = int(hourly_total.idxmin())
+
+        # Store detailed total hourly pattern for charts
+        hourly_total_std = data.groupby('hour')['total_power'].std()
+        metrics['total_hourly_pattern'] = {
+            'hours': list(range(24)),
+            'mean': [float(hourly_total.get(h, 0)) for h in range(24)],
+            'std': [float(hourly_total_std.get(h, 0)) for h in range(24)]
+        }
+
+        # Total weekly pattern
+        weekly_total = data.groupby('day_of_week')['total_power'].mean()
+        metrics['total_weekly_pattern'] = {
+            'days': list(range(7)),
+            'mean': [float(weekly_total.get(d, 0)) for d in range(7)]
+        }
+
+        # Total monthly pattern
+        if data['month'].nunique() > 1:
+            monthly_total = data.groupby('month')['total_power'].mean()
+            metrics['total_monthly_pattern'] = {
+                'months': sorted(monthly_total.index.tolist()),
+                'mean': [float(monthly_total.get(m, 0)) for m in sorted(monthly_total.index)]
+            }
+
+        # Heatmap data: hour x day_of_week matrix
+        heatmap_data = data.groupby(['day_of_week', 'hour'])['total_power'].mean().unstack(fill_value=0)
+        metrics['power_heatmap'] = {
+            'days': list(range(7)),
+            'hours': list(range(24)),
+            'values': [[float(heatmap_data.loc[d, h]) if (d in heatmap_data.index and h in heatmap_data.columns) else 0
+                       for h in range(24)] for d in range(7)]
+        }
 
     return metrics
 

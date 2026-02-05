@@ -21,10 +21,10 @@ def _sort_monthly_files(files: List[Path]) -> List[Path]:
     """
     Sort monthly files chronologically by parsing MM_YYYY from filename.
 
-    Handles filenames like: summarized_10_01_2021.csv (house 10, Jan 2021)
+    Handles filenames like: summarized_10_01_2021.pkl (house 10, Jan 2021)
     """
     def get_date_key(f: Path):
-        # Filename: summarized_{house_id}_{MM}_{YYYY}.csv or {house_id}_{MM}_{YYYY}.csv
+        # Filename: summarized_{house_id}_{MM}_{YYYY}.pkl or {house_id}_{MM}_{YYYY}.pkl
         parts = f.stem.split('_')
         try:
             # Try to find MM_YYYY pattern (last two parts)
@@ -43,8 +43,8 @@ def get_available_houses() -> List[str]:
     """
     Get list of all available house IDs from INPUT directory.
 
-    Supports both single CSV files (house_id.csv) and monthly folder structure
-    (house_id/house_id_MM_YYYY.csv).
+    Supports both single CSV files (house_id.pkl) and monthly folder structure
+    (house_id/house_id_MM_YYYY.pkl).
 
     Returns:
         List of house IDs (sorted numerically)
@@ -55,7 +55,7 @@ def get_available_houses() -> List[str]:
     houses = set()
 
     # Check for single CSV files (old structure)
-    for f in _INPUT_DIR.glob("*.csv"):
+    for f in _INPUT_DIR.glob("*.pkl"):
         house_id = f.stem
         # Only include numeric house IDs (not house_id_MM_YYYY format)
         if house_id.isdigit():
@@ -65,7 +65,7 @@ def get_available_houses() -> List[str]:
     for d in _INPUT_DIR.iterdir():
         if d.is_dir() and d.name.isdigit():
             # Verify folder contains CSV files
-            if list(d.glob("*.csv")):
+            if list(d.glob("*.pkl")):
                 houses.add(d.name)
 
     return sorted(houses, key=lambda x: int(x))
@@ -139,7 +139,7 @@ def get_house_date_range(house_id: str) -> Optional[Tuple[datetime, datetime]]:
         if run_dir.exists():
             summarized_dir = run_dir / "summarized"
             if summarized_dir.exists():
-                summarized_files = _sort_monthly_files(list(summarized_dir.glob(f"summarized_{house_id}_*.csv")))
+                summarized_files = _sort_monthly_files(list(summarized_dir.glob(f"summarized_{house_id}_*.pkl")))
                 if summarized_files:
                     # Get date range from first and last monthly file
                     first_range = _read_date_range(summarized_files[0])
@@ -155,26 +155,26 @@ def get_house_date_range(house_id: str) -> Optional[Tuple[datetime, datetime]]:
                 # Check summarized/ subfolder first
                 summarized_subdir = run_dir / "summarized"
                 if summarized_subdir.exists():
-                    summarized_files = _sort_monthly_files(list(summarized_subdir.glob(f"summarized_{house_id}_*.csv")))
+                    summarized_files = _sort_monthly_files(list(summarized_subdir.glob(f"summarized_{house_id}_*.pkl")))
                     if summarized_files:
                         first_range = _read_date_range(summarized_files[0])
                         last_range = _read_date_range(summarized_files[-1])
                         if first_range and last_range:
                             return (first_range[0], last_range[1])
                 # Check for files directly in run_dir
-                summarized_files = list(run_dir.glob("summarized_*.csv"))
+                summarized_files = list(run_dir.glob("summarized_*.pkl"))
                 if summarized_files:
                     return _read_date_range(summarized_files[0])
 
     # Fall back to INPUT directory
-    input_file = _INPUT_DIR / f"{house_id}.csv"
+    input_file = _INPUT_DIR / f"{house_id}.pkl"
     if input_file.exists():
         return _read_date_range(input_file)
 
     # Try monthly folder in INPUT
     input_folder = _INPUT_DIR / house_id
     if input_folder.exists():
-        monthly_files = _sort_monthly_files(list(input_folder.glob("*.csv")))
+        monthly_files = _sort_monthly_files(list(input_folder.glob("*.pkl")))
         if monthly_files:
             first_range = _read_date_range(monthly_files[0])
             last_range = _read_date_range(monthly_files[-1])
@@ -185,17 +185,19 @@ def get_house_date_range(house_id: str) -> Optional[Tuple[datetime, datetime]]:
 
 
 def _read_date_range(file_path: Path) -> Optional[Tuple[datetime, datetime]]:
-    """Read first and last timestamps from a CSV file."""
+    """Read first and last timestamps from a pkl file."""
     try:
-        # Read just first and last rows for efficiency
-        df = pd.read_csv(file_path, usecols=['timestamp'], nrows=1)
-        first_ts = pd.to_datetime(df['timestamp'].iloc[0], format='mixed', dayfirst=True)
+        df = pd.read_pickle(file_path)
+        first_ts = df['timestamp'].iloc[0]
+        last_ts = df['timestamp'].iloc[-1]
 
-        # Read last row
-        df_tail = pd.read_csv(file_path, usecols=['timestamp'])
-        last_ts = pd.to_datetime(df_tail['timestamp'].iloc[-1], format='mixed', dayfirst=True)
+        # Ensure timestamps are datetime
+        if not isinstance(first_ts, (datetime, pd.Timestamp)):
+            first_ts = pd.to_datetime(first_ts, format='mixed', dayfirst=True)
+        if not isinstance(last_ts, (datetime, pd.Timestamp)):
+            last_ts = pd.to_datetime(last_ts, format='mixed', dayfirst=True)
 
-        return (first_ts.to_pydatetime(), last_ts.to_pydatetime())
+        return (pd.Timestamp(first_ts).to_pydatetime(), pd.Timestamp(last_ts).to_pydatetime())
     except Exception:
         return None
 
@@ -223,10 +225,10 @@ def load_house_data(house_id: str, run_number: int = 0) -> Optional[pd.DataFrame
             if run_dir.exists():
                 summarized_dir = run_dir / "summarized"
                 if summarized_dir.exists():
-                    summarized_files = _sort_monthly_files(list(summarized_dir.glob(f"summarized_{house_id}_*.csv")))
+                    summarized_files = _sort_monthly_files(list(summarized_dir.glob(f"summarized_{house_id}_*.pkl")))
                     if summarized_files:
                         # Concatenate all monthly files
-                        dfs = [_load_csv(f) for f in summarized_files]
+                        dfs = [_load_pkl(f) for f in summarized_files]
                         return pd.concat(dfs, ignore_index=True)
 
         # Fall back to old structure: experiment/house_{id}/run_X/house_{id}/
@@ -240,30 +242,30 @@ def load_house_data(house_id: str, run_number: int = 0) -> Optional[pd.DataFrame
                     # Check for summarized/ subfolder (new format)
                     summarized_subdir = inner_house_dir / "summarized"
                     if summarized_subdir.exists():
-                        summarized_files = _sort_monthly_files(list(summarized_subdir.glob(f"summarized_{house_id}_*.csv")))
+                        summarized_files = _sort_monthly_files(list(summarized_subdir.glob(f"summarized_{house_id}_*.pkl")))
                         if summarized_files:
-                            dfs = [_load_csv(f) for f in summarized_files]
+                            dfs = [_load_pkl(f) for f in summarized_files]
                             return pd.concat(dfs, ignore_index=True)
-                    # Check for summarized_{id}.csv directly
-                    summarized_file = inner_house_dir / f"summarized_{house_id}.csv"
+                    # Check for summarized_{id}.pkl directly
+                    summarized_file = inner_house_dir / f"summarized_{house_id}.pkl"
                     if summarized_file.exists():
-                        return _load_csv(summarized_file)
-                    # Also search for any summarized_*.csv file
-                    summarized_files = list(inner_house_dir.glob("summarized_*.csv"))
+                        return _load_pkl(summarized_file)
+                    # Also search for any summarized_*.pkl file
+                    summarized_files = list(inner_house_dir.glob("summarized_*.pkl"))
                     if summarized_files:
-                        return _load_csv(summarized_files[0])
+                        return _load_pkl(summarized_files[0])
 
     # Fall back to INPUT directory (raw data, no segmentation)
-    input_file = _INPUT_DIR / f"{house_id}.csv"
+    input_file = _INPUT_DIR / f"{house_id}.pkl"
     if input_file.exists():
-        return _load_csv(input_file)
+        return _load_pkl(input_file)
 
     # Try monthly folder in INPUT
     input_folder = _INPUT_DIR / house_id
     if input_folder.exists():
-        monthly_files = _sort_monthly_files(list(input_folder.glob("*.csv")))
+        monthly_files = _sort_monthly_files(list(input_folder.glob("*.pkl")))
         if monthly_files:
-            dfs = [_load_csv(f) for f in monthly_files]
+            dfs = [_load_pkl(f) for f in monthly_files]
             return pd.concat(dfs, ignore_index=True)
 
     return None
@@ -292,9 +294,9 @@ def load_events_data(house_id: str, run_number: int = 0) -> Optional[pd.DataFram
         if run_dir.exists():
             on_off_dir = run_dir / "on_off"
             if on_off_dir.exists():
-                on_off_files = sorted(on_off_dir.glob("on_off_*.csv"))
+                on_off_files = sorted(on_off_dir.glob("on_off_*.pkl"))
                 if on_off_files:
-                    dfs = [pd.read_csv(f) for f in on_off_files]
+                    dfs = [pd.read_pickle(f) for f in on_off_files]
                     df = pd.concat(dfs, ignore_index=True)
                     df['start'] = pd.to_datetime(df['start'], format='%d/%m/%Y %H:%M', errors='coerce')
                     df['end'] = pd.to_datetime(df['end'], format='%d/%m/%Y %H:%M', errors='coerce')
@@ -313,17 +315,17 @@ def load_events_data(house_id: str, run_number: int = 0) -> Optional[pd.DataFram
             # Check for on_off/ subfolder first
             on_off_subdir = inner_house_dir / "on_off"
             if on_off_subdir.exists():
-                on_off_files = _sort_monthly_files(list(on_off_subdir.glob("on_off_*.csv")))
+                on_off_files = _sort_monthly_files(list(on_off_subdir.glob("on_off_*.pkl")))
                 if on_off_files:
-                    dfs = [pd.read_csv(f) for f in on_off_files]
+                    dfs = [pd.read_pickle(f) for f in on_off_files]
                     df = pd.concat(dfs, ignore_index=True)
                     df['start'] = pd.to_datetime(df['start'], format='mixed', dayfirst=True)
                     df['end'] = pd.to_datetime(df['end'], format='mixed', dayfirst=True)
                     return df
             # Check for files directly in inner_house_dir
-            on_off_files = list(inner_house_dir.glob("on_off_*.csv"))
+            on_off_files = list(inner_house_dir.glob("on_off_*.pkl"))
             if on_off_files:
-                df = pd.read_csv(on_off_files[0])
+                df = pd.read_pickle(on_off_files[0])
                 df['start'] = pd.to_datetime(df['start'], format='mixed', dayfirst=True)
                 df['end'] = pd.to_datetime(df['end'], format='mixed', dayfirst=True)
                 return df
@@ -331,10 +333,12 @@ def load_events_data(house_id: str, run_number: int = 0) -> Optional[pd.DataFram
     return None
 
 
-def _load_csv(file_path: Path) -> pd.DataFrame:
-    """Load CSV and convert timestamp column."""
-    df = pd.read_csv(file_path)
-    df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', dayfirst=True)
+def _load_pkl(file_path: Path) -> pd.DataFrame:
+    """Load pkl file."""
+    df = pd.read_pickle(file_path)
+    # Ensure timestamp is datetime (pkl should preserve this, but just in case)
+    if 'timestamp' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', dayfirst=True)
     return df
 
 
@@ -388,7 +392,7 @@ def get_houses_info() -> List[Dict]:
             new_house_dir = experiment / "run_0" / f"house_{house_id}"
             if new_house_dir.exists():
                 summarized_dir = new_house_dir / "summarized"
-                if summarized_dir.exists() and list(summarized_dir.glob(f"summarized_{house_id}_*.csv")):
+                if summarized_dir.exists() and list(summarized_dir.glob(f"summarized_{house_id}_*.pkl")):
                     has_exp = True
 
             # Check old structure: experiment/house_{id}/run_0/house_{id}/
@@ -399,10 +403,10 @@ def get_houses_info() -> List[Dict]:
                     if run_dir.exists():
                         # Check summarized/ subfolder first
                         summarized_subdir = run_dir / "summarized"
-                        if summarized_subdir.exists() and list(summarized_subdir.glob("summarized_*.csv")):
+                        if summarized_subdir.exists() and list(summarized_subdir.glob("summarized_*.pkl")):
                             has_exp = True
                         # Also check for files directly in run_dir
-                        elif list(run_dir.glob("summarized_*.csv")):
+                        elif list(run_dir.glob("summarized_*.pkl")):
                             has_exp = True
 
         if date_range:

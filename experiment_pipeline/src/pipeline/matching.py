@@ -50,7 +50,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         logger.error(f"On/off folder not found: {on_off_dir}")
         return
 
-    on_off_files = sorted(on_off_dir.glob(f"on_off_{threshold}_*.csv"))
+    on_off_files = sorted(on_off_dir.glob(f"on_off_{threshold}_*.pkl"))
     if not on_off_files:
         logger.error(f"No on_off files found in {on_off_dir}")
         return
@@ -58,7 +58,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
     # Get list of data monthly files
     data_path = Path(data_path)
     if data_path.is_dir():
-        data_files = {f.stem: f for f in data_path.glob("*.csv")}
+        data_files = {f.stem: f for f in data_path.glob("*.pkl")}
     else:
         data_files = {data_path.stem: data_path}
 
@@ -77,7 +77,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
             continue
 
         # Skip if matches file already exists
-        matches_file = matches_dir / f"matches_{house_id}_{month:02d}_{year}.csv"
+        matches_file = matches_dir / f"matches_{house_id}_{month:02d}_{year}.pkl"
         if matches_file.exists():
             logger.info(f"Skipping {month:02d}/{year} - matches file already exists")
             continue
@@ -91,10 +91,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
                 continue
 
         # Load on_off events for this month
-        on_off_df = pd.read_csv(on_off_file)
-        # Explicitly convert dates to ensure datetime format
-        on_off_df['start'] = pd.to_datetime(on_off_df['start'], format='%d/%m/%Y %H:%M', errors='coerce')
-        on_off_df['end'] = pd.to_datetime(on_off_df['end'], format='%d/%m/%Y %H:%M', errors='coerce')
+        on_off_df = pd.read_pickle(on_off_file)
         if on_off_df.empty:
             continue
 
@@ -183,21 +180,21 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         # Save results for this month
         if matches:
             matches_df = pd.DataFrame(matches)
-            matches_df.to_csv(matches_dir / f"matches_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            matches_df.to_pickle(matches_dir / f"matches_{house_id}_{month:02d}_{year}.pkl")
             total_matches += len(matches)
 
         if unmatched_on:
             unmatched_on_df = pd.DataFrame(unmatched_on)
-            unmatched_on_df.to_csv(unmatched_on_dir / f"unmatched_on_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            unmatched_on_df.to_pickle(unmatched_on_dir / f"unmatched_on_{house_id}_{month:02d}_{year}.pkl")
             total_unmatched_on += len(unmatched_on)
 
         if final_unmatched_off:
             unmatched_off_df = pd.DataFrame(final_unmatched_off)
-            unmatched_off_df.to_csv(unmatched_off_dir / f"unmatched_off_{house_id}_{month:02d}_{year}.csv", index=False, date_format='%d/%m/%Y %H:%M')
+            unmatched_off_df.to_pickle(unmatched_off_dir / f"unmatched_off_{house_id}_{month:02d}_{year}.pkl")
             total_unmatched_off += len(final_unmatched_off)
 
         # Save updated on_off
-        on_off_df.to_csv(on_off_file, index=False, date_format='%d/%m/%Y %H:%M')
+        on_off_df.to_pickle(on_off_file)
 
     logger.info(f"Total: {total_matches} matches, {total_unmatched_on} unmatched ON, {total_unmatched_off} unmatched OFF")
     logger.info(f"Matching completed for house {house_id}, run {run_number}")
@@ -209,10 +206,10 @@ def _format_match(on_event, off_event, tag, phase):
     return {
         'on_event_id': on_event['event_id'],
         'off_event_id': off_event['event_id'],
-        'on_start': on_event['start'].strftime('%d/%m/%Y %H:%M'),
-        'on_end': on_event['end'].strftime('%d/%m/%Y %H:%M'),
-        'off_start': off_event['start'].strftime('%d/%m/%Y %H:%M'),
-        'off_end': off_event['end'].strftime('%d/%m/%Y %H:%M'),
+        'on_start': on_event['start'],
+        'on_end': on_event['end'],
+        'off_start': off_event['start'],
+        'off_end': off_event['end'],
         'duration': duration,
         'on_magnitude': on_event['magnitude'],
         'off_magnitude': off_event['magnitude'],
@@ -231,10 +228,10 @@ def _format_partial_match(on_event, off_event, tag, phase):
     return {
         'on_event_id': on_event['event_id'],
         'off_event_id': off_event['event_id'],
-        'on_start': on_event['start'].strftime('%d/%m/%Y %H:%M'),
-        'on_end': on_event['end'].strftime('%d/%m/%Y %H:%M'),
-        'off_start': off_event['start'].strftime('%d/%m/%Y %H:%M'),
-        'off_end': off_event['end'].strftime('%d/%m/%Y %H:%M'),
+        'on_start': on_event['start'],
+        'on_end': on_event['end'],
+        'off_start': off_event['start'],
+        'off_end': off_event['end'],
         'duration': duration,
         'on_magnitude': match_magnitude,
         'off_magnitude': match_magnitude,

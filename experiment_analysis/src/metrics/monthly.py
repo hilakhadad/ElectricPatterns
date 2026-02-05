@@ -42,9 +42,9 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
     # Load on_off events with month info
     on_off_dir = house_dir / "on_off"
     if on_off_dir.exists():
-        on_off_files = sorted(on_off_dir.glob("on_off_*.csv"))
+        on_off_files = sorted(on_off_dir.glob("on_off_*.pkl"))
     else:
-        on_off_files = list(house_dir.glob("on_off_*.csv"))
+        on_off_files = list(house_dir.glob("on_off_*.pkl"))
 
     if not on_off_files:
         return metrics
@@ -52,15 +52,15 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
     # Load matches with month info
     matches_dir = house_dir / "matches"
     if matches_dir.exists():
-        matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.csv"))
+        matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
     else:
-        matches_files = list(house_dir.glob("matches_*.csv"))
+        matches_files = list(house_dir.glob("matches_*.pkl"))
 
     # Process each month
     monthly_stats = {}
 
     for on_off_file in on_off_files:
-        # Extract month from filename (e.g., on_off_1500_01_2019.csv)
+        # Extract month from filename (e.g., on_off_1500_01_2019.pkl)
         filename = on_off_file.stem
         parts = filename.split('_')
 
@@ -77,11 +77,13 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
         if not month_year:
             # Fall back to reading timestamps from file
             try:
-                df = pd.read_csv(on_off_file, nrows=1)
-                if 'start' in df.columns:
-                    ts = pd.to_datetime(df['start'].iloc[0], format='%d/%m/%Y %H:%M', errors='coerce')
+                df = pd.read_pickle(on_off_file)
+                if 'start' in df.columns and len(df) > 0:
+                    ts = df['start'].iloc[0]
+                    if not isinstance(ts, (datetime, pd.Timestamp)):
+                        ts = pd.to_datetime(ts, format='mixed', dayfirst=True)
                     if pd.notna(ts):
-                        month_year = ts.strftime('%Y-%m')
+                        month_year = pd.Timestamp(ts).strftime('%Y-%m')
             except Exception:
                 continue
 
@@ -90,7 +92,7 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
 
         # Load on_off data for this month
         try:
-            on_off_df = pd.read_csv(on_off_file)
+            on_off_df = pd.read_pickle(on_off_file)
         except Exception:
             continue
 
@@ -138,11 +140,13 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
 
         if not month_year:
             try:
-                df = pd.read_csv(matches_file, nrows=1)
-                if 'on_start' in df.columns:
-                    ts = pd.to_datetime(df['on_start'].iloc[0], format='%d/%m/%Y %H:%M', errors='coerce')
+                df = pd.read_pickle(matches_file)
+                if 'on_start' in df.columns and len(df) > 0:
+                    ts = df['on_start'].iloc[0]
+                    if not isinstance(ts, (datetime, pd.Timestamp)):
+                        ts = pd.to_datetime(ts, format='mixed', dayfirst=True)
                     if pd.notna(ts):
-                        month_year = ts.strftime('%Y-%m')
+                        month_year = pd.Timestamp(ts).strftime('%Y-%m')
             except Exception:
                 continue
 
@@ -150,7 +154,7 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
             continue
 
         try:
-            matches_df = pd.read_csv(matches_file)
+            matches_df = pd.read_pickle(matches_file)
         except Exception:
             continue
 

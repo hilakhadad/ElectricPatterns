@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def get_file_path(house_id: str, data_dir: Path = DATA_DIR) -> Path:
     """Get the file path for a house's data."""
-    return data_dir / f"{house_id}.csv"
+    return data_dir / f"{house_id}.pkl"
 
 
 def get_latest_timestamp(file_path: Path) -> Optional[datetime]:
@@ -23,7 +23,7 @@ def get_latest_timestamp(file_path: Path) -> Optional[datetime]:
     try:
         if not file_path.exists():
             return None
-        df = pd.read_csv(file_path, parse_dates=["timestamp"])
+        df = pd.read_pickle(file_path)
         if df.empty:
             return None
         return df["timestamp"].max()
@@ -43,11 +43,11 @@ def save_data(
     Returns the total number of rows saved.
     """
     data_dir.mkdir(parents=True, exist_ok=True)
-    file_path = data_dir / f"{house_id}.csv"
+    file_path = data_dir / f"{house_id}.pkl"
 
     if file_path.exists():
         try:
-            existing = pd.read_csv(file_path, parse_dates=["timestamp"])
+            existing = pd.read_pickle(file_path)
             # Remove legacy 'sum' column if present
             existing = existing.drop(columns=["sum"], errors='ignore')
             combined = pd.concat([existing, new_data], ignore_index=True)
@@ -59,7 +59,7 @@ def save_data(
     else:
         combined = new_data.sort_values("timestamp")
 
-    combined.to_csv(file_path, index=False)
+    combined.to_pickle(file_path)
     logger.info(f"Saved {len(combined)} rows for house {house_id} to {file_path}")
 
     return len(combined)

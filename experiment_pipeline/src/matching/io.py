@@ -35,8 +35,8 @@ def _save_by_month(df: pd.DataFrame, output_dir: str, folder_name: str, file_pre
         year = period.year
         group = group.drop(columns=['_year_month'])
 
-        monthly_file = os.path.join(folder_path, f"{file_prefix}_{month:02d}_{year}.csv")
-        group.to_csv(monthly_file, index=False, date_format='%d/%m/%Y %H:%M')
+        monthly_file = os.path.join(folder_path, f"{file_prefix}_{month:02d}_{year}.pkl")
+        group.to_pickle(monthly_file)
         months_saved += 1
 
     return months_saved
@@ -63,22 +63,22 @@ def save_events(matches: List[dict], unmatched_on: List[dict], unmatched_off: Li
     # Save matches by month (use on_start for timestamp)
     if not matches_df.empty:
         months = _save_by_month(matches_df, output_directory, 'matches', f'matches_{house_id}', 'on_start')
-        print(f"Saved {len(matches_df)} matches to {output_directory}/matches/ ({months} monthly files)")
+        print(f"Saved {len(matches_df)} matches to {output_directory}/matches/ ({months} monthly pkl files)")
 
     # Save unmatched_on by month (use start for timestamp)
     if not unmatched_on_df.empty:
         months = _save_by_month(unmatched_on_df, output_directory, 'unmatched_on', f'unmatched_on_{house_id}', 'start')
-        print(f"Saved {len(unmatched_on_df)} unmatched ON to {output_directory}/unmatched_on/ ({months} monthly files)")
+        print(f"Saved {len(unmatched_on_df)} unmatched ON to {output_directory}/unmatched_on/ ({months} monthly pkl files)")
 
     # Save unmatched_off by month (use start for timestamp)
     if not unmatched_off_df.empty:
         months = _save_by_month(unmatched_off_df, output_directory, 'unmatched_off', f'unmatched_off_{house_id}', 'start')
-        print(f"Saved {len(unmatched_off_df)} unmatched OFF to {output_directory}/unmatched_off/ ({months} monthly files)")
+        print(f"Saved {len(unmatched_off_df)} unmatched OFF to {output_directory}/unmatched_off/ ({months} monthly pkl files)")
 
 
 def save_remainder_events(remainder_events: List[dict], output_directory: str, house_id: str) -> None:
     """
-    Save remainder events from partial matching to CSV for next iteration.
+    Save remainder events from partial matching to pkl for next iteration.
 
     Remainder events are created when Stage 3 partial matching finds a match
     between events with different magnitudes. The remainder represents the
@@ -95,9 +95,5 @@ def save_remainder_events(remainder_events: List[dict], output_directory: str, h
     os.makedirs(output_directory, exist_ok=True)
 
     df = pd.DataFrame(remainder_events)
-    df.to_csv(
-        os.path.join(output_directory, f"remainder_{house_id}.csv"),
-        index=False,
-        date_format='%d/%m/%Y %H:%M'
-    )
-    print(f"Saved {len(remainder_events)} remainder events to {output_directory}/remainder_{house_id}.csv")
+    df.to_pickle(os.path.join(output_directory, f"remainder_{house_id}.pkl"))
+    print(f"Saved {len(remainder_events)} remainder events to {output_directory}/remainder_{house_id}.pkl")

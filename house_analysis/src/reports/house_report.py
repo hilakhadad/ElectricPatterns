@@ -49,8 +49,10 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     temporal = calculate_temporal_patterns(data, phase_cols)
     results['temporal_patterns'] = temporal
 
-    # Data quality
-    quality = calculate_data_quality_metrics(data, phase_cols)
+    # Data quality (pass coverage ratio and days span for scoring)
+    coverage_ratio = coverage.get('coverage_ratio', 1.0)
+    days_span = coverage.get('days_span', 0)
+    quality = calculate_data_quality_metrics(data, phase_cols, coverage_ratio=coverage_ratio, days_span=days_span)
     results['data_quality'] = quality
 
     # Flat segments
@@ -109,8 +111,9 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['very_high_power'] = power.get('total_max', 0) > 20000  # Over 20kW max
 
     # Flat segments flags (potential metering issues)
+    # Raised threshold from 30% to 70% - with 10W tolerance, 30% is too sensitive
     flags['many_flat_segments'] = any(
-        flat.get(f'phase_{c}_flat_pct', 0) > 30  # More than 30% flat
+        flat.get(f'phase_{c}_flat_pct', 0) > 70  # More than 70% flat (likely meter issue)
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
         if f'phase_{c}_flat_pct' in flat
     )
@@ -121,6 +124,9 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
         if f'phase_{c}_night_day_ratio' in temporal
     )
+
+    # Faulty/defective meter flags
+    flags['has_dead_phase'] = quality.get('has_dead_phase', False)
 
     return flags
 
@@ -174,18 +180,18 @@ def _flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '_') -> Di
 
 def load_house_data(file_path: str) -> pd.DataFrame:
     """
-    Load house data from CSV file.
+    Load house data from pkl file.
 
     Args:
-        file_path: Path to the CSV file
+        file_path: Path to the pkl file
 
     Returns:
         DataFrame with parsed timestamps
     """
-    data = pd.read_csv(file_path)
+    data = pd.read_pickle(file_path)
 
-    # Parse timestamp if present
-    if 'timestamp' in data.columns:
+    # Ensure timestamp is datetime if present
+    if 'timestamp' in data.columns and not pd.api.types.is_datetime64_any_dtype(data['timestamp']):
         data['timestamp'] = pd.to_datetime(data['timestamp'])
 
     # Rename columns if needed

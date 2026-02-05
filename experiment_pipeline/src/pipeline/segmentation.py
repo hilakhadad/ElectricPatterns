@@ -47,7 +47,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
         logger.error(f"Matches folder not found: {matches_dir}")
         return
 
-    matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.csv"))
+    matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
     if not matches_files:
         logger.error(f"No matches files found in {matches_dir}")
         return
@@ -55,7 +55,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
     # Get list of data monthly files
     data_path = Path(data_path)
     if data_path.is_dir():
-        data_files = {f.stem: f for f in data_path.glob("*.csv")}
+        data_files = {f.stem: f for f in data_path.glob("*.pkl")}
     else:
         data_files = {data_path.stem: data_path}
 
@@ -71,7 +71,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             continue
 
         # Skip if summarized file already exists
-        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.csv"
+        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
         if summary_file.exists():
             logger.info(f"Skipping {month:02d}/{year} - summarized file already exists")
             continue
@@ -85,10 +85,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
                 continue
 
         # Load matches for this month
-        events = pd.read_csv(matches_file)
-        # Explicitly convert dates to ensure datetime format
-        for col in ['on_start', 'on_end', 'off_start', 'off_end']:
-            events[col] = pd.to_datetime(events[col], format='%d/%m/%Y %H:%M', errors='coerce')
+        events = pd.read_pickle(matches_file)
         if events.empty:
             continue
 
@@ -123,8 +120,8 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             log_negative_values(house_id, run_number, summary_df, cols, source, core.ERRORS_DIRECTORY, logger)
 
         # Save summary for this month
-        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.csv"
-        summary_df.to_csv(summary_file, index=False)
+        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
+        summary_df.to_pickle(summary_file)
 
         # Save next input for this month
         next_input = data[['timestamp', 'remaining_power_w1', 'remaining_power_w2', 'remaining_power_w3']].copy()
@@ -134,7 +131,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             'remaining_power_w3': '3'
         }, inplace=True)
 
-        next_input_file = next_input_dir / f"{house_id}_{month:02d}_{year}.csv"
-        next_input.to_csv(next_input_file, index=False)
+        next_input_file = next_input_dir / f"{house_id}_{month:02d}_{year}.pkl"
+        next_input.to_pickle(next_input_file)
 
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")

@@ -25,11 +25,11 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str) -> Option
     if subdir.exists():
         files = sorted(subdir.glob(pattern))
         if files:
-            return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+            return pd.concat([pd.read_pickle(f) for f in files], ignore_index=True)
     # Fallback: try files directly in house_dir
     files = list(house_dir.glob(pattern))
     if files:
-        return pd.read_csv(files[0])
+        return pd.read_pickle(files[0])
     return None
 
 
@@ -76,9 +76,9 @@ def calculate_iteration_metrics(experiment_dir: Path, house_id: str,
         iter_data = {'run_number': run_num}
 
         # Check for key files - support both monthly subfolder and direct files
-        on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.csv")
-        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.csv")
-        summarized_df = _load_monthly_files(house_dir, "summarized", f"summarized_{house_id}_*.csv")
+        on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
+        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
+        summarized_df = _load_monthly_files(house_dir, "summarized", f"summarized_{house_id}_*.pkl")
 
         if on_off_df is not None:
             iter_data['total_events'] = len(on_off_df)
@@ -126,9 +126,9 @@ def calculate_iteration_metrics(experiment_dir: Path, house_id: str,
         # Try summarized (new) or segmented (old)
         seg_df = summarized_df
         if seg_df is None:
-            segmented_files = list(house_dir.glob("segmented_*.csv"))
+            segmented_files = list(house_dir.glob("segmented_*.pkl"))
             if segmented_files:
-                seg_df = pd.read_csv(segmented_files[0])
+                seg_df = pd.read_pickle(segmented_files[0])
 
         if seg_df is not None:
             # Find event power columns

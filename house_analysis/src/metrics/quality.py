@@ -8,13 +8,17 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 
 
-def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None) -> Dict[str, Any]:
+def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
+                                    coverage_ratio: float = None,
+                                    days_span: int = None) -> Dict[str, Any]:
     """
     Calculate data quality metrics for household data.
 
     Args:
         data: DataFrame with timestamp and phase power columns
         phase_cols: List of phase column names
+        coverage_ratio: Optional coverage ratio (0-1) to include in quality score
+        days_span: Optional number of days of data
 
     Returns:
         Dictionary with data quality metrics
@@ -28,6 +32,7 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None) 
             phase_cols = [c for c in data.columns if c not in ['timestamp', 'sum']]
 
     metrics = {}
+    metrics['coverage_ratio'] = coverage_ratio if coverage_ratio is not None else 1.0
 
     # Negative values (should not exist in power data)
     for col in phase_cols:
@@ -96,42 +101,136 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None) 
         dup_timestamps = data['timestamp'].duplicated().sum()
         metrics['duplicate_timestamps'] = int(dup_timestamps)
 
-    # Overall quality score (0-100)
-    quality_score = 100
+    # Detect dead/faulty phases using relative threshold (same logic as experiment_analysis)
+    # A phase is considered damaged if its total power is less than 1% of the maximum phase's power
+    dead_phases = []
+    phase_powers = {}
 
-    # Deduct for missing data (up to 15 points)
     for col in phase_cols:
-        missing_pct = metrics.get(f'{col}_missing_pct', 0)
-        if missing_pct > 0:
-            quality_score -= min(missing_pct * 0.5, 5)  # Up to 5 per phase
+        if col not in data.columns:
+            phase_powers[col] = 0
+            continue
+        phase_data = data[col].dropna()
+        if len(phase_data) == 0:
+            phase_powers[col] = 0
+        else:
+            phase_powers[col] = phase_data.sum()
 
-    # Deduct for negative values (up to 20 points)
+    # Find max power among phases
+    max_power = max(phase_powers.values()) if phase_powers else 0
+    threshold_ratio = 0.01  # 1% threshold (same as experiment_analysis)
+
+    for col, power in phase_powers.items():
+        ratio = power / max_power if max_power > 0 else 0
+        if ratio < threshold_ratio:
+            dead_phases.append(col)
+
+    metrics['dead_phases'] = dead_phases
+    metrics['phase_powers'] = phase_powers
+    metrics['has_dead_phase'] = len(dead_phases) > 0
+    metrics['active_phase_count'] = len(phase_cols) - len(dead_phases)
+
+    # Store days_span in metrics
+    metrics['days_span'] = days_span if days_span is not None else 0
+
+    # Overall quality score (0-100)
+    # PRIMARY FACTORS: Coverage (60%) and Days of data (30%)
+    # SECONDARY FACTORS: Other issues (10%)
+
+    quality_score = 0
+
+    # ===== PRIMARY FACTOR 1: Coverage (up to 60 points) =====
+    coverage = metrics.get('coverage_ratio', 1.0)
+    # Linear scale: 0% coverage = 0 points, 100% coverage = 60 points
+    coverage_score = coverage * 60
+    quality_score += coverage_score
+    metrics['coverage_score_contribution'] = coverage_score
+
+    # ===== PRIMARY FACTOR 2: Days of data (up to 30 points) =====
+    days = days_span if days_span is not None else 0
+    days_score = 0
+
+    if days >= 730:  # 2+ years - excellent
+        days_score = 30
+    elif days >= 365:  # 1-2 years - good
+        # Linear scale from 20 to 30 points
+        days_score = 20 + (days - 365) / 365 * 10
+    elif days >= 180:  # 6 months to 1 year - acceptable
+        # Linear scale from 10 to 20 points
+        days_score = 10 + (days - 180) / 185 * 10
+    elif days >= 30:  # 1-6 months - limited
+        # Linear scale from 5 to 10 points
+        days_score = 5 + (days - 30) / 150 * 5
+    else:  # Less than 1 month - very limited
+        days_score = days / 30 * 5
+
+    quality_score += days_score
+    metrics['days_score_contribution'] = days_score
+
+    # ===== SECONDARY FACTORS: Other issues (up to 10 points) =====
+    # Start with 10 and deduct for issues
+    secondary_score = 10
+
+    # Deduct for dead phases (up to 3 points)
+    if len(dead_phases) > 0:
+        secondary_score -= min(len(dead_phases) * 1, 3)
+
+    # Deduct for negative values (up to 2 points)
     total_negatives = sum(metrics.get(f'{col}_negative_count', 0) for col in phase_cols)
     if total_negatives > 0:
-        quality_score -= min(5 + total_negatives / 50, 20)
+        secondary_score -= min(total_negatives / 100, 2)
 
-    # Deduct for excessive zeros (up to 15 points)
-    for col in phase_cols:
-        zero_pct = metrics.get(f'{col}_zero_pct', 0)
-        if zero_pct > 20:  # More than 20% zeros is suspicious
-            quality_score -= min((zero_pct - 20) * 0.3, 5)
+    # Deduct for outliers (up to 2 points)
+    outlier_pct = sum(metrics.get(f'{col}_outliers_3sd_pct', 0) for col in phase_cols) / len(phase_cols) if phase_cols else 0
+    if outlier_pct > 1:
+        secondary_score -= min(outlier_pct * 0.5, 2)
 
-    # Deduct for outliers (up to 15 points)
-    total_outliers = sum(metrics.get(f'{col}_outliers_3sd', 0) for col in phase_cols)
-    outlier_pct = sum(metrics.get(f'{col}_outliers_3sd_pct', 0) for col in phase_cols) / len(phase_cols)
-    if outlier_pct > 0.5:  # More than 0.5% outliers
-        quality_score -= min(outlier_pct * 5, 15)
-
-    # Deduct for large jumps (up to 10 points)
+    # Deduct for large jumps (up to 2 points)
     total_large_jumps = sum(metrics.get(f'{col}_jumps_over_2000W', 0) for col in phase_cols)
-    if total_large_jumps > 100:
-        quality_score -= min((total_large_jumps - 100) / 50, 10)
+    if total_large_jumps > 500:
+        secondary_score -= min((total_large_jumps - 500) / 500, 2)
 
-    # Deduct for duplicate timestamps (up to 5 points)
+    # Deduct for duplicate timestamps (up to 1 point)
     dup_ts = metrics.get('duplicate_timestamps', 0)
     if dup_ts > 0:
-        quality_score -= min(dup_ts / 10, 5)
+        secondary_score -= min(dup_ts / 100, 1)
 
+    secondary_score = max(0, secondary_score)
+    quality_score += secondary_score
+    metrics['secondary_score_contribution'] = secondary_score
+
+    # ===== PHASE BALANCE PENALTY =====
+    # Calculate phase balance ratio and penalize unbalanced phases
+    phase_means = []
+    for col in phase_cols:
+        if col in data.columns:
+            phase_mean = data[col].mean()
+            phase_means.append(phase_mean)
+
+    balance_penalty = 0
+    if len(phase_means) >= 2 and min(phase_means) > 0:
+        balance_ratio = max(phase_means) / min(phase_means)
+        metrics['phase_balance_ratio'] = balance_ratio
+
+        # Penalty scale:
+        # ratio 1-2: no penalty (normal variation)
+        # ratio 2-3: 0-5 points penalty
+        # ratio 3-5: 5-10 points penalty
+        # ratio 5+: 10-15 points penalty (capped)
+        if balance_ratio > 5:
+            balance_penalty = 10 + min((balance_ratio - 5), 5)
+        elif balance_ratio > 3:
+            balance_penalty = 5 + (balance_ratio - 3) * 2.5
+        elif balance_ratio > 2:
+            balance_penalty = (balance_ratio - 2) * 5
+        # else: no penalty for ratio <= 2
+    else:
+        metrics['phase_balance_ratio'] = 1.0  # Default if can't calculate
+
+    metrics['balance_penalty'] = balance_penalty
+    quality_score -= balance_penalty
+
+    # Ensure bounds
     metrics['quality_score'] = max(0, min(100, quality_score))
 
     return metrics

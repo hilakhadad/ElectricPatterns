@@ -40,12 +40,7 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics['end_date'] = data['timestamp'].max().isoformat()
         metrics['days_span'] = (data['timestamp'].max() - data['timestamp'].min()).days + 1
 
-        # Expected rows (assuming 1-minute resolution)
-        expected_rows = metrics['days_span'] * 24 * 60
-        metrics['expected_rows'] = expected_rows
-        metrics['coverage_ratio'] = metrics['total_rows'] / expected_rows if expected_rows > 0 else 0
-
-        # Per-month coverage
+        # Per-month info
         data['year_month'] = data['timestamp'].dt.to_period('M')
         monthly_counts = data.groupby('year_month').size()
         metrics['months_count'] = len(monthly_counts)
@@ -58,12 +53,24 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics['min_days_in_month'] = days_per_month.min()
         metrics['max_days_in_month'] = days_per_month.max()
 
-    # Missing values per phase
+    # Coverage per phase: rows with value > 0 / total rows
+    phase_coverages = []
     for col in phase_cols:
         if col in data.columns:
+            total = len(data)
+            non_zero = (data[col] > 0).sum()
+            phase_coverage = non_zero / total if total > 0 else 0
+            metrics[f'{col}_coverage'] = phase_coverage
+            metrics[f'{col}_non_zero_count'] = int(non_zero)
+            phase_coverages.append(phase_coverage)
+
+            # Also track missing (NaN) values
             missing = data[col].isna().sum()
             metrics[f'{col}_missing_count'] = int(missing)
             metrics[f'{col}_missing_pct'] = missing / len(data) * 100 if len(data) > 0 else 0
+
+    # Overall coverage = average of phase coverages
+    metrics['coverage_ratio'] = np.mean(phase_coverages) if phase_coverages else 0
 
     # Time gaps analysis
     if 'timestamp' in data.columns and len(data) > 1:

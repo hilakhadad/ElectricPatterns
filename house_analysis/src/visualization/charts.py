@@ -264,9 +264,22 @@ def create_issues_heatmap(analyses: List[Dict[str, Any]]) -> str:
         flags = a.get('flags', {})
         all_flags.update(flags.keys())
 
-    all_flags = sorted(all_flags)
+    # Filter out non-boolean flags and flags that apply to all houses (not useful for comparison)
+    excluded_flags = {'dead_phases_list', 'many_outliers', 'many_flat_segments'}
+    all_flags = [f for f in all_flags if f not in excluded_flags]
 
-    # Build matrix
+    # Count how many houses have each flag
+    flag_counts = {f: 0 for f in all_flags}
+    for a in analyses:
+        flags = a.get('flags', {})
+        for f in all_flags:
+            if flags.get(f, False):
+                flag_counts[f] += 1
+
+    # Sort flags by count (ascending order)
+    all_flags = sorted(all_flags, key=lambda f: flag_counts[f])
+
+    # Build matrix with sorted flags
     matrix = []
     for a in analyses:
         flags = a.get('flags', {})
@@ -274,7 +287,21 @@ def create_issues_heatmap(analyses: List[Dict[str, Any]]) -> str:
         matrix.append(row)
 
     # Clean up flag names for display
-    display_flags = [f.replace('_', ' ').title() for f in all_flags]
+    flag_display_names = {
+        'low_coverage': 'Coverage < 80%',
+        'short_duration': 'Less Than 30 Days',
+        'has_large_gaps': 'Gaps Over 1 Hour',
+        'many_gaps': '>5% Gaps Over 2min',
+        'has_negative_values': 'Negative Values',
+        'many_large_jumps': '>500 Jumps Over 2kW',
+        'low_quality_score': 'Quality < 70',
+        'unbalanced_phases': 'Phase Ratio > 3',
+        'single_active_phase': 'Single Active Phase',
+        'very_high_power': 'Max Power > 20kW',
+        'unusual_night_ratio': 'Night/Day > 3',
+        'has_dead_phase': 'Dead Phase (<1%)',
+    }
+    display_flags = [flag_display_names.get(f, f.replace('_', ' ').title()) for f in all_flags]
 
     fig = go.Figure(data=go.Heatmap(
         z=matrix,
@@ -371,5 +398,386 @@ def create_power_distribution_chart(analyses: List[Dict[str, Any]],
             title=f'Average Power Distribution (n={count})',
             height=400
         )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_hourly_pattern_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create hourly power pattern chart with confidence band.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    temporal = analysis.get('temporal_patterns', {})
+    pattern = temporal.get('total_hourly_pattern', {})
+
+    if not pattern:
+        return "<p>No hourly pattern data available</p>"
+
+    hours = pattern.get('hours', list(range(24)))
+    mean_values = pattern.get('mean', [0] * 24)
+    std_values = pattern.get('std', [0] * 24)
+
+    # Calculate confidence band (mean ± std)
+    upper = [m + s for m, s in zip(mean_values, std_values)]
+    lower = [max(0, m - s) for m, s in zip(mean_values, std_values)]
+
+    fig = go.Figure()
+
+    # Confidence band
+    fig.add_trace(go.Scatter(
+        x=hours + hours[::-1],
+        y=upper + lower[::-1],
+        fill='toself',
+        fillcolor='rgba(102, 126, 234, 0.2)',
+        line=dict(color='rgba(255,255,255,0)'),
+        name='±1 Std Dev',
+        showlegend=True
+    ))
+
+    # Mean line
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=mean_values,
+        mode='lines+markers',
+        line=dict(color='#667eea', width=2),
+        marker=dict(size=6),
+        name='Average Power',
+        hovertemplate='Hour %{x}:00<br>Power: %{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Hourly Power Pattern',
+        xaxis_title='Hour of Day',
+        yaxis_title='Power (W)',
+        xaxis=dict(tickmode='array', tickvals=list(range(0, 24, 2)),
+                   ticktext=[f'{h}:00' for h in range(0, 24, 2)]),
+        height=400,
+        showlegend=True,
+        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_phase_power_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create bar chart showing power by phase.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    power = analysis.get('power_statistics', {})
+
+    phases = []
+    values = []
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+
+    for phase_name in ['w1', 'w2', 'w3', '1', '2', '3']:
+        key = f'phase_{phase_name}_mean'
+        if key in power:
+            display_name = f'Phase {phase_name.replace("w", "")}'
+            phases.append(display_name)
+            values.append(power[key])
+
+    if not phases:
+        return "<p>No phase data available</p>"
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=phases,
+        y=values,
+        marker_color=colors[:len(phases)],
+        text=[f'{v:.0f}W' for v in values],
+        textposition='outside',
+        hovertemplate='%{x}<br>Average: %{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Average Power by Phase',
+        xaxis_title='Phase',
+        yaxis_title='Average Power (W)',
+        height=350,
+        showlegend=False
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_monthly_pattern_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create monthly/seasonal power pattern chart.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    temporal = analysis.get('temporal_patterns', {})
+    pattern = temporal.get('total_monthly_pattern', {})
+
+    if not pattern:
+        return "<p>No monthly pattern data available</p>"
+
+    months = pattern.get('months', [])
+    values = pattern.get('mean', [])
+
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    labels = [month_names[m-1] if 1 <= m <= 12 else str(m) for m in months]
+
+    # Color based on season
+    colors = []
+    for m in months:
+        if m in [12, 1, 2]:  # Winter
+            colors.append('#3498db')
+        elif m in [3, 4, 5]:  # Spring
+            colors.append('#2ecc71')
+        elif m in [6, 7, 8]:  # Summer
+            colors.append('#e74c3c')
+        else:  # Fall
+            colors.append('#f39c12')
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=values,
+        marker_color=colors,
+        text=[f'{v:.0f}W' for v in values],
+        textposition='outside',
+        hovertemplate='%{x}<br>Average: %{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Monthly Power Pattern',
+        xaxis_title='Month',
+        yaxis_title='Average Power (W)',
+        height=350,
+        showlegend=False
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_weekly_pattern_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create weekly power pattern chart.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    temporal = analysis.get('temporal_patterns', {})
+    pattern = temporal.get('total_weekly_pattern', {})
+
+    if not pattern:
+        return "<p>No weekly pattern data available</p>"
+
+    days = pattern.get('days', list(range(7)))
+    values = pattern.get('mean', [0] * 7)
+
+    # Israeli week: Sunday=0 to Saturday=6
+    day_names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    labels = [day_names[d] for d in days]
+
+    # Highlight weekend (Friday-Saturday in Israel)
+    colors = ['#667eea' if d not in [4, 5] else '#e74c3c' for d in days]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=values,
+        marker_color=colors,
+        text=[f'{v:.0f}W' for v in values],
+        textposition='outside',
+        hovertemplate='%{x}<br>Average: %{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Weekly Power Pattern',
+        xaxis_title='Day of Week',
+        yaxis_title='Average Power (W)',
+        height=350,
+        showlegend=False
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_power_heatmap_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create heatmap of power consumption (hour vs day of week).
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    temporal = analysis.get('temporal_patterns', {})
+    heatmap = temporal.get('power_heatmap', {})
+
+    if not heatmap:
+        return "<p>No heatmap data available</p>"
+
+    days = heatmap.get('days', list(range(7)))
+    hours = heatmap.get('hours', list(range(24)))
+    values = heatmap.get('values', [[0]*24]*7)
+
+    day_names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    hour_labels = [f'{h}:00' for h in hours]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=values,
+        x=hour_labels,
+        y=[day_names[d] for d in days],
+        colorscale='YlOrRd',
+        colorbar=dict(title='Power (W)'),
+        hovertemplate='%{y} %{x}<br>Power: %{z:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Power Consumption Heatmap',
+        xaxis_title='Hour of Day',
+        yaxis_title='Day of Week',
+        height=400,
+        xaxis=dict(tickmode='array', tickvals=list(range(0, 24, 2)),
+                   ticktext=[f'{h}:00' for h in range(0, 24, 2)])
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_power_histogram(analysis: Dict[str, Any]) -> str:
+    """
+    Create power distribution histogram.
+
+    Note: This requires raw data which may not be in the analysis dict.
+    Falls back to showing power range distribution from statistics.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    power = analysis.get('power_statistics', {})
+
+    # Build histogram from power range statistics
+    ranges = []
+    values = []
+    colors = ['#2ecc71', '#3498db', '#f1c40f', '#e67e22', '#e74c3c']
+
+    range_keys = [
+        ('0-100W', 'share_0_100'),
+        ('100-500W', 'share_100_500'),
+        ('500-1000W', 'share_500_1000'),
+        ('1000-2000W', 'share_1000_2000'),
+        ('2000W+', 'share_2000_plus')
+    ]
+
+    for label, key in range_keys:
+        for prefix in ['phase_w1_', 'phase_1_', 'total_']:
+            full_key = prefix + key
+            if full_key in power:
+                ranges.append(label)
+                values.append(power[full_key] * 100)
+                break
+
+    if not ranges:
+        return "<p>No power distribution data available</p>"
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=ranges,
+        y=values,
+        marker_color=colors[:len(ranges)],
+        text=[f'{v:.1f}%' for v in values],
+        textposition='outside',
+        hovertemplate='%{x}<br>Percentage: %{y:.1f}%<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Power Distribution',
+        xaxis_title='Power Range',
+        yaxis_title='Percentage of Time (%)',
+        height=350,
+        showlegend=False
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create a waterfall/bar chart showing quality score breakdown.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    quality = analysis.get('data_quality', {})
+
+    # Get score components
+    coverage_score = quality.get('coverage_score_contribution', 0)
+    days_score = quality.get('days_score_contribution', 0)
+    secondary_score = quality.get('secondary_score_contribution', 0)
+    balance_penalty = quality.get('balance_penalty', 0)
+    final_score = quality.get('quality_score', 0)
+
+    # Create waterfall chart
+    categories = ['Coverage<br>(max 60)', 'Days<br>(max 30)', 'Secondary<br>(max 10)',
+                  'Balance<br>Penalty', 'Final<br>Score']
+    values = [coverage_score, days_score, secondary_score, -balance_penalty, final_score]
+    colors = ['#667eea', '#3498db', '#2ecc71', '#e74c3c', '#9b59b6']
+
+    # Use bar chart with annotations
+    fig = go.Figure()
+
+    # Show components as bars
+    fig.add_trace(go.Bar(
+        x=categories[:-1],
+        y=values[:-1],
+        marker_color=colors[:-1],
+        text=[f'{v:.1f}' if v >= 0 else f'{v:.1f}' for v in values[:-1]],
+        textposition='outside',
+        name='Components',
+        hovertemplate='%{x}<br>Points: %{y:.1f}<extra></extra>'
+    ))
+
+    # Add final score as separate bar with different styling
+    fig.add_trace(go.Bar(
+        x=[categories[-1]],
+        y=[values[-1]],
+        marker_color=colors[-1],
+        text=[f'{final_score:.1f}'],
+        textposition='outside',
+        name='Final Score',
+        hovertemplate='%{x}<br>Score: %{y:.1f}<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title='Quality Score Breakdown',
+        yaxis_title='Points',
+        height=350,
+        showlegend=False,
+        yaxis=dict(range=[min(0, min(values)) - 5, max(values) + 10])
+    )
 
     return fig.to_html(full_html=False, include_plotlyjs=False)

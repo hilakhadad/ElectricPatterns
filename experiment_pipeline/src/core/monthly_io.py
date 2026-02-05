@@ -2,9 +2,9 @@
 Helper functions for saving and loading output files by month.
 
 Output files are split by month for easier visualization:
-- on_off/on_off_{threshold}_{MM}_{YYYY}.csv
-- matches/matches_{house_id}_{MM}_{YYYY}.csv
-- summarized/summarized_{house_id}_{MM}_{YYYY}.csv
+- on_off/on_off_{threshold}_{MM}_{YYYY}.pkl
+- matches/matches_{house_id}_{MM}_{YYYY}.pkl
+- summarized/summarized_{house_id}_{MM}_{YYYY}.pkl
 """
 import os
 import pandas as pd
@@ -31,7 +31,7 @@ def save_dataframe_by_month(
         folder_name: Subfolder name (e.g., 'on_off', 'matches')
         file_prefix: File name prefix (e.g., 'on_off_1500', 'matches_140')
         timestamp_col: Column to use for month grouping
-        date_format: Date format for CSV output
+        date_format: Date format (unused, kept for compatibility)
         show_progress: Show tqdm progress bar
 
     Returns:
@@ -61,8 +61,8 @@ def save_dataframe_by_month(
         year = period.year
         group = group.drop(columns=['_year_month'])
 
-        monthly_file = os.path.join(folder_path, f"{file_prefix}_{month:02d}_{year}.csv")
-        group.to_csv(monthly_file, index=False, date_format=date_format)
+        monthly_file = os.path.join(folder_path, f"{file_prefix}_{month:02d}_{year}.pkl")
+        group.to_pickle(monthly_file)
         months_saved += 1
 
     return months_saved
@@ -70,19 +70,19 @@ def save_dataframe_by_month(
 
 def load_dataframe_from_folder(
     folder_path: str,
-    file_pattern: str = "*.csv",
+    file_pattern: str = "*.pkl",
     parse_dates: Optional[list] = None,
     dayfirst: bool = True,
     show_progress: bool = False
 ) -> pd.DataFrame:
     """
-    Load and concatenate all CSV files from a folder.
+    Load and concatenate all pkl files from a folder.
 
     Args:
-        folder_path: Path to folder containing CSV files
-        file_pattern: Glob pattern for files (default: *.csv)
-        parse_dates: Columns to parse as dates
-        dayfirst: Whether dates are day-first format
+        folder_path: Path to folder containing pkl files
+        file_pattern: Glob pattern for files (default: *.pkl)
+        parse_dates: Columns to parse as dates (unused, kept for compatibility)
+        dayfirst: Whether dates are day-first format (unused, kept for compatibility)
         show_progress: Show tqdm progress bar
 
     Returns:
@@ -100,7 +100,7 @@ def load_dataframe_from_folder(
 
     dfs = []
     for f in iterator:
-        df = pd.read_csv(f, parse_dates=parse_dates, dayfirst=dayfirst)
+        df = pd.read_pickle(f)
         dfs.append(df)
 
     return pd.concat(dfs, ignore_index=True)
@@ -132,7 +132,7 @@ def find_output_path(
         return folder_path
 
     # Fall back to single file (old structure)
-    file_path = Path(output_dir) / f"{file_prefix}.csv"
+    file_path = Path(output_dir) / f"{file_prefix}.pkl"
     if file_path.is_file():
         return file_path
 

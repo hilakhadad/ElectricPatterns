@@ -23,30 +23,30 @@ DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "OUTPUT"
 
 
 def list_available_houses(input_dir: Path) -> list:
-    """List all available houses (looks for subfolders containing CSV files)."""
+    """List all available houses (looks for subfolders containing pkl files)."""
     houses = []
     if input_dir.exists():
         # Look for subfolders (each subfolder is a house)
         for folder in input_dir.iterdir():
             if folder.is_dir():
-                # Check if folder contains CSV files
-                csv_files = list(folder.glob("*.csv"))
-                if csv_files:
+                # Check if folder contains pkl files
+                pkl_files = list(folder.glob("*.pkl"))
+                if pkl_files:
                     houses.append(folder.name)
     return sorted(houses)
 
 
 def load_house_data_from_folder(house_folder: Path):
-    """Load and concatenate all CSV files from a house folder."""
+    """Load and concatenate all pkl files from a house folder."""
     import pandas as pd
 
-    csv_files = sorted(house_folder.glob("*.csv"))
-    if not csv_files:
+    pkl_files = sorted(house_folder.glob("*.pkl"))
+    if not pkl_files:
         return None
 
     dfs = []
-    for f in csv_files:
-        df = pd.read_csv(f, parse_dates=['timestamp'])
+    for f in pkl_files:
+        df = pd.read_pickle(f)
         dfs.append(df)
 
     data = pd.concat(dfs, ignore_index=True)
@@ -191,7 +191,7 @@ def main():
     parser = argparse.ArgumentParser(description='Analyze household power data')
     parser.add_argument('--house', type=str, help='Specific house ID to analyze')
     parser.add_argument('--list', action='store_true', help='List available houses')
-    parser.add_argument('--input-dir', type=str, help='Input directory with CSV files')
+    parser.add_argument('--input-dir', type=str, help='Input directory with pkl files')
     parser.add_argument('--output-dir', type=str, help='Output directory for reports')
 
     args = parser.parse_args()

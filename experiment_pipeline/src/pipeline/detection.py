@@ -82,7 +82,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             return
         monthly_files = [input_path]
     elif data_path.is_dir():
-        monthly_files = sorted(data_path.glob("*.csv"))
+        monthly_files = sorted(data_path.glob("*.pkl"))
     else:
         monthly_files = [data_path]
 
@@ -98,7 +98,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             parts = monthly_file.stem.split('_')
             if len(parts) >= 3:
                 file_month, file_year = int(parts[-2]), int(parts[-1])
-                output_file = Path(f"{on_off_dir}/on_off_{threshold}_{file_month:02d}_{file_year}.csv")
+                output_file = Path(f"{on_off_dir}/on_off_{threshold}_{file_month:02d}_{file_year}.pkl")
                 if output_file.exists():
                     logger.info(f"Skipping {file_month:02d}/{file_year} - on_off file already exists")
                     continue
@@ -164,8 +164,8 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             year = filtered['start'].iloc[0].year
 
         # Save this month's results
-        output_file = f"{on_off_dir}/on_off_{threshold}_{month:02d}_{year}.csv"
-        filtered.to_csv(output_file, index=False, date_format='%d/%m/%Y %H:%M')
+        output_file = f"{on_off_dir}/on_off_{threshold}_{month:02d}_{year}.pkl"
+        filtered.to_pickle(output_file)
         total_events += len(filtered)
 
     logger.info(f"Saved {total_events} events to {on_off_dir}/ ({len(monthly_files)} monthly files)")

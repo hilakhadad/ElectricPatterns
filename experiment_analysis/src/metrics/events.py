@@ -25,11 +25,11 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str):
     if subdir.exists():
         files = sorted(subdir.glob(pattern))
         if files:
-            return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+            return pd.concat([pd.read_pickle(f) for f in files], ignore_index=True)
     # Fallback: try files directly in house_dir
     files = list(house_dir.glob(pattern))
     if files:
-        return pd.read_csv(files[0])
+        return pd.read_pickle(files[0])
     return None
 
 
@@ -56,7 +56,7 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
     house_dir = _get_house_dir(experiment_dir, house_id, run_number)
 
     # Load on_off log
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.csv")
+    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         metrics['error'] = 'No on_off file found'
         return metrics
@@ -171,8 +171,8 @@ def analyze_unmatched_events(experiment_dir: Path, house_id: str,
     house_dir = _get_house_dir(experiment_dir, house_id, run_number)
 
     # Load unmatched files
-    un_on = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.csv")
-    un_off = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.csv")
+    un_on = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
+    un_off = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
 
     if un_on is not None:
         metrics['unmatched_on_count'] = len(un_on)

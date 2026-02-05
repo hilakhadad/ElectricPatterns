@@ -25,11 +25,11 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str) -> Option
     if subdir.exists():
         files = sorted(subdir.glob(pattern))
         if files:
-            return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+            return pd.concat([pd.read_pickle(f) for f in files], ignore_index=True)
     # Fallback: try files directly in house_dir
     files = list(house_dir.glob(pattern))
     if files:
-        return pd.read_csv(files[0])
+        return pd.read_pickle(files[0])
     return None
 
 
@@ -56,7 +56,7 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
     house_dir = _get_house_dir(experiment_dir, house_id, run_number)
 
     # Load on_off log
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.csv")
+    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         metrics['error'] = 'No on_off file found'
         return metrics
@@ -98,7 +98,7 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         )
 
     # Load matches file for tag analysis
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.csv")
+    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is not None:
         metrics['total_matches'] = len(matches_df)
 
@@ -194,8 +194,8 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
                 }
 
     # Unmatched analysis
-    unmatched_on_df = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.csv")
-    unmatched_off_df = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.csv")
+    unmatched_on_df = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
+    unmatched_off_df = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
 
     if unmatched_on_df is not None:
         metrics['unmatched_on_total_power'] = unmatched_on_df['magnitude'].abs().sum() if 'magnitude' in unmatched_on_df.columns else 0
@@ -205,9 +205,9 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         metrics['unmatched_off_total_power'] = unmatched_off_df['magnitude'].abs().sum() if 'magnitude' in unmatched_off_df.columns else 0
 
     # Remainder events (from partial matching)
-    remainder_files = list(house_dir.glob("remainder_*.csv"))
+    remainder_files = list(house_dir.glob("remainder_*.pkl"))
     if remainder_files:
-        remainder_df = pd.read_csv(remainder_files[0])
+        remainder_df = pd.read_pickle(remainder_files[0])
         metrics['remainder_events'] = len(remainder_df)
         metrics['remainder_total_power'] = remainder_df['magnitude'].abs().sum() if 'magnitude' in remainder_df.columns else 0
 
