@@ -8,11 +8,12 @@ from typing import Optional, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+from tqdm import tqdm
 
 from .config import (
     DATA_DIR,
     MAX_DAYS_PER_REQUEST,
-    NUMBER_OF_YEARS,
+    START_DATE,
     MAX_CONCURRENT_REQUESTS,
 )
 from .api import create_session, fetch_time_range, format_timestamp
@@ -113,20 +114,45 @@ def update_house(
     house_id: str,
     token: str,
     data_dir: Path = DATA_DIR,
-    use_parallel: bool = True
+    use_parallel: bool = True,
+    backup_token: Optional[str] = None
 ) -> bool:
     """
     Update data for a single house.
 
+    Fetches data incrementally and saves after each week to avoid losing
+    progress if the job times out.
+
+    If a backup_token is provided and different from the primary token,
+    it will be used INSTEAD of the primary token (not as fallback).
+
     Returns True if successful, False otherwise.
+    """
+    # Use backup token as primary if available and different
+    if backup_token and backup_token != token:
+        logger.info(f"House {house_id}: Using backup token instead of primary")
+        token_to_use = backup_token
+    else:
+        token_to_use = token
+
+    return _try_update_house(house_id, token_to_use, data_dir)
+
+
+def _try_update_house(
+    house_id: str,
+    token: str,
+    data_dir: Path = DATA_DIR
+) -> bool:
+    """
+    Internal function to attempt updating a house with a single token.
     """
     file_path = get_file_path(house_id, data_dir)
     latest_timestamp = get_latest_timestamp(file_path)
 
     # Determine time range
     if latest_timestamp is None:
-        from_time = int((datetime.now() - timedelta(days=365 * NUMBER_OF_YEARS)).timestamp())
-        logger.info(f"House {house_id}: No existing data, fetching {NUMBER_OF_YEARS} years")
+        from_time = int(START_DATE.timestamp())
+        logger.info(f"House {house_id}: No existing data, fetching from {START_DATE.strftime('%Y-%m-%d')}")
     else:
         from_time = int((latest_timestamp + timedelta(minutes=1)).timestamp())
         logger.info(f"House {house_id}: Updating from {latest_timestamp}")
@@ -138,16 +164,35 @@ def update_house(
         logger.info(f"House {house_id}: Already up to date")
         return True
 
-    # Fetch data
-    if use_parallel:
-        data = fetch_parallel(token, from_time, to_time)
-    else:
-        data = fetch_sequential(token, from_time, to_time)
+    # Generate time ranges and fetch incrementally
+    time_ranges = generate_time_ranges(from_time, to_time)
+    logger.info(f"House {house_id}: {len(time_ranges)} weeks to fetch")
 
-    if data is None or data.empty:
+    session = create_session()
+    total_rows_saved = 0
+
+    pbar = tqdm(
+        enumerate(time_ranges, 1),
+        total=len(time_ranges),
+        desc=f"House {house_id}",
+        unit="week",
+        ncols=80
+    )
+
+    for i, (start, end) in pbar:
+        df = fetch_time_range(session, token, start, end)
+
+        if df is not None and not df.empty:
+            # Save immediately after each week
+            rows = save_data(house_id, df, data_dir)
+            total_rows_saved = rows
+            pbar.set_postfix(rows=rows)
+        else:
+            pbar.set_postfix(status="empty")
+
+    if total_rows_saved == 0:
         logger.warning(f"House {house_id}: No new data fetched")
         return False
 
-    # Save data
-    save_data(house_id, data, data_dir)
+    logger.info(f"House {house_id}: Completed! Total rows: {total_rows_saved}")
     return True

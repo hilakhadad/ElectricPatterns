@@ -2,6 +2,7 @@
 File storage operations for household data.
 """
 import logging
+import warnings
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def get_file_path(house_id: str, data_dir: Path = DATA_DIR) -> Path:
     """Get the file path for a house's data."""
-    return data_dir / f"{house_id}.pkl"
+    return data_dir / f"{house_id}.csv"
 
 
 def get_latest_timestamp(file_path: Path) -> Optional[datetime]:
@@ -23,7 +24,7 @@ def get_latest_timestamp(file_path: Path) -> Optional[datetime]:
     try:
         if not file_path.exists():
             return None
-        df = pd.read_pickle(file_path)
+        df = pd.read_csv(file_path, parse_dates=['timestamp'])
         if df.empty:
             return None
         return df["timestamp"].max()
@@ -38,19 +39,21 @@ def save_data(
     data_dir: Path = DATA_DIR
 ) -> int:
     """
-    Save new data, merging with existing if present.
+    Save new data as CSV, merging with existing if present.
 
     Returns the total number of rows saved.
     """
     data_dir.mkdir(parents=True, exist_ok=True)
-    file_path = data_dir / f"{house_id}.pkl"
+    file_path = data_dir / f"{house_id}.csv"
 
     if file_path.exists():
         try:
-            existing = pd.read_pickle(file_path)
+            existing = pd.read_csv(file_path, parse_dates=['timestamp'])
             # Remove legacy 'sum' column if present
             existing = existing.drop(columns=["sum"], errors='ignore')
-            combined = pd.concat([existing, new_data], ignore_index=True)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                combined = pd.concat([existing, new_data], ignore_index=True)
             combined = combined.drop_duplicates(subset="timestamp")
             combined = combined.sort_values("timestamp")
         except Exception as e:
@@ -59,7 +62,7 @@ def save_data(
     else:
         combined = new_data.sort_values("timestamp")
 
-    combined.to_pickle(file_path)
+    combined.to_csv(file_path, index=False)
     logger.info(f"Saved {len(combined)} rows for house {house_id} to {file_path}")
 
     return len(combined)
@@ -81,9 +84,33 @@ def load_house_tokens(path: str) -> list:
     house_tokens = []
     for _, row in df.iterrows():
         house_id = str(row["ID"]).strip()
-        token = str(row["Token"]).strip().lstrip("'")
+        token = str(row["Token"]).strip().lstrip("'").lstrip("=")
         if house_id and token and token != 'nan':
             house_tokens.append((house_id, token))
 
     logger.info(f"Loaded {len(house_tokens)} houses from {path}")
     return house_tokens
+
+
+def load_backup_tokens(path: str) -> dict:
+    """
+    Load backup tokens from CSV file as a dictionary.
+
+    Expected CSV columns: ID, Token
+    Returns dict mapping house_id -> token.
+    """
+    try:
+        df = pd.read_csv(path)
+    except FileNotFoundError:
+        logger.warning(f"Backup token file not found: {path}")
+        return {}
+
+    backup_tokens = {}
+    for _, row in df.iterrows():
+        house_id = str(row["ID"]).strip()
+        token = str(row["Token"]).strip().lstrip("'").lstrip("=")
+        if house_id and token and token != 'nan':
+            backup_tokens[house_id] = token
+
+    logger.info(f"Loaded {len(backup_tokens)} backup tokens from {path}")
+    return backup_tokens

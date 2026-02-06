@@ -53,13 +53,17 @@ def parse_response(data: List) -> Optional[pd.DataFrame]:
     """
     Parse API response data into DataFrame.
 
+    Handles houses with 1, 2, or 3 phases.
     Returns None if data is invalid or empty.
     """
-    if not data or len(data) < 3:
+    if not data or len(data) < 1:
         return None
 
     try:
-        d1, d2, d3 = data[0]["data"], data[1]["data"], data[2]["data"]
+        num_phases = len(data)
+        d1 = data[0]["data"]
+        d2 = data[1]["data"] if num_phases > 1 else None
+        d3 = data[2]["data"] if num_phases > 2 else None
 
         if len(d1) <= 1:
             return None
@@ -72,8 +76,8 @@ def parse_response(data: List) -> Optional[pd.DataFrame]:
             row = [
                 timestamp,
                 None if d1[i].get(key) == 'undef' else d1[i].get(key),
-                None if d2[i].get(key) == 'undef' else d2[i].get(key),
-                None if d3[i].get(key) == 'undef' else d3[i].get(key)
+                None if d2 is None or d2[i].get(key) == 'undef' else d2[i].get(key),
+                None if d3 is None or d3[i].get(key) == 'undef' else d3[i].get(key)
             ]
             rows.append(row)
 
@@ -124,11 +128,24 @@ def fetch_time_range(
             data = json_data.get("data", [])
             df = parse_response(data)
 
-            # Retry on empty response
+            # Check for empty response
             if df is None or df.empty:
+                # Log details to help debug
+                data_len = len(data) if data else 0
+                inner_len = len(data[0].get("data", [])) if data and len(data) > 0 else 0
+
+                # If we got 1-3 arrays with 1 row each, it's legitimately empty (no data for this period)
+                # Don't waste retries on this
+                if data_len >= 1 and inner_len == 1:
+                    logger.info(
+                        f"({format_timestamp(from_time)}): No data for this period (legitimately empty)"
+                    )
+                    return None
+
+                # Otherwise it might be a transient error, retry
                 logger.warning(
                     f"Attempt {attempt}/{MAX_RETRIES} ({format_timestamp(from_time)}): "
-                    f"Empty response, retrying..."
+                    f"Empty response (data_arrays={data_len}, inner_rows={inner_len}), retrying..."
                 )
                 time.sleep(delay)
                 delay = min(delay * 2, MAX_RETRY_DELAY)

@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .config import DATA_DIR, MAX_HOUSE_WORKERS
-from .storage import load_house_tokens
+from .config import DATA_DIR, MAX_HOUSE_WORKERS, TOKEN_FILE, BACKUP_TOKEN_FILE
+from .storage import load_house_tokens, load_backup_tokens
 from .fetcher import update_house
 
-HOUSE_LIST_CSV = "small_mishkit.csv"
+HOUSE_LIST_CSV = str(TOKEN_FILE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 def _update_house_wrapper(args: tuple) -> Tuple[str, bool, str]:
     """Wrapper for update_house that returns status info."""
-    house_id, token, data_dir = args
+    house_id, token, data_dir, backup_token = args
     try:
-        success = update_house(house_id, token, data_dir)
+        success = update_house(house_id, token, data_dir, backup_token=backup_token)
         if success:
             return (house_id, True, "Updated successfully")
         else:
@@ -37,12 +37,16 @@ def _update_house_wrapper(args: tuple) -> Tuple[str, bool, str]:
 def update_all_parallel(
     houses: List[Tuple[str, str]],
     data_dir: Path = DATA_DIR,
-    max_workers: int = MAX_HOUSE_WORKERS
+    max_workers: int = MAX_HOUSE_WORKERS,
+    backup_tokens: dict = None
 ) -> dict:
     """Update all houses in parallel."""
     if not houses:
         logger.warning("No houses to update")
         return {"success": 0, "failed": 0, "total": 0}
+
+    if backup_tokens is None:
+        backup_tokens = {}
 
     logger.info(f"Updating {len(houses)} houses with {max_workers} workers")
     start_time = time.time()
@@ -51,7 +55,7 @@ def update_all_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_house = {
-            executor.submit(_update_house_wrapper, (house_id, token, data_dir)): house_id
+            executor.submit(_update_house_wrapper, (house_id, token, data_dir, backup_tokens.get(house_id))): house_id
             for house_id, token in houses
         }
 
@@ -83,12 +87,16 @@ def update_all_parallel(
 
 def update_all_sequential(
     houses: List[Tuple[str, str]],
-    data_dir: Path = DATA_DIR
+    data_dir: Path = DATA_DIR,
+    backup_tokens: dict = None
 ) -> dict:
     """Update all houses sequentially."""
     if not houses:
         logger.warning("No houses to update")
         return {"success": 0, "failed": 0, "total": 0}
+
+    if backup_tokens is None:
+        backup_tokens = {}
 
     logger.info(f"Updating {len(houses)} houses sequentially")
     start_time = time.time()
@@ -98,7 +106,8 @@ def update_all_sequential(
     for i, (house_id, token) in enumerate(houses, 1):
         logger.info(f"[{i}/{len(houses)}] Processing house {house_id}...")
         try:
-            success = update_house(house_id, token, data_dir)
+            backup_token = backup_tokens.get(house_id)
+            success = update_house(house_id, token, data_dir, backup_token=backup_token)
             if success:
                 results["success"].append(house_id)
             else:
@@ -174,6 +183,10 @@ def main():
         logger.error("No houses to process")
         return
 
+    # Load backup tokens
+    backup_tokens = load_backup_tokens(str(BACKUP_TOKEN_FILE))
+    logger.info(f"Loaded {len(backup_tokens)} backup tokens (used as primary when available)")
+
     # Filter if specified
     if args.filter:
         filter_ids = [x.strip() for x in args.filter.split(",")]
@@ -185,9 +198,9 @@ def main():
 
     # Run update
     if args.sequential:
-        update_all_sequential(houses, data_dir)
+        update_all_sequential(houses, data_dir, backup_tokens)
     else:
-        update_all_parallel(houses, data_dir, args.workers)
+        update_all_parallel(houses, data_dir, args.workers, backup_tokens)
 
 
 if __name__ == "__main__":

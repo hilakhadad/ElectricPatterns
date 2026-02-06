@@ -1,101 +1,113 @@
 # Harvesting Data
 
-Data acquisition module for fetching household power consumption data from the EnergyHive API.
+Fetches household power consumption data from the EnergyHive API.
 
 ## Quick Start
 
 ```bash
-# Parallel update (faster)
+# Update single house
+python -m harvesting_data.fetch_single_house --house 140
+
+# Update all houses (parallel)
 python -m harvesting_data.cli --parallel
 
-# Sequential update (more stable)
-python -m harvesting_data.cli --sequential
-
-# Update specific house
-python -m harvesting_data.cli --house 140
+# On SLURM cluster
+sbatch slurm_fetch_house.sh 140
 ```
 
-## Structure
+## Directory Structure
 
 ```
 harvesting_data/
-├── cli.py                        # Command-line interface
-├── api.py                        # EnergyHive API client
-├── fetcher.py                    # Fetch logic & retry handling
-├── storage.py                    # Data persistence
-├── config.py                     # Configuration constants
-└── batch_update_all_houses.py    # Legacy script (use CLI instead)
+├── README.md
+├── __init__.py          # Package exports
+├── config.py            # Configuration (paths, API settings)
+├── api.py               # EnergyHive API client
+├── fetcher.py           # Fetch logic with retry handling
+├── storage.py           # Data loading/saving
+├── cli.py               # Command-line interface
+├── fetch_single_house.py # Single house fetcher
+├── slurm_fetch_house.sh  # SLURM job script
+└── status.sh             # Check job status
 ```
+
+## Usage
+
+### Command Line
+
+```bash
+# Fetch single house
+python -m harvesting_data.fetch_single_house --house 140
+
+# Fetch all houses
+python -m harvesting_data.cli --parallel    # Faster
+python -m harvesting_data.cli --sequential  # More stable
+python -m harvesting_data.cli --house 140   # Specific house
+```
+
+### SLURM Cluster
+
+```bash
+# Submit single house job
+sbatch slurm_fetch_house.sh 140
+
+# Check status
+bash status.sh
+```
+
+### In Code
+
+```python
+from harvesting_data import update_house, load_backup_tokens
+
+# Load tokens (backup tokens used as primary)
+tokens = load_backup_tokens()
+
+# Update a house
+update_house("140", tokens["140"])
+```
+
+## Token Files
+
+| File | Description |
+|------|-------------|
+| `mishkit_backup.csv` | **Primary** token source (ID, Token columns) |
+| `mishkit.csv` | Fallback token source |
+
+The system uses `mishkit_backup.csv` as the primary token source when available.
 
 ## Configuration
 
 Edit `config.py`:
 
 ```python
-DATA_DIR = "../INPUT/HouseholdData"  # Output directory
-MAX_DAYS_PER_REQUEST = 30            # API limit
-MAX_CONCURRENT_REQUESTS = 5          # Parallel limit
-REQUEST_TIMEOUT = 60                 # Seconds
-API_BASE_URL = "https://..."         # EnergyHive API
+DATA_DIR = Path("../INPUT/UpdatatedHouseData")
+TOKEN_FILE = Path("../INPUT/mishkit.csv")
+BACKUP_TOKEN_FILE = Path("../INPUT/mishkit_backup.csv")
+
+MAX_DAYS_PER_REQUEST = 30      # API limit per request
+MAX_CONCURRENT_REQUESTS = 5    # Parallel fetch limit
+REQUEST_TIMEOUT = 60           # Seconds
+MAX_RETRIES = 5                # Retry count on failure
 ```
 
-## House Tokens
+## Output Format
 
-Create `house_tokens.csv` with house IDs and API tokens:
+Data saved to `INPUT/UpdatatedHouseData/{house_id}.csv`:
 
 ```csv
-house_id,token
-140,abc123...
-125,def456...
+timestamp,1,2,3
+2024-01-01 00:00:00,1234.5,2345.6,3456.7
+2024-01-01 00:01:00,1235.0,2346.0,3457.0
 ```
 
-## Output
-
-Data is saved to `INPUT/HouseholdData/`:
-
-```
-INPUT/HouseholdData/
-├── 140/                          # Monthly folder structure
-│   ├── 140_01_2024.csv
-│   ├── 140_02_2024.csv
-│   └── ...
-├── 125/
-│   └── ...
-└── house_tokens.csv              # Token configuration
-```
-
-## CSV Format
-
-```csv
-timestamp,w1,w2,w3
-01/01/2024 00:00,1234.5,2345.6,3456.7
-01/01/2024 00:01,1235.0,2346.0,3457.0
-...
-```
-
-- `timestamp`: DD/MM/YYYY HH:MM format
-- `w1`, `w2`, `w3`: Power consumption per phase (Watts)
-
-## Usage in Code
-
-```python
-from harvesting_data.fetcher import update_house
-from harvesting_data.storage import load_house_tokens
-
-# Load tokens
-tokens = load_house_tokens("house_tokens.csv")
-
-# Update single house
-update_house(
-    house_id="140",
-    token=tokens["140"],
-    data_dir="../INPUT/HouseholdData"
-)
-```
+- `timestamp`: YYYY-MM-DD HH:MM:SS format
+- `1`, `2`, `3`: Power per phase (Watts)
 
 ## Features
 
-- **Incremental updates**: Only fetches new data since last update
-- **Retry logic**: Exponential backoff on failures
+- **Incremental updates**: Only fetches data since last timestamp
+- **Retry logic**: Exponential backoff on API failures
 - **Parallel fetching**: Multiple houses simultaneously
-- **Time range splitting**: Handles large date ranges
+- **Empty response handling**: Detects legitimately empty periods vs errors
+- **Backup tokens**: Uses backup token file as primary source
