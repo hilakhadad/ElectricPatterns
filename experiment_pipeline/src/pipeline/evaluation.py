@@ -46,30 +46,30 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
         logger.error(f"Summarized folder not found: {summarized_dir}")
         return None
 
-    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
     if not summarized_files:
         logger.error(f"No summarized files found in {summarized_dir}")
         return None
 
     try:
         # Load and concatenate current data
-        current_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in summarized_files], ignore_index=True)
+        current_data = pd.concat([pd.read_pickle(f) for f in summarized_files], ignore_index=True)
 
         # Load baseline data
         if run_number == 0:
             baseline_data = current_data
         else:
-            baseline_files = sorted(baseline_dir.glob(f"summarized_{house_id}_*.csv"))
-            baseline_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in baseline_files], ignore_index=True)
+            baseline_files = sorted(baseline_dir.glob(f"summarized_{house_id}_*.pkl"))
+            baseline_data = pd.concat([pd.read_pickle(f) for f in baseline_files], ignore_index=True)
 
         # Load previous run data
         prev_data = None
         prev_eval = None
         if run_number > 0:
             if prev_summarized_dir and prev_summarized_dir.is_dir():
-                prev_files = sorted(prev_summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+                prev_files = sorted(prev_summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
                 if prev_files:
-                    prev_data = pd.concat([pd.read_csv(f, parse_dates=['timestamp']) for f in prev_files], ignore_index=True)
+                    prev_data = pd.concat([pd.read_pickle(f) for f in prev_files], ignore_index=True)
             if prev_eval_path and prev_eval_path.exists():
                 prev_eval = pd.read_csv(prev_eval_path)
     except Exception as e:

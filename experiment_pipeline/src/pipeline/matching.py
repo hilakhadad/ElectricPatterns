@@ -115,12 +115,12 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
 
             for on_event in on_events:
                 available_off = off_events_df[~off_events_df['event_id'].isin(used_off_ids)]
-                matched_off, tag = find_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
+                matched_off, tag, correction = find_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
 
                 if matched_off is not None:
                     off_id = matched_off['event_id']
                     used_off_ids.add(off_id)
-                    matches.append(_format_match(on_event, matched_off, tag, phase))
+                    matches.append(_format_match(on_event, matched_off, tag, phase, correction))
                     matched_event_ids.add(on_event['event_id'])
                     matched_event_ids.add(off_id)
                 else:
@@ -136,12 +136,12 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
                 still_unmatched_on.append(on_event)
                 continue
 
-            matched_off, tag = find_noisy_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
+            matched_off, tag, correction = find_noisy_match(data, on_event, available_off, max_time_diff=6, max_magnitude_diff=350, logger=logger)
 
             if matched_off is not None:
                 off_id = matched_off['event_id']
                 used_off_ids.add(off_id)
-                matches.append(_format_match(on_event, matched_off, tag, on_event['phase']))
+                matches.append(_format_match(on_event, matched_off, tag, on_event['phase'], correction))
                 matched_event_ids.add(on_event['event_id'])
                 matched_event_ids.add(off_id)
             else:
@@ -160,7 +160,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
                 final_unmatched_on.append(on_event)
                 continue
 
-            matched_off, tag, remainder = find_partial_match(
+            matched_off, tag, remainder, correction = find_partial_match(
                 data, on_event, available_off,
                 max_time_diff=6, max_magnitude_diff=350, logger=logger
             )
@@ -168,7 +168,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
             if matched_off is not None:
                 off_id = matched_off['event_id']
                 used_off_ids.add(off_id)
-                matches.append(_format_partial_match(on_event, matched_off, tag, on_event['phase']))
+                matches.append(_format_partial_match(on_event, matched_off, tag, on_event['phase'], correction))
                 matched_event_ids.add(on_event['event_id'])
                 matched_event_ids.add(off_id)
 
@@ -214,9 +214,26 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
     logger.info(f"Matching completed for house {house_id}, run {run_number}")
 
 
-def _format_match(on_event, off_event, tag, phase):
-    """Format a matched event pair for saving."""
+def _format_match(on_event, off_event, tag, phase, correction=0):
+    """Format a matched event pair for saving.
+
+    Args:
+        on_event: ON event dict
+        off_event: OFF event dict or Series
+        tag: Match tag (SPIKE, STABLE, CLOSE-MAG, NOISY, CORRECTED)
+        phase: Phase name
+        correction: Magnitude correction applied (0 if none)
+    """
     duration = (off_event['end'] - on_event['start']).total_seconds() / 60
+
+    # Apply correction to magnitude if needed
+    on_magnitude = on_event['magnitude']
+    off_magnitude = off_event['magnitude']
+    if correction > 0:
+        # Reduce both magnitudes by correction amount
+        on_magnitude = abs(on_magnitude) - correction
+        off_magnitude = -(abs(off_magnitude) - correction)  # OFF events are negative
+
     return {
         'on_event_id': on_event['event_id'],
         'off_event_id': off_event['event_id'],
@@ -225,18 +242,27 @@ def _format_match(on_event, off_event, tag, phase):
         'off_start': off_event['start'],
         'off_end': off_event['end'],
         'duration': duration,
-        'on_magnitude': on_event['magnitude'],
-        'off_magnitude': off_event['magnitude'],
+        'on_magnitude': on_magnitude,
+        'off_magnitude': off_magnitude,
+        'correction': correction,
         'tag': tag,
         'phase': phase
     }
 
 
-def _format_partial_match(on_event, off_event, tag, phase):
-    """Format a partial match - uses min magnitude for the match."""
+def _format_partial_match(on_event, off_event, tag, phase, correction=0):
+    """Format a partial match - uses min magnitude for the match.
+
+    Args:
+        on_event: ON event dict
+        off_event: OFF event dict or Series
+        tag: Match tag (PARTIAL, CORRECTED)
+        phase: Phase name
+        correction: Magnitude correction applied (0 if none)
+    """
     on_mag = abs(on_event['magnitude'])
     off_mag = abs(off_event['magnitude'])
-    match_magnitude = min(on_mag, off_mag)
+    match_magnitude = min(on_mag, off_mag) - correction  # Apply correction
 
     duration = (off_event['end'] - on_event['start']).total_seconds() / 60
     return {
@@ -251,6 +277,7 @@ def _format_partial_match(on_event, off_event, tag, phase):
         'off_magnitude': match_magnitude,
         'original_on_magnitude': on_mag,
         'original_off_magnitude': off_mag,
+        'correction': correction,
         'tag': tag,
         'phase': phase
     }

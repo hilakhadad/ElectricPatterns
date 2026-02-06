@@ -9,9 +9,14 @@ Finds matches where:
 Performance optimizations:
 - Pre-filter candidates by magnitude similarity (skip mismatches early)
 - Sort by magnitude similarity first to find best matches faster
+
+Match tags combine magnitude quality and duration:
+- Magnitude quality: EXACT (<50W), CLOSE (50-100W), APPROX (100-200W), LOOSE (200-350W)
+- Duration: SPIKE (≤2min), QUICK (<5min), MEDIUM (5-30min), EXTENDED (>30min)
+- Example: EXACT-SPIKE, CLOSE-MEDIUM, APPROX-EXTENDED-CORRECTED
 """
 import pandas as pd
-from .validator import is_valid_event_removal
+from .validator import is_valid_event_removal, build_match_tag
 
 # Maximum magnitude difference to even consider a match
 MAX_MAGNITUDE_DIFF_FILTER = 350  # watts
@@ -32,7 +37,9 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
 
     Matches are classified as:
     - SPIKE: ON and OFF are within 2 minutes of each other
-    - NON-M: Power is stable between ON and OFF (deviation < max_magnitude_diff)
+    - STABLE: Power is stable between ON and OFF
+    - CLOSE-MAG: ON and OFF magnitudes match closely
+    - CORRECTED: Match required magnitude correction
 
     Args:
         data: DataFrame with power data
@@ -43,7 +50,8 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
         logger: Logger instance
 
     Returns:
-        Tuple of (matched_off_event, tag) or (None, None) if no match found
+        Tuple of (matched_off_event, tag, correction) or (None, None, 0) if no match found
+        - correction: Amount to reduce match magnitude by (0 if no correction needed)
     """
     phase = on_event['phase']
     on_id = on_event['event_id']
@@ -92,32 +100,39 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
             off_end = off_event['end']
             off_start = off_event['start']
             off_id = off_event['event_id']
+            off_magnitude = abs(off_event['magnitude'])
 
-            # Check for SPIKE match (very short duration)
-            if (off_end - on_start).total_seconds() / 60 <= 2:
-                if is_valid_event_removal(data, on_event, off_event, logger):
-                    logger.info(f"Matched SPIKE: {on_id} <-> {off_id}")
-                    return off_event, "SPIKE"
+            # Calculate duration for tagging
+            duration_minutes = (off_end - on_start).total_seconds() / 60
+
+            # Check for very short duration (spike) - skip stability check
+            if duration_minutes <= 2:
+                is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
+                if is_valid:
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    logger.info(f"Matched {tag}: {on_id} <-> {off_id}" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
+                    return off_event, tag, correction
                 else:
-                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals")
+                    # Rejection reason already logged by validator
                     continue
 
             # Get magnitude difference for this candidate
-            off_magnitude = abs(off_event['magnitude'])
             mag_diff = abs(on_magnitude - off_magnitude)
 
             # Small magnitude difference fallback: if magnitudes match very closely,
             # skip stability check and rely only on validator
             # This handles cases where other devices cause fluctuations during the event
             if mag_diff <= SMALL_MAGNITUDE_DIFF_THRESHOLD:
-                if is_valid_event_removal(data, on_event, off_event, logger):
-                    logger.info(f"Matched CLOSE-MAG: {on_id} <-> {off_id} (diff={mag_diff:.0f}W)")
-                    return off_event, "NON-M"  # Tag as NON-M for compatibility
+                is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
+                if is_valid:
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    logger.info(f"Matched {tag}: {on_id} <-> {off_id} (diff={mag_diff:.0f}W)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
+                    return off_event, tag, correction
                 else:
-                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals (close-mag fallback)")
+                    # Rejection reason already logged by validator
                     continue
 
-            # Check for NON-M match (stable power between events)
+            # Check for stable power between events
             event_range = (data['timestamp'] > on_end) & (data['timestamp'] < off_start)
             phase_data = data.loc[event_range, phase]
 
@@ -129,12 +144,18 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
             min_deviation = (phase_data - baseline_power).min()
 
             if abs(max_deviation) <= max_magnitude_diff and abs(min_deviation) <= max_magnitude_diff:
-                if is_valid_event_removal(data, on_event, off_event, logger):
-                    logger.info(f"Matched NON-M: {on_id} <-> {off_id} (window={window_minutes}m)")
-                    return off_event, "NON-M"
+                is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
+                if is_valid:
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    logger.info(f"Matched {tag}: {on_id} <-> {off_id} (window={window_minutes}m)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
+                    return off_event, tag, correction
                 else:
-                    logger.debug(f"Skipping {on_id} <-> {off_id}: negative residuals")
+                    # Rejection reason already logged by validator
                     continue
+            else:
+                # Log stability rejection (power fluctuations between ON and OFF)
+                # Include baseline and threshold for context
+                logger.info(f"REJECTED {on_id}-{off_id}: unstable_power (max_dev={max_deviation:.0f}W, min_dev={min_deviation:.0f}W, threshold={max_magnitude_diff}W, baseline={baseline_power:.0f}W)")
 
     logger.debug(f"No match found for {on_id}")
-    return None, None
+    return None, None, 0
