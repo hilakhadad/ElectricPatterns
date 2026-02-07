@@ -8,17 +8,18 @@ Usage:
     python run_analysis.py --full             # Full mode with pattern analysis
     python run_analysis.py --houses 1234,5678 # Analyze specific houses from latest
     python run_analysis.py --experiment <path> # Analyze specific experiment
+    python run_analysis.py --pre-analysis <path> # Include pre-analysis quality scores
 
 Examples:
     python run_analysis.py
     python run_analysis.py --full
     python run_analysis.py --houses 1234,5678
     python run_analysis.py --experiment ../experiment_pipeline/OUTPUT/experiment_20240115_120000
+    python run_analysis.py --pre-analysis ../house_analysis/OUTPUT/analyses.json
 """
 import sys
 import os
 import time
-import json
 from pathlib import Path
 from datetime import datetime
 import argparse
@@ -28,28 +29,8 @@ script_dir = Path(__file__).parent
 src_dir = script_dir.parent / "src"
 sys.path.insert(0, str(src_dir))
 
-from reports.experiment_report import analyze_experiment_house, generate_experiment_report
-from reports.aggregate_report import aggregate_experiment_results, generate_summary_report, create_comparison_table
-from visualization.html_report import generate_html_report, generate_house_html_report
-
-
-def _save_analysis_json(analysis: dict, output_path: Path):
-    """Save analysis data to JSON for pattern plot generation."""
-    # Convert datetime objects to strings for JSON serialization
-    def serialize(obj):
-        if hasattr(obj, 'isoformat'):
-            return obj.isoformat()
-        elif hasattr(obj, 'tolist'):  # numpy arrays
-            return obj.tolist()
-        elif hasattr(obj, 'item'):  # numpy scalars
-            return obj.item()
-        return str(obj)
-
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(analysis, f, default=serialize, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"  Warning: Could not save JSON for house {analysis.get('house_id')}: {e}")
+from reports.aggregate_report import aggregate_experiment_results, generate_summary_report, create_comparison_table, load_pre_analysis_scores
+from visualization.html_report import generate_html_report
 
 
 def find_latest_experiment() -> Path:
@@ -115,6 +96,8 @@ def main():
                         help='Fast mode: skip expensive pattern analysis for quicker results')
     parser.add_argument('--full', action='store_true',
                         help='Full mode: include pattern analysis (slower but complete)')
+    parser.add_argument('--pre-analysis', type=str, default=None,
+                        help='Path to house_analysis JSON file to load pre-analysis quality scores')
 
     args = parser.parse_args()
 
@@ -150,28 +133,45 @@ def main():
     run_output_dir = output_dir / f"analysis_{experiment_name}_{timestamp}"
     run_output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Experiment Analysis")
-    print(f"=" * 60)
-    print(f"Experiment directory: {experiment_dir}")
-    print(f"Output directory: {run_output_dir}")
-    print()
+    print(f"Experiment Analysis v2.7 (comprehensive None protection)", flush=True)
+    print(f"=" * 60, flush=True)
+    print(f"Experiment directory: {experiment_dir}", flush=True)
+    print(f"Output directory: {run_output_dir}", flush=True)
+    print(flush=True)
 
-    # Run aggregate analysis
+    # Load pre-analysis quality scores if provided
+    pre_analysis_scores = None
+    if args.pre_analysis:
+        pre_analysis_path = Path(args.pre_analysis).resolve()
+        if pre_analysis_path.exists():
+            pre_analysis_scores = load_pre_analysis_scores(pre_analysis_path)
+        else:
+            print(f"Warning: Pre-analysis file not found: {pre_analysis_path}")
+
+    # Create house reports directory BEFORE analysis (for incremental saving)
+    house_reports_dir = run_output_dir / "house_reports"
+    house_reports_dir.mkdir(exist_ok=True)
+
+    # Run aggregate analysis with incremental saving
     # --full overrides --fast (which is now default)
     fast_mode = args.fast and not args.full
     mode_str = " (FAST MODE)" if fast_mode else " (FULL MODE - with patterns)"
-    print(f"Analyzing houses...{mode_str}")
+    print(f"Analyzing houses...{mode_str}", flush=True)
+    print(f"Per-house reports will be saved incrementally to: {house_reports_dir}", flush=True)
     analysis_start = time.time()
     analyses = aggregate_experiment_results(
         experiment_dir,
         house_ids=house_ids,
         max_iterations=args.max_iterations,
-        fast_mode=fast_mode
+        fast_mode=fast_mode,
+        pre_analysis_scores=pre_analysis_scores,
+        incremental_output_dir=house_reports_dir  # Save reports as each house completes
     )
     analysis_time = time.time() - analysis_start
 
     valid_analyses = [a for a in analyses if a.get('status') != 'no_data']
     print(f"Found data for {len(valid_analyses)} houses (took {analysis_time:.1f}s)")
+    print(f"Per-house reports already saved to: {house_reports_dir}")
     print()
 
     if not valid_analyses:
@@ -195,33 +195,9 @@ def main():
     comparison_df.to_csv(csv_path, index=False)
     print(f"  Saved: {csv_path} ({time.time()-t0:.1f}s)")
 
-    # Generate per-house reports (text and HTML)
-    print(f"Generating per-house reports ({len(valid_analyses)} houses)...")
-    t0 = time.time()
-    house_reports_dir = run_output_dir / "house_reports"
-    house_reports_dir.mkdir(exist_ok=True)
-
-    for i, analysis in enumerate(valid_analyses, 1):
-        house_id = analysis.get('house_id', 'unknown')
-
-        # Text report
-        report_text = generate_experiment_report(analysis)
-        report_path = house_reports_dir / f"house_{house_id}.txt"
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(report_text)
-
-        # HTML report
-        html_report_path = house_reports_dir / f"house_{house_id}.html"
-        generate_house_html_report(analysis, str(html_report_path))
-
-        # JSON data (for pattern plot generation) - save in same folder as txt/html
-        json_path = house_reports_dir / f"house_{house_id}_analysis.json"
-        _save_analysis_json(analysis, json_path)
-
-        if i % 10 == 0:
-            print(f"  Progress: {i}/{len(valid_analyses)} house reports generated...")
-
-    print(f"  Saved {len(valid_analyses)} reports (txt + html) to {house_reports_dir} ({time.time()-t0:.1f}s)")
+    # Per-house reports were already saved incrementally during analysis
+    saved_reports = list(house_reports_dir.glob("house_*.html"))
+    print(f"Per-house reports: {len(saved_reports)} HTML files already saved to {house_reports_dir}")
 
     # Generate HTML report
     print("Generating HTML report...")
