@@ -133,7 +133,7 @@ def main():
     run_output_dir = output_dir / f"analysis_{experiment_name}_{timestamp}"
     run_output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Experiment Analysis v2.7 (comprehensive None protection)", flush=True)
+    print(f"Experiment Analysis v2.8 (HTML at end only)", flush=True)
     print(f"=" * 60, flush=True)
     print(f"Experiment directory: {experiment_dir}", flush=True)
     print(f"Output directory: {run_output_dir}", flush=True)
