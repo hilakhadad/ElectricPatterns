@@ -9,9 +9,13 @@ Finds matches where:
 Performance optimizations:
 - Pre-filter candidates by magnitude similarity in initial query
 - Sort by magnitude similarity first to find best matches faster
+
+Match tags combine NOISY prefix with magnitude quality and duration:
+- Format: NOISY-{magnitude_quality}-{duration}[-CORRECTED]
+- Example: NOISY-EXACT-MEDIUM, NOISY-CLOSE-EXTENDED-CORRECTED
 """
 import pandas as pd
-from .validator import is_valid_event_removal
+from .validator import is_valid_event_removal, build_match_tag
 
 
 def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
@@ -39,7 +43,8 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
         logger: Logger instance
 
     Returns:
-        Tuple of (matched_off_event, "NOISY") or (None, None) if no match found
+        Tuple of (matched_off_event, tag, correction) or (None, None, 0) if no match found
+        - correction: Amount to reduce match magnitude by (0 if no correction needed)
     """
     phase = on_event['phase']
     on_id = on_event['event_id']
@@ -90,7 +95,8 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
             min_allowed = baseline_power - 200
 
             if min_power < min_allowed:
-                logger.debug(f"[Stage 2] Rejected {on_id}-{off_id}: power dropped below baseline")
+                drop_amount = min_allowed - min_power
+                logger.info(f"REJECTED {on_id}-{off_id}: power_drop (min={min_power:.0f}W, allowed={min_allowed:.0f}W, drop={drop_amount:.0f}W, baseline={baseline_power:.0f}W)")
                 continue
 
             # Validate that removal won't create negative values
@@ -104,11 +110,16 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
                 'event_id': on_id
             }
 
-            if not is_valid_event_removal(data, on_event_dict, off_event_dict, logger):
-                logger.debug(f"[Stage 2] Rejected {on_id}-{off_id}: negative residuals")
+            is_valid, correction = is_valid_event_removal(data, on_event_dict, off_event_dict, logger)
+            if not is_valid:
+                # Rejection reason already logged by validator
                 continue
 
-            logger.info(f"Matched NOISY: {on_id} <-> {off_id} (window={window_minutes}m)")
-            return off_event, "NOISY"
+            # Calculate duration for tagging
+            off_magnitude = abs(off_event['magnitude'])
+            duration_minutes = (off_event['end'] - on_event['start']).total_seconds() / 60
+            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_noisy=True, is_corrected=correction > 0)
+            logger.info(f"Matched {tag}: {on_id} <-> {off_id} (window={window_minutes}m)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
+            return off_event, tag, correction
 
-    return None, None
+    return None, None, 0

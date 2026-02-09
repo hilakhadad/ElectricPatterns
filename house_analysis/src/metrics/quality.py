@@ -10,7 +10,9 @@ from typing import Dict, Any, List, Tuple
 
 def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
                                     coverage_ratio: float = None,
-                                    days_span: int = None) -> Dict[str, Any]:
+                                    days_span: int = None,
+                                    max_gap_minutes: float = None,
+                                    pct_gaps_over_2min: float = None) -> Dict[str, Any]:
     """
     Calculate data quality metrics for household data.
 
@@ -19,6 +21,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         phase_cols: List of phase column names
         coverage_ratio: Optional coverage ratio (0-1) to include in quality score
         days_span: Optional number of days of data
+        max_gap_minutes: Optional maximum gap in minutes
+        pct_gaps_over_2min: Optional percentage of gaps over 2 minutes
 
     Returns:
         Dictionary with data quality metrics
@@ -133,102 +137,154 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     # Store days_span in metrics
     metrics['days_span'] = days_span if days_span is not None else 0
 
-    # Overall quality score (0-100)
-    # PRIMARY FACTORS: Coverage (60%) and Days of data (30%)
-    # SECONDARY FACTORS: Other issues (10%)
+    # ===== NEW QUALITY SCORING SYSTEM (0-100) =====
+    # Based on: Completeness, Gap Quality, Phase Balance, Monthly Balance, Noise Level
 
     quality_score = 0
 
-    # ===== PRIMARY FACTOR 1: Coverage (up to 60 points) =====
+    # ===== 1. DATA COMPLETENESS (up to 30 points) =====
     coverage = metrics.get('coverage_ratio', 1.0)
-    # Linear scale: 0% coverage = 0 points, 100% coverage = 60 points
-    coverage_score = coverage * 60
-    quality_score += coverage_score
-    metrics['coverage_score_contribution'] = coverage_score
+    completeness_score = coverage * 30
+    quality_score += completeness_score
+    metrics['completeness_score'] = completeness_score
 
-    # ===== PRIMARY FACTOR 2: Days of data (up to 30 points) =====
-    days = days_span if days_span is not None else 0
-    days_score = 0
+    # ===== 2. GAP QUALITY (up to 20 points) =====
+    # Start with 20, deduct for gaps
+    gap_score = 20
 
-    if days >= 730:  # 2+ years - excellent
-        days_score = 30
-    elif days >= 365:  # 1-2 years - good
-        # Linear scale from 20 to 30 points
-        days_score = 20 + (days - 365) / 365 * 10
-    elif days >= 180:  # 6 months to 1 year - acceptable
-        # Linear scale from 10 to 20 points
-        days_score = 10 + (days - 180) / 185 * 10
-    elif days >= 30:  # 1-6 months - limited
-        # Linear scale from 5 to 10 points
-        days_score = 5 + (days - 30) / 150 * 5
-    else:  # Less than 1 month - very limited
-        days_score = days / 30 * 5
+    # Store gap metrics
+    metrics['max_gap_minutes'] = max_gap_minutes if max_gap_minutes is not None else 0
+    metrics['pct_gaps_over_2min'] = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
 
-    quality_score += days_score
-    metrics['days_score_contribution'] = days_score
+    # Penalty for max gap > 60 min (up to 10 pts)
+    max_gap = max_gap_minutes if max_gap_minutes is not None else 0
+    if max_gap > 60:
+        # Scale: 60 min = 0 penalty, 1440 min (1 day) = 10 penalty
+        gap_penalty = min((max_gap - 60) / 138, 10)
+        gap_score -= gap_penalty
 
-    # ===== SECONDARY FACTORS: Other issues (up to 10 points) =====
-    # Start with 10 and deduct for issues
-    secondary_score = 10
+    # Penalty for high gap percentage (up to 10 pts)
+    gap_pct = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
+    if gap_pct > 2:
+        # Scale: 2% = 0 penalty, 20% = 10 penalty
+        gap_pct_penalty = min((gap_pct - 2) / 1.8, 10)
+        gap_score -= gap_pct_penalty
 
-    # Deduct for dead phases (up to 3 points)
-    if len(dead_phases) > 0:
-        secondary_score -= min(len(dead_phases) * 1, 3)
+    gap_score = max(0, gap_score)
+    quality_score += gap_score
+    metrics['gap_score'] = gap_score
 
-    # Deduct for negative values (up to 2 points)
-    total_negatives = sum(metrics.get(f'{col}_negative_count', 0) for col in phase_cols)
-    if total_negatives > 0:
-        secondary_score -= min(total_negatives / 100, 2)
-
-    # Deduct for outliers (up to 2 points)
-    outlier_pct = sum(metrics.get(f'{col}_outliers_3sd_pct', 0) for col in phase_cols) / len(phase_cols) if phase_cols else 0
-    if outlier_pct > 1:
-        secondary_score -= min(outlier_pct * 0.5, 2)
-
-    # Deduct for large jumps (up to 2 points)
-    total_large_jumps = sum(metrics.get(f'{col}_jumps_over_2000W', 0) for col in phase_cols)
-    if total_large_jumps > 500:
-        secondary_score -= min((total_large_jumps - 500) / 500, 2)
-
-    # Deduct for duplicate timestamps (up to 1 point)
-    dup_ts = metrics.get('duplicate_timestamps', 0)
-    if dup_ts > 0:
-        secondary_score -= min(dup_ts / 100, 1)
-
-    secondary_score = max(0, secondary_score)
-    quality_score += secondary_score
-    metrics['secondary_score_contribution'] = secondary_score
-
-    # ===== PHASE BALANCE PENALTY =====
-    # Calculate phase balance ratio and penalize unbalanced phases
+    # ===== 3. PHASE BALANCE (up to 15 points) =====
     phase_means = []
     for col in phase_cols:
         if col in data.columns:
             phase_mean = data[col].mean()
-            phase_means.append(phase_mean)
+            if phase_mean > 0:  # Only include active phases
+                phase_means.append(phase_mean)
 
-    balance_penalty = 0
     if len(phase_means) >= 2 and min(phase_means) > 0:
         balance_ratio = max(phase_means) / min(phase_means)
         metrics['phase_balance_ratio'] = balance_ratio
 
-        # Penalty scale:
-        # ratio 1-2: no penalty (normal variation)
-        # ratio 2-3: 0-5 points penalty
-        # ratio 3-5: 5-10 points penalty
-        # ratio 5+: 10-15 points penalty (capped)
-        if balance_ratio > 5:
-            balance_penalty = 10 + min((balance_ratio - 5), 5)
-        elif balance_ratio > 3:
-            balance_penalty = 5 + (balance_ratio - 3) * 2.5
-        elif balance_ratio > 2:
-            balance_penalty = (balance_ratio - 2) * 5
-        # else: no penalty for ratio <= 2
+        # Score based on ratio
+        if balance_ratio <= 2:
+            balance_score = 15  # Excellent
+        elif balance_ratio <= 3:
+            balance_score = 10  # Good
+        elif balance_ratio <= 5:
+            balance_score = 5   # Acceptable
+        else:
+            balance_score = 0   # Poor
     else:
-        metrics['phase_balance_ratio'] = 1.0  # Default if can't calculate
+        metrics['phase_balance_ratio'] = 1.0
+        balance_score = 15  # Default for single phase or can't calculate
 
-    metrics['balance_penalty'] = balance_penalty
-    quality_score -= balance_penalty
+    quality_score += balance_score
+    metrics['balance_score'] = balance_score
+
+    # ===== 4. MONTHLY COVERAGE BALANCE (up to 20 points) =====
+    # Calculate coverage per month and check variance
+    monthly_balance_score = 20  # Start with max
+
+    if 'timestamp' in data.columns:
+        data_temp = data.copy()
+        data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
+        data_temp['year_month'] = data_temp['timestamp'].dt.to_period('M')
+
+        # Calculate expected vs actual rows per month
+        monthly_counts = data_temp.groupby('year_month').size()
+
+        if len(monthly_counts) > 1:
+            # Calculate coverage ratio per month (assuming 1-min resolution)
+            monthly_coverage = []
+            for period, count in monthly_counts.items():
+                expected = period.days_in_month * 24 * 60  # minutes in month
+                coverage_ratio = min(count / expected, 1.0)
+                monthly_coverage.append(coverage_ratio)
+
+            # Calculate std dev of monthly coverage
+            monthly_std = np.std(monthly_coverage)
+            metrics['monthly_coverage_std'] = monthly_std
+            metrics['monthly_coverage_values'] = monthly_coverage
+
+            # Score: low std = high score
+            # std 0 = 20 pts, std 0.5 = 0 pts
+            monthly_balance_score = max(0, 20 * (1 - monthly_std * 2))
+        else:
+            metrics['monthly_coverage_std'] = 0
+            # Single month - give full points
+
+    quality_score += monthly_balance_score
+    metrics['monthly_balance_score'] = monthly_balance_score
+
+    # ===== 5. LOW NOISE / STABILITY (up to 15 points) =====
+    # Based on hourly coefficient of variation
+    noise_score = 15  # Start with max
+
+    hourly_cvs = []
+    if 'timestamp' in data.columns:
+        data_temp = data.copy()
+        data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
+        data_temp['hour'] = data_temp['timestamp'].dt.hour
+
+        for col in phase_cols:
+            if col not in data.columns:
+                continue
+
+            # Calculate hourly mean and std
+            hourly_stats = data_temp.groupby('hour')[col].agg(['mean', 'std'])
+            hourly_mean = hourly_stats['mean'].mean()
+            hourly_std = hourly_stats['std'].mean()
+
+            if hourly_mean > 0:
+                cv = hourly_std / hourly_mean
+                hourly_cvs.append(cv)
+
+    if hourly_cvs:
+        avg_cv = np.mean(hourly_cvs)
+        metrics['avg_hourly_cv'] = avg_cv
+
+        # Score based on CV (coefficient of variation)
+        # Normal CV (0.3-0.8): 15 pts (healthy daily variation)
+        # Very low CV (<0.3): 10 pts (suspicious - too flat)
+        # High CV (0.8-1.5): 10 pts (some noise)
+        # Very high CV (1.5-2.0): 5 pts (noisy)
+        # Extreme CV (>2.0): 0 pts (very noisy/problematic)
+        if 0.3 <= avg_cv <= 0.8:
+            noise_score = 15
+        elif avg_cv < 0.3:
+            noise_score = 10
+        elif avg_cv <= 1.5:
+            noise_score = 10
+        elif avg_cv <= 2.0:
+            noise_score = 5
+        else:
+            noise_score = 0
+    else:
+        metrics['avg_hourly_cv'] = 0
+
+    quality_score += noise_score
+    metrics['noise_score'] = noise_score
 
     # Ensure bounds
     metrics['quality_score'] = max(0, min(100, quality_score))

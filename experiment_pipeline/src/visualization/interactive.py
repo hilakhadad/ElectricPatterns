@@ -139,22 +139,49 @@ def _add_data_traces(fig: go.Figure, df: pd.DataFrame, phases: List[str]) -> Non
 
 
 def _add_event_markers(fig: go.Figure, events: pd.DataFrame, phases: List[str]) -> None:
-    """Add event markers to row 4."""
+    """Add event markers to row 4 - draws lines connecting ON to OFF events."""
     for col_idx, phase in enumerate(phases, start=1):
         phase_events = events[events['phase'] == phase]
 
         for _, event in phase_events.iterrows():
-            color = _get_event_color(event)
-            fig.add_trace(
-                go.Scatter(
-                    x=[event['start'], event['end']],
-                    y=[0, event['magnitude']],
-                    mode='lines+markers',
-                    name=f"Event {simplify_event_id(event['event_id'])}",
-                    line=dict(dash='dash', color=color),
-                    showlegend=False
-                ), row=4, col=col_idx
-            )
+            # Check if this is a match (has both on_start and off_start with non-null values)
+            if pd.notna(event.get('on_start')) and pd.notna(event.get('off_start')):
+                # This is a match - draw connecting line from ON to OFF
+                on_mag = event.get('on_magnitude', 0)
+                off_mag = event.get('off_magnitude', 0)
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=[event['on_start'], event['off_start']],
+                        y=[on_mag, off_mag],
+                        mode='lines+markers',
+                        line=dict(color='green', width=2, dash='solid'),
+                        marker=dict(size=8, color=['green', 'red']),
+                        showlegend=False,
+                        hovertemplate=(
+                            f"<b>Match</b><br>"
+                            f"ON:  {event['on_start']}<br>"
+                            f"OFF: {event['off_start']}<br>"
+                            f"Duration: {event.get('duration', 'N/A'):.0f} min<br>"
+                            f"ON mag:  {on_mag:.0f}W<br>"
+                            f"OFF mag: {off_mag:.0f}W<br>"
+                            f"<extra></extra>"
+                        )
+                    ), row=4, col=col_idx
+                )
+            elif pd.notna(event.get('start')) and pd.notna(event.get('magnitude')):
+                # This is an individual unmatched event
+                color = _get_event_color(event)
+                fig.add_trace(
+                    go.Scatter(
+                        x=[event['start'], event['end']],
+                        y=[0, event['magnitude']],
+                        mode='lines+markers',
+                        name=f"Event {simplify_event_id(event['event_id'])}",
+                        line=dict(dash='dash', color=color),
+                        showlegend=False
+                    ), row=4, col=col_idx
+                )
 
 
 def _get_event_color(event: pd.Series) -> str:

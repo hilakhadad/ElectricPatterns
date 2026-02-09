@@ -4,6 +4,7 @@ Interactive plotting utility for visualizing segmentation results.
 NOTE: This script uses server paths by default.
 For local use, update PIPE_LINE_DIR to point to your local OUTPUT directory.
 """
+import os
 import pandas as pd
 from datetime import datetime, timedelta
 from plotly.subplots import make_subplots
@@ -28,14 +29,51 @@ def get_available_houses(run_number):
 
 
 def load_data(house_id, run_number):
-    base_path = f"{PIPE_LINE_DIR}/run_{run_number}/house_{house_id}"
-    file_path = os.path.join(base_path, f"summarized_{house_id}.csv")
+    """Load data from monthly pickle files in summarized directory"""
+    import pickle
+    import sys
+    import numpy as np
 
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Data file not found: {file_path}")
+    # Fix numpy compatibility for pickle files created with newer numpy
+    if not hasattr(sys.modules.get('numpy', None), '_core'):
+        sys.modules['numpy._core'] = np.core
+        sys.modules['numpy._core.numeric'] = np.core.numeric
 
-    df = pd.read_csv(file_path)
+    base_path = f"{PIPE_LINE_DIR}/run_{run_number}/house_{house_id}/summarized"
+
+    if not os.path.exists(base_path):
+        raise FileNotFoundError(f"summarized directory not found: {base_path}")
+
+    # Find all pickle files in the directory (format: summarized_HOUSEID_MM_YYYY.pkl)
+    pickle_files = sorted([f for f in os.listdir(base_path) if f.endswith('.pkl') and f.startswith(f'summarized_{house_id}_')])
+
+    if not pickle_files:
+        raise FileNotFoundError(f"No pickle files found in {base_path}")
+
+    print(f"Found {len(pickle_files)} monthly pickle files")
+
+    # Load all monthly pickle files
+    dfs = []
+    for pkl_file in pickle_files:
+        file_path = os.path.join(base_path, pkl_file)
+        print(f"Loading {pkl_file}...")
+        try:
+            with open(file_path, 'rb') as f:
+                df_month = pickle.load(f)
+                dfs.append(df_month)
+        except Exception as e:
+            print(f"Warning: Could not load {pkl_file}: {e}")
+            continue
+
+    if not dfs:
+        raise ValueError(f"No data could be loaded from pickle files")
+
+    # Concatenate all monthly data
+    df = pd.concat(dfs, ignore_index=True)
     df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', dayfirst=True)
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    print(f"Loaded total of {len(df)} rows from {len(dfs)} months")
     return df
 
 

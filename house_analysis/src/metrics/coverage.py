@@ -84,4 +84,15 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics['pct_gaps_over_10min'] = (time_diffs > 600).sum() / len(time_diffs) * 100
         metrics['pct_gaps_over_60min'] = (time_diffs > 3600).sum() / len(time_diffs) * 100
 
+    # Duplicate timestamps analysis
+    if 'timestamp' in data.columns:
+        duplicate_mask = data['timestamp'].duplicated(keep=False)
+        duplicate_count = duplicate_mask.sum()
+        unique_duplicate_ts = data.loc[duplicate_mask, 'timestamp'].nunique()
+
+        metrics['duplicate_timestamps_count'] = int(duplicate_count)
+        metrics['duplicate_timestamps_unique'] = int(unique_duplicate_ts)
+        metrics['duplicate_timestamps_pct'] = duplicate_count / len(data) * 100 if len(data) > 0 else 0
+        metrics['has_duplicate_timestamps'] = duplicate_count > 0
+
     return metrics

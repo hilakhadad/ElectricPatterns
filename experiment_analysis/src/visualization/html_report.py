@@ -58,6 +58,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
 
 def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate executive summary HTML."""
+    import numpy as np
     valid = [a for a in analyses if a.get('status') != 'no_data']
     n_houses = len(valid)
 
@@ -65,25 +66,38 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
         return '<p>No experiment data found.</p>'
 
     # Calculate averages
-    overall_scores = [a.get('scores', {}).get('overall_score', 0) for a in valid]
-    matching_scores = [a.get('scores', {}).get('matching_score', 0) for a in valid]
-    seg_ratios = [a.get('first_iteration', {}).get('segmentation', {}).get('segmentation_ratio', 0) for a in valid]
-    total_matches = sum(a.get('first_iteration', {}).get('matching', {}).get('total_matches', 0) for a in valid)
+    overall_scores = [(a.get('scores', {}) or {}).get('overall_score', 0) or 0 for a in valid]
+    matching_scores = [(a.get('scores', {}) or {}).get('matching_score', 0) or 0 for a in valid]
+    seg_ratios = [((a.get('first_iteration', {}) or {}).get('segmentation', {}) or {}).get('segmentation_ratio', 0) or 0 for a in valid]
+    total_matches = sum(((a.get('first_iteration', {}) or {}).get('matching', {}) or {}).get('total_matches', 0) or 0 for a in valid)
+
+    # Threshold explanation rates
+    th_explanation_rates = [(a.get('threshold_explanation', {}) or {}).get('total_explanation_rate', 0) or 0 for a in valid]
 
     avg_overall = sum(overall_scores) / n_houses if n_houses > 0 else 0
     avg_matching = sum(matching_scores) / n_houses if n_houses > 0 else 0
     avg_seg = sum(seg_ratios) / n_houses if n_houses > 0 else 0
+    avg_th_expl = np.mean(th_explanation_rates) if th_explanation_rates else 0
+    std_th_expl = np.std(th_explanation_rates) if th_explanation_rates else 0
 
     # Count issues
-    n_low_matching = sum(1 for a in valid if a.get('flags', {}).get('low_matching_rate', False))
-    n_negative = sum(1 for a in valid if a.get('flags', {}).get('has_negative_values', False))
-    n_low_seg = sum(1 for a in valid if a.get('flags', {}).get('low_segmentation', False))
+    n_low_matching = sum(1 for a in valid if (a.get('flags', {}) or {}).get('low_matching_rate', False))
+    n_negative = sum(1 for a in valid if (a.get('flags', {}) or {}).get('has_negative_values', False))
+    n_low_seg = sum(1 for a in valid if (a.get('flags', {}) or {}).get('low_segmentation', False))
+
+    # Color for threshold explanation rate
+    th_color = '#28a745' if avg_th_expl >= 0.8 else '#ffc107' if avg_th_expl >= 0.5 else '#dc3545'
 
     return f"""
     <div class="summary-grid">
         <div class="summary-card">
             <div class="summary-number">{n_houses}</div>
             <div class="summary-label">Houses Analyzed</div>
+        </div>
+        <div class="summary-card" style="border: 2px solid {th_color}; background: linear-gradient(135deg, #fff 0%, {th_color}22 100%);">
+            <div class="summary-number" style="color: {th_color};">{avg_th_expl:.1%}</div>
+            <div class="summary-label">High-Power Energy Explained</div>
+            <div style="font-size: 0.8em; color: #666;">(&gt;1300W) \u00b1{std_th_expl:.1%} std</div>
         </div>
         <div class="summary-card">
             <div class="summary-number">{avg_overall:.0f}</div>
@@ -124,20 +138,20 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
             continue
 
         house_id = a.get('house_id', 'unknown')
-        iterations = a.get('iterations', {})
-        scores = a.get('scores', {})
-        first = a.get('first_iteration', {})
-        matching = first.get('matching', {})
-        seg = first.get('segmentation', {})
-        flags = a.get('flags', {})
-        patterns = first.get('patterns', {})
+        iterations = a.get('iterations', {}) or {}
+        scores = a.get('scores', {}) or {}
+        first = a.get('first_iteration', {}) or {}
+        matching = first.get('matching', {}) or {}
+        seg = first.get('segmentation', {}) or {}
+        flags = a.get('flags', {}) or {}
+        patterns = first.get('patterns', {}) or {}
 
         # Device detection
-        ac_detection = patterns.get('ac_detection', {})
-        boiler_detection = patterns.get('boiler_detection', {})
+        ac_detection = patterns.get('ac_detection', {}) or {}
+        boiler_detection = patterns.get('boiler_detection', {}) or {}
 
         has_central_ac = ac_detection.get('has_central_ac', False)
-        has_regular_ac = bool(ac_detection.get('regular_ac_by_phase', {}) or ac_detection.get('regular_ac', {}).get('activations'))
+        has_regular_ac = bool(ac_detection.get('regular_ac_by_phase', {}) or (ac_detection.get('regular_ac', {}) or {}).get('activations'))
         has_boiler = boiler_detection.get('has_boiler', False)
 
         # Device icons
@@ -161,16 +175,20 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         flags_display = ' '.join(flag_icons) if flag_icons else '-'
 
         # Calculate minutes segmentation ratio (NOT x3 - real time only)
-        matched_minutes = matching.get('total_matched_minutes', 0)
-        total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+        matched_minutes = matching.get('total_matched_minutes', 0) or 0
+        total_days = (patterns.get('daily_stats', {}) or {}).get('total_days', 0) or 0
         if total_days > 0 and matched_minutes > 0:
             total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
             minutes_seg_ratio = matched_minutes / total_available_minutes
         else:
             minutes_seg_ratio = 0
 
+        # Threshold explanation rate
+        th_expl = a.get('threshold_explanation', {}) or {}
+        th_explanation_rate = th_expl.get('total_explanation_rate', 0) or 0
+
         # Score badge - check for damaged phases first
-        score = scores.get('overall_score', 0)
+        score = scores.get('overall_score', 0) or 0
         has_damaged = flags.get('has_damaged_phases', False)
 
         if has_damaged:
@@ -185,13 +203,26 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         else:
             badge = '<span class="badge badge-red">Poor</span>'
 
+        # Color for explanation rate
+        th_color = '#28a745' if th_explanation_rate >= 0.8 else '#ffc107' if th_explanation_rate >= 0.5 else '#dc3545'
+
+        # Pre-analysis quality score (from house_analysis)
+        pre_quality = a.get('pre_analysis_quality_score', None)
+        if pre_quality is not None:
+            pre_q_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
+            pre_quality_html = f'<span style="color: {pre_q_color}; font-weight: bold;">{pre_quality:.0f}</span>'
+        else:
+            pre_quality_html = '<span style="color: #999;">-</span>'
+
         rows.append(f"""
         <tr>
             <td><a href="house_reports/house_{house_id}.html" target="_blank" style="text-decoration: none; color: #1976d2;"><strong>{house_id}</strong></a></td>
-            <td>{iterations.get('iterations_completed', 0)}</td>
-            <td>{iterations.get('first_iter_matching_rate', 0):.1%}</td>
-            <td>{seg.get('segmentation_ratio', 0):.1%}</td>
+            <td>{pre_quality_html}</td>
+            <td>{iterations.get('iterations_completed', 0) or 0}</td>
+            <td>{(iterations.get('first_iter_matching_rate', 0) or 0):.1%}</td>
+            <td>{(seg.get('segmentation_ratio', 0) or 0):.1%}</td>
             <td>{minutes_seg_ratio:.2%}</td>
+            <td style="color: {th_color}; font-weight: bold;">{th_explanation_rate:.1%}</td>
             <td style="font-size: 1.2em;">{devices}</td>
             <td>{score:.0f} {badge}</td>
             <td style="font-size: 1.2em;">{flags_display}</td>
@@ -200,23 +231,27 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
 
     return f"""
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
-        <strong>Match Rate</strong> = % of events matched | <strong>Segmentation</strong> = % of total power explained |
-        <strong>Devices:</strong> ❄️ Central AC | 🌀 Regular AC | 🔥 Boiler
+        <strong>Pre-Quality</strong> = quality score from pre-experiment analysis (coverage+days+data quality) |
+        <strong>Match Rate</strong> = % of events matched |
+        <strong>High-Power Explained</strong> = % of minutes &gt;1300W with segregation
     </p>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
-        <strong>Issues:</strong> 📉 Low Matching | ⚡ Negative Values | 📊 Low Segmentation | 🔌 Damaged Phase | 🔄 Recurring Patterns
+        <strong>Devices:</strong> ❄️ Central AC | 🌀 Regular AC | 🔥 Boiler |
+        <strong>Issues:</strong> 📉 Low Matching | ⚡ Negatives | 📊 Low Seg | 🔌 Damaged | 🔄 Recurring
     </p>
     <table class="data-table" id="comparison-table">
         <thead>
             <tr>
                 <th onclick="sortTable(0)">House ID</th>
-                <th onclick="sortTable(1)">Iterations</th>
-                <th onclick="sortTable(2)">Match Rate<br><small>(events)</small></th>
-                <th onclick="sortTable(3)">Segmentation<br><small>(power)</small></th>
-                <th onclick="sortTable(4)">Segmentation<br><small>(minutes)</small></th>
-                <th onclick="sortTable(5)">Devices</th>
-                <th onclick="sortTable(6)">Score</th>
-                <th onclick="sortTable(7)">Flags</th>
+                <th onclick="sortTable(1)">Pre-Quality<br><small>(0-100)</small></th>
+                <th onclick="sortTable(2)">Iterations</th>
+                <th onclick="sortTable(3)">Match Rate<br><small>(events)</small></th>
+                <th onclick="sortTable(4)">Segmentation<br><small>(power)</small></th>
+                <th onclick="sortTable(5)">Segmentation<br><small>(minutes)</small></th>
+                <th onclick="sortTable(6)">High-Power<br><small>Explained</small></th>
+                <th onclick="sortTable(7)">Devices</th>
+                <th onclick="sortTable(8)">Exp Score</th>
+                <th onclick="sortTable(9)">Flags</th>
             </tr>
         </thead>
         <tbody>
@@ -611,18 +646,30 @@ def generate_house_html_report(analysis: Dict[str, Any],
 
 def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     """Generate summary section for single house."""
-    scores = analysis.get('scores', {})
-    iterations = analysis.get('iterations', {})
-    first = analysis.get('first_iteration', {})
-    matching = first.get('matching', {})
-    seg = first.get('segmentation', {})
-    flags = analysis.get('flags', {})
+    scores = analysis.get('scores', {}) or {}
+    iterations = analysis.get('iterations', {}) or {}
+    first = analysis.get('first_iteration', {}) or {}
+    matching = first.get('matching', {}) or {}
+    seg = first.get('segmentation', {}) or {}
+    flags = analysis.get('flags', {}) or {}
+    th_expl = analysis.get('threshold_explanation', {}) or {}
 
-    overall_score = scores.get('overall_score', 0)
-    matching_score = scores.get('matching_score', 0)
-    seg_score = scores.get('segmentation_score', 0)
+    overall_score = scores.get('overall_score', 0) or 0
+    matching_score = scores.get('matching_score', 0) or 0
+    seg_score = scores.get('segmentation_score', 0) or 0
     has_damaged = flags.get('has_damaged_phases', False)
-    damaged_phases = scores.get('damaged_phases', [])
+    damaged_phases = scores.get('damaged_phases', []) or []
+    pre_quality = analysis.get('pre_analysis_quality_score', None)
+
+    # Pre-quality display values (computed outside f-string to avoid format issues)
+    pre_quality_display = f'{pre_quality:.0f}' if pre_quality is not None else '-'
+    pre_quality_color = '#28a745' if pre_quality and pre_quality >= 75 else '#ffc107' if pre_quality and pre_quality >= 50 else '#dc3545' if pre_quality else '#999'
+
+    # Threshold explanation metrics
+    th_explanation_rate = th_expl.get('total_explanation_rate', 0) or 0
+    th_minutes_above = th_expl.get('total_minutes_above_th', 0) or 0
+    th_minutes_explained = th_expl.get('total_minutes_explained', 0) or 0
+    th_color = '#28a745' if th_explanation_rate >= 0.8 else '#ffc107' if th_explanation_rate >= 0.5 else '#dc3545'
 
     # Score badge - check damaged first
     if has_damaged:
@@ -642,13 +689,35 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
         badge_text = 'Poor'
 
     # Calculate minutes segmented ratio
-    total_minutes = matching.get('total_matched_minutes', 0)
+    total_minutes = matching.get('total_matched_minutes', 0) or 0
 
     return f"""
+    <div class="th-explanation-highlight" style="background: linear-gradient(135deg, #fff 0%, {th_color}22 100%); border: 2px solid {th_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
+        <h3 style="margin: 0 0 10px 0; color: #333;">High-Power Energy Explained (&gt;1300W)</h3>
+        <div style="display: flex; justify-content: center; gap: 50px; flex-wrap: wrap;">
+            <div>
+                <div style="font-size: 2.5em; font-weight: bold; color: {th_color};">{th_explanation_rate:.1%}</div>
+                <div style="color: #666;">Explained Rate</div>
+            </div>
+            <div>
+                <div style="font-size: 1.5em; font-weight: bold; color: #333;">{th_minutes_above:,}</div>
+                <div style="color: #666;">Minutes &gt;1300W</div>
+            </div>
+            <div>
+                <div style="font-size: 1.5em; font-weight: bold; color: {th_color};">{th_minutes_explained:,}</div>
+                <div style="color: #666;">Minutes Explained</div>
+            </div>
+        </div>
+    </div>
     <div class="summary-grid">
+        <div class="summary-card" style="background: #f0f0f0;">
+            <div class="summary-number" style="color: {pre_quality_color};">{pre_quality_display}</div>
+            <div class="summary-label">Pre-Quality Score</div>
+            <div style="font-size: 0.7em; color: #888;">(from house analysis)</div>
+        </div>
         <div class="summary-card highlight">
             <div class="summary-number">{overall_score:.0f}</div>
-            <div class="summary-label">Overall Score</div>
+            <div class="summary-label">Experiment Score</div>
             <span class="badge {badge_class}">{badge_text}</span>
         </div>
         <div class="summary-card">
@@ -660,13 +729,13 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
             <div class="summary-label">Segmentation Score</div>
         </div>
         <div class="summary-card">
-            <div class="summary-number">{iterations.get('iterations_completed', 0)}</div>
+            <div class="summary-number">{iterations.get('iterations_completed', 0) or 0}</div>
             <div class="summary-label">Iterations</div>
         </div>
     </div>
     <div class="segmentation-summary" style="display: flex; gap: 40px; justify-content: center; margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
         <div style="text-align: center;">
-            <div style="font-size: 1.5em; font-weight: bold; color: #28a745;">{seg.get('segmentation_ratio', 0):.1%}</div>
+            <div style="font-size: 1.5em; font-weight: bold; color: #28a745;">{(seg.get('segmentation_ratio', 0) or 0):.1%}</div>
             <div style="color: #666; font-size: 0.9em;">Power Segmented</div>
         </div>
         <div style="text-align: center;">
@@ -680,20 +749,24 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
 
 def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
     """Generate iterations progress section."""
-    iterations = analysis.get('iterations', {})
-    iter_data = iterations.get('iterations_data', [])
+    iterations = analysis.get('iterations', {}) or {}
+    iter_data = iterations.get('iterations_data', []) or []
 
     if not iter_data:
         return '<p>No iteration data available.</p>'
 
     rows = []
     for i, d in enumerate(iter_data):
-        on_events = d.get('on_events', d.get('total_events', 0) // 2)
-        off_events = d.get('off_events', d.get('total_events', 0) // 2)
-        matches = d.get('total_matches', 0)
-        unmatched_on = d.get('unmatched_on', on_events - matches)
-        unmatched_off = d.get('unmatched_off', off_events - matches)
-        matched_minutes = d.get('matched_minutes', 0)
+        total_ev = d.get('total_events', 0) or 0
+        on_events = d.get('on_events', total_ev // 2) or 0
+        off_events = d.get('off_events', total_ev // 2) or 0
+        matches = d.get('total_matches', 0) or 0
+        unmatched_on = d.get('unmatched_on', on_events - matches) or 0
+        unmatched_off = d.get('unmatched_off', off_events - matches) or 0
+        matched_minutes = d.get('matched_minutes', 0) or 0
+        matching_rate = d.get('matching_rate', 0) or 0
+        matched_power = (d.get('matched_power', 0) or 0) / 1000
+        neg_values = d.get('negative_values', 0) or 0
 
         rows.append(f"""
         <tr>
@@ -701,14 +774,51 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
             <td>ON: {on_events}<br>OFF: {off_events}</td>
             <td>{matches}</td>
             <td>ON: {unmatched_on}<br>OFF: {unmatched_off}</td>
-            <td>{d.get('matching_rate', 0):.1%}</td>
-            <td>{d.get('matched_power', 0)/1000:.1f} kW</td>
+            <td>{matching_rate:.1%}</td>
+            <td>{matched_power:.1f} kW</td>
             <td>{matched_minutes:.0f} min</td>
-            <td>{d.get('negative_values', 0)}</td>
+            <td>{neg_values}</td>
         </tr>
         """)
 
-    total_minutes = iterations.get('total_matched_minutes', 0)
+    total_minutes = iterations.get('total_matched_minutes', 0) or 0
+
+    # High-Power explanation per iteration table
+    th_per_iter = analysis.get('threshold_explanation_per_iteration', []) or []
+    th_rows = []
+    for th in th_per_iter:
+        iteration = th.get('iteration', 0) or 0
+        above = th.get('total_minutes_above_th', 0) or 0
+        explained = th.get('total_minutes_explained', 0) or 0
+        rate = th.get('total_explanation_rate', 0) or 0
+        th_color = '#28a745' if rate >= 0.8 else '#ffc107' if rate >= 0.5 else '#dc3545'
+
+        th_rows.append(f"""
+        <tr>
+            <td>{iteration}</td>
+            <td>{above:,}</td>
+            <td>{explained:,}</td>
+            <td style="color: {th_color}; font-weight: bold;">{rate:.1%}</td>
+        </tr>
+        """)
+
+    threshold = th_per_iter[0].get('threshold', 1300) if th_per_iter else 1300
+    th_table_html = f"""
+    <h4 style="margin-top: 20px; color: #2c3e50;">High-Power Energy Explained per Iteration (&gt;{threshold}W)</h4>
+    <table class="data-table" style="max-width: 500px;">
+        <thead>
+            <tr>
+                <th>Iter</th>
+                <th>Minutes &gt;{threshold}W</th>
+                <th>Minutes Explained</th>
+                <th>Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(th_rows)}
+        </tbody>
+    </table>
+    """ if th_rows else ""
 
     return f"""
     <table class="data-table">
@@ -731,11 +841,11 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
     <div class="metrics-row">
         <div class="metric">
             <span class="metric-label">Events Reduction:</span>
-            <span class="metric-value">{iterations.get('events_reduction_ratio', 0):.1%}</span>
+            <span class="metric-value">{(iterations.get('events_reduction_ratio', 0) or 0):.1%}</span>
         </div>
         <div class="metric">
             <span class="metric-label">Total Matched Power:</span>
-            <span class="metric-value">{iterations.get('total_matched_power', 0)/1000:.1f} kW</span>
+            <span class="metric-value">{(iterations.get('total_matched_power', 0) or 0)/1000:.1f} kW</span>
         </div>
         <div class="metric">
             <span class="metric-label">Total Matched Minutes:</span>
@@ -745,19 +855,20 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
     <p style="font-size: 0.8em; color: #888; margin-top: 8px; text-align: center;">
         Note: Minutes and power are summed across all 3 phases. Overlapping events on different phases are counted separately.
     </p>
+    {th_table_html}
     """
 
 
 def _generate_matching_section(analysis: Dict[str, Any]) -> str:
     """Generate matching details section."""
-    first = analysis.get('first_iteration', {})
-    matching = first.get('matching', {})
+    first = analysis.get('first_iteration', {}) or {}
+    matching = first.get('matching', {}) or {}
 
     if not matching:
         return '<p>No matching data available.</p>'
 
-    tag_breakdown = matching.get('tag_breakdown', {})
-    phase_breakdown = matching.get('phase_breakdown', {})
+    tag_breakdown = matching.get('tag_breakdown', {}) or {}
+    phase_breakdown = matching.get('phase_breakdown', {}) or {}
 
     # Tag breakdown table
     tag_rows = ''.join(f"<tr><td>{tag}</td><td>{count}</td></tr>"
@@ -768,12 +879,12 @@ def _generate_matching_section(analysis: Dict[str, Any]) -> str:
                          for phase, count in phase_breakdown.items())
 
     # Calculate stats
-    total_on = matching.get('total_on_events', 0)
-    total_off = matching.get('total_off_events', 0)
-    matched_on = matching.get('matched_on_count', 0)
-    matched_off = matching.get('matched_off_count', matched_on)  # Usually same as ON
-    unmatched_on = matching.get('unmatched_on_count', total_on - matched_on)
-    unmatched_off = matching.get('unmatched_off_count', total_off - matched_off)
+    total_on = matching.get('total_on_events', 0) or 0
+    total_off = matching.get('total_off_events', 0) or 0
+    matched_on = matching.get('matched_on_count', 0) or 0
+    matched_off = matching.get('matched_off_count', matched_on) or 0  # Usually same as ON
+    unmatched_on = matching.get('unmatched_on_count', total_on - matched_on) or 0
+    unmatched_off = matching.get('unmatched_off_count', total_off - matched_off) or 0
     on_rate = matched_on / total_on if total_on > 0 else 0
     off_rate = matched_off / total_off if total_off > 0 else 0
 
@@ -831,10 +942,10 @@ def _generate_matching_section(analysis: Dict[str, Any]) -> str:
 
 def _generate_segmentation_section(analysis: Dict[str, Any]) -> str:
     """Generate segmentation details section - shows both power and minutes metrics."""
-    first = analysis.get('first_iteration', {})
-    seg = first.get('segmentation', {})
-    matching = first.get('matching', {})
-    patterns = first.get('patterns', {})
+    first = analysis.get('first_iteration', {}) or {}
+    seg = first.get('segmentation', {}) or {}
+    matching = first.get('matching', {}) or {}
+    patterns = first.get('patterns', {}) or {}
 
     if not seg:
         return '<p>No segmentation data available.</p>'
@@ -842,17 +953,17 @@ def _generate_segmentation_section(analysis: Dict[str, Any]) -> str:
     neg_count = seg.get('negative_value_count', 0)
     neg_warning = f'<div class="warning" style="margin-bottom: 15px;">⚠ Warning: {neg_count} negative values detected in remaining power!</div>' if neg_count > 0 else ''
 
-    # Power metrics
-    total_power = seg.get('total_power', 0) / 1000
-    segmented_power = seg.get('total_segmented_power', 0) / 1000
-    remaining_power = seg.get('total_remaining_power', 0) / 1000
-    power_seg_ratio = seg.get('segmentation_ratio', 0)
+    # Power metrics - ensure no None values
+    total_power = (seg.get('total_power', 0) or 0) / 1000
+    segmented_power = (seg.get('total_segmented_power', 0) or 0) / 1000
+    remaining_power = (seg.get('total_remaining_power', 0) or 0) / 1000
+    power_seg_ratio = seg.get('segmentation_ratio', 0) or 0
 
     # Minutes metrics
     # matched_minutes is sum across all 3 phases
     # total_available is real time (NOT multiplied by 3)
-    matched_minutes = matching.get('total_matched_minutes', 0)
-    total_days = patterns.get('daily_stats', {}).get('total_days', 0)
+    matched_minutes = matching.get('total_matched_minutes', 0) or 0
+    total_days = (patterns.get('daily_stats', {}) or {}).get('total_days', 0) or 0
 
     if total_days > 0:
         total_available_minutes = total_days * 24 * 60  # Real time, NOT x3
@@ -895,21 +1006,91 @@ def _generate_segmentation_section(analysis: Dict[str, Any]) -> str:
     <p style="font-size: 0.85em; color: #888; margin-top: 10px; text-align: center;">
         Note: Matched minutes are summed across all 3 phases. Percentage can exceed 100% if events overlap.
     </p>
+    {_generate_threshold_explanation_html(analysis)}
+    """
+
+
+def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
+    """Generate threshold explanation section."""
+    th_expl = analysis.get('threshold_explanation', {}) or {}
+    if not th_expl or 'total_minutes_above_th' not in th_expl:
+        return ''
+
+    threshold = th_expl.get('threshold', 500) or 500
+    total_above = th_expl.get('total_minutes_above_th', 0) or 0
+    total_explained = th_expl.get('total_minutes_explained', 0) or 0
+    total_rate = th_expl.get('total_explanation_rate', 0) or 0
+
+    # Per-phase data
+    phase_rows = []
+    for phase in ['w1', 'w2', 'w3']:
+        above = th_expl.get(f'{phase}_minutes_above_th', 0) or 0
+        explained = th_expl.get(f'{phase}_minutes_explained', 0) or 0
+        rate = th_expl.get(f'{phase}_explanation_rate', 0) or 0
+        color = '#28a745' if rate >= 0.8 else '#ffc107' if rate >= 0.5 else '#dc3545'
+        phase_rows.append(f"""
+            <tr>
+                <td style="padding: 8px 12px;"><strong>{phase.upper()}</strong></td>
+                <td style="padding: 8px 12px; text-align: right;">{above:,}</td>
+                <td style="padding: 8px 12px; text-align: right;">{explained:,}</td>
+                <td style="padding: 8px 12px; text-align: right; color: {color}; font-weight: bold;">{rate:.1%}</td>
+            </tr>
+        """)
+
+    total_color = '#28a745' if total_rate >= 0.8 else '#ffc107' if total_rate >= 0.5 else '#dc3545'
+
+    return f"""
+    <h4 style="margin-top: 25px;">Threshold Explanation (&gt;{threshold}W)</h4>
+    <p style="font-size: 0.85em; color: #666; margin-bottom: 15px;">
+        Minutes where power exceeded {threshold}W and were explained by segregation (short/medium/long events).
+    </p>
+    <div class="summary-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 15px;">
+        <div class="summary-card">
+            <div class="summary-number" style="color: #333; font-size: 1.6em;">{total_above:,}</div>
+            <div class="summary-label">Minutes Above TH</div>
+        </div>
+        <div class="summary-card" style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);">
+            <div class="summary-number" style="color: #155724; font-size: 1.6em;">{total_explained:,}</div>
+            <div class="summary-label">Minutes Explained</div>
+        </div>
+        <div class="summary-card" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);">
+            <div class="summary-number" style="color: {total_color}; font-size: 1.6em;">{total_rate:.1%}</div>
+            <div class="summary-label">Explanation Rate</div>
+        </div>
+    </div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+        <thead>
+            <tr style="background: #f8f9fa;">
+                <th style="padding: 8px 12px; text-align: left;">Phase</th>
+                <th style="padding: 8px 12px; text-align: right;">Above TH</th>
+                <th style="padding: 8px 12px; text-align: right;">Explained</th>
+                <th style="padding: 8px 12px; text-align: right;">Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(phase_rows)}
+            <tr style="background: #e9ecef; font-weight: bold;">
+                <td style="padding: 8px 12px;">TOTAL</td>
+                <td style="padding: 8px 12px; text-align: right;">{total_above:,}</td>
+                <td style="padding: 8px 12px; text-align: right;">{total_explained:,}</td>
+                <td style="padding: 8px 12px; text-align: right; color: {total_color};">{total_rate:.1%}</td>
+            </tr>
+        </tbody>
+    </table>
     """
 
 
 def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
     """Generate event patterns section."""
-    first = analysis.get('first_iteration', {})
-    patterns = first.get('patterns', {})
+    first = analysis.get('first_iteration', {}) or {}
+    patterns = first.get('patterns', {}) or {}
 
     if not patterns:
         return '<p>No pattern data available.</p>'
 
     # Daily statistics
-    daily_stats = patterns.get('daily_stats', {})
-    recurring = patterns.get('recurring_events', {})
-    time_dist = patterns.get('time_distribution', {})
+    daily_stats = patterns.get('daily_stats', {}) or {}
+    time_dist = patterns.get('time_distribution', {}) or {}
 
     # Daily stats - simplified to only show total days
     total_days = daily_stats.get('total_days', 0)
@@ -921,17 +1102,14 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
     """
 
     # Recurring MATCHES (ON+OFF pairs)
-    recurring_matches = patterns.get('recurring_matches', {})
-    all_patterns = recurring_matches.get('patterns', [])
+    recurring_matches = patterns.get('recurring_matches', {}) or {}
+    all_patterns = recurring_matches.get('patterns', []) or []
 
-    # Filter to show only frequent patterns (every 1-10 days) with duration > 20 min
-    # Keep daily, weekly, and patterns with avg_interval_days <= 10
+    # Filter to show only frequent patterns (every 10 days or more frequent)
     match_patterns = [
         p for p in all_patterns
-        if (p.get('duration_minutes', 0) > 20) and (
-            p.get('interval_type') in ('daily', 'weekly')
-            or (p.get('avg_interval_days') is not None and p.get('avg_interval_days') <= 10)
-        )
+        if p.get('interval_type') in ('daily', 'weekly', 'bi-weekly')
+        or (p.get('avg_interval_days') is not None and p.get('avg_interval_days') <= 10)
     ]
 
     if match_patterns:
@@ -945,12 +1123,12 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
             pattern_rows.append(f"""
             <tr class="pattern-row" onclick="toggleDates('dates-{i}')">
                 <td><strong>{i+1}</strong></td>
-                <td>{p.get('avg_start_time', '')}</td>
-                <td>{p.get('phase', '')}</td>
-                <td>{p.get('magnitude', 0)}W</td>
-                <td>{p.get('duration_minutes', 0)} min</td>
-                <td>{p.get('interval_type', '')}</td>
-                <td>{p.get('occurrences', 0)}</td>
+                <td>{p.get('avg_start_time', '') or ''}</td>
+                <td>{p.get('phase', '') or ''}</td>
+                <td>{p.get('magnitude', 0) or 0}W</td>
+                <td>{p.get('duration_minutes', 0) or 0} min</td>
+                <td>{p.get('interval_type', '') or ''}</td>
+                <td>{p.get('occurrences', 0) or 0}</td>
                 <td class="dates-cell">{dates_preview}</td>
             </tr>
             <tr id="dates-{i}" class="dates-row" style="display:none;">
@@ -972,6 +1150,10 @@ def _generate_patterns_section(analysis: Dict[str, Any]) -> str:
             <div class="metric">
                 <span class="metric-label">All Patterns:</span>
                 <span class="metric-value">{len(all_patterns)}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Total Recurring Matches:</span>
+                <span class="metric-value">{recurring_matches.get('total_recurring', 0)}</span>
             </div>
         </div>
 
@@ -1051,22 +1233,22 @@ python generate_pattern_plots.py --house {house_id}
         """
 
     # AC Detection section
-    ac_detection = patterns.get('ac_detection', {})
+    ac_detection = patterns.get('ac_detection', {}) or {}
     ac_html = _generate_ac_detection_html(ac_detection)
 
     # Boiler Detection section
-    boiler_detection = patterns.get('boiler_detection', {})
+    boiler_detection = patterns.get('boiler_detection', {}) or {}
     boiler_html = _generate_boiler_detection_html(boiler_detection)
 
     # Device Usage Patterns (seasonal and time of day)
-    device_usage = patterns.get('device_usage', {})
+    device_usage = patterns.get('device_usage', {}) or {}
     device_usage_html = _generate_device_usage_html(device_usage)
 
 
     # Time distribution with ON/OFF breakdown
-    by_period = time_dist.get('by_period', {})
-    by_period_on = time_dist.get('by_period_on', {})
-    by_period_off = time_dist.get('by_period_off', {})
+    by_period = time_dist.get('by_period', {}) or {}
+    by_period_on = time_dist.get('by_period_on', {}) or {}
+    by_period_off = time_dist.get('by_period_off', {}) or {}
 
     if by_period:
         periods = [
@@ -1130,8 +1312,8 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
     html_parts = []
 
     # Central AC section
-    central_ac = ac_detection.get('central_ac', {})
-    central_activations = central_ac.get('activations', [])  # Now sessions, not individual cycles
+    central_ac = ac_detection.get('central_ac', {}) or {}
+    central_activations = central_ac.get('activations', []) or []  # Now sessions, not individual cycles
     has_central = ac_detection.get('has_central_ac', False)
     total_cycles = central_ac.get('total_cycles', 0)
 
@@ -1144,14 +1326,15 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
         # Build copyable dates string for toggle
         copyable_dates = []
         for i, act in enumerate(central_activations):
-            phase_mags = act.get('phase_magnitudes', {})
+            phase_mags = act.get('phase_magnitudes', {}) or {}
             phase_mag_str = ' | '.join(f"{p}: {m}W" for p, m in sorted(phase_mags.items())) if phase_mags else ''
             cycle_count = act.get('cycle_count', 1)
 
             # Fix negative durations (events crossing midnight)
-            duration = act.get('duration_minutes', 0)
+            duration = act.get('duration_minutes', 0) or 0
             if duration < 0:
                 duration = duration + 1440  # Add 24 hours in minutes
+            magnitude = act.get('total_magnitude', 0) or act.get('magnitude', 0) or 0
 
             activation_rows.append(f"""
             <tr>
@@ -1160,7 +1343,7 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
                 <td>{act.get('on_time', '')}</td>
                 <td>{act.get('off_time', '')}</td>
                 <td>{duration:.0f} min</td>
-                <td>{act.get('total_magnitude', 0) or act.get('magnitude', 0)}W</td>
+                <td>{magnitude}W</td>
                 <td>{cycle_count}</td>
             </tr>
             """)
@@ -1175,7 +1358,7 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
         <div class="metrics-row" style="border-top: none; padding-top: 0; margin-bottom: 15px;">
             <div class="metric">
                 <span class="metric-label">Total Sessions:</span>
-                <span class="metric-value">{central_ac.get('total_count', 0)}</span>
+                <span class="metric-value">{central_ac.get('total_count', 0) or 0}</span>
             </div>
             <div class="metric">
                 <span class="metric-label">Total Cycles:</span>
@@ -1231,17 +1414,17 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
         """)
 
     # Regular AC section - now supports MULTIPLE phases (not just w1)
-    regular_ac_by_phase = ac_detection.get('regular_ac_by_phase', {})
+    regular_ac_by_phase = ac_detection.get('regular_ac_by_phase', {}) or {}
 
     # If old format (single regular_ac), convert to new format
     if not regular_ac_by_phase:
-        regular_ac = ac_detection.get('regular_ac', {})
+        regular_ac = ac_detection.get('regular_ac', {}) or {}
         if regular_ac.get('activations'):
             regular_ac_by_phase = {'w1': regular_ac}
 
     if regular_ac_by_phase:
         for phase, phase_data in sorted(regular_ac_by_phase.items()):
-            activations = phase_data.get('activations', [])  # Now sessions, not individual cycles
+            activations = phase_data.get('activations', []) or []  # Now sessions, not individual cycles
             if not activations:
                 continue
 
@@ -1253,11 +1436,12 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
             activation_rows = []
             copyable_dates = []
             for idx, act in enumerate(activations):
-                cycle_count = act.get('cycle_count', 1)
+                cycle_count = act.get('cycle_count', 1) or 1
                 # Fix negative durations (events crossing midnight)
-                duration = act.get('duration_minutes', 0)
+                duration = act.get('duration_minutes', 0) or 0
                 if duration < 0:
                     duration = duration + 1440  # Add 24 hours in minutes
+                magnitude = act.get('magnitude', 0) or 0
 
                 activation_rows.append(f"""
                 <tr>
@@ -1266,7 +1450,7 @@ def _generate_ac_detection_html(ac_detection: Dict[str, Any]) -> str:
                     <td>{act.get('on_time', '')}</td>
                     <td>{act.get('off_time', '')}</td>
                     <td>{duration:.0f} min</td>
-                    <td>{act.get('magnitude', 0)}W</td>
+                    <td>{magnitude}W</td>
                     <td>{cycle_count}</td>
                 </tr>
                 """)
@@ -1339,28 +1523,46 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     if not boiler_detection:
         return ""
 
-    boiler = boiler_detection.get('boiler', {})
-    activations = boiler.get('activations', [])
+    boiler = boiler_detection.get('boiler', {}) or {}
+    activations = boiler.get('activations', []) or []
     has_boiler = boiler_detection.get('has_boiler', False)
 
-    if not activations:
+    # Get phase distribution info
+    dominant_phase = boiler.get('dominant_phase', None)
+    phase_distribution = boiler.get('phase_distribution', {}) or {}
+
+    # Get suspicious multi-phase events
+    suspicious_multi = boiler_detection.get('suspicious_multi_phase', {}) or {}
+    multi_phase_activations = suspicious_multi.get('activations', []) or []
+
+    if not activations and not multi_phase_activations:
         return """
         <h4>Water Heater (Boiler)</h4>
         <p>No boiler pattern detected (no isolated long high-power events found).</p>
         """
 
-    total_count = boiler.get('total_count', len(activations))
-    avg_duration = boiler.get('avg_duration', 0)
-    avg_magnitude = boiler.get('avg_magnitude', 0)
+    total_count = boiler.get('total_count', len(activations)) or 0
+    avg_duration = boiler.get('avg_duration', 0) or 0
+    avg_magnitude = boiler.get('avg_magnitude', 0) or 0
 
-    # Build activation rows and copyable dates
+    # Filter to dominant phase only (boiler should be single-phase)
+    if dominant_phase and activations:
+        dominant_activations = [a for a in activations if a.get('phase') == dominant_phase]
+    else:
+        dominant_activations = activations
+
+    # Build phase distribution string
+    phase_dist_str = ', '.join(f"{p}: {c}" for p, c in sorted(phase_distribution.items())) if phase_distribution else "N/A"
+
+    # Build activation rows and copyable dates (only dominant phase)
     activation_rows = []
     copyable_dates = []
-    for idx, act in enumerate(activations):
+    for idx, act in enumerate(dominant_activations):
         # Fix negative durations (events crossing midnight)
-        duration = act.get('duration_minutes', 0)
+        duration = act.get('duration_minutes', 0) or 0
         if duration < 0:
             duration = duration + 1440  # Add 24 hours in minutes
+        magnitude = act.get('magnitude', 0) or 0
 
         activation_rows.append(f"""
         <tr>
@@ -1369,8 +1571,7 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
             <td>{act.get('on_time', '')}</td>
             <td>{act.get('off_time', '')}</td>
             <td>{duration:.0f} min</td>
-            <td>{act.get('magnitude', 0)}W</td>
-            <td>{act.get('phase', '')}</td>
+            <td>{magnitude}W</td>
         </tr>
         """)
         copyable_dates.append(f"{act.get('date', '')} {act.get('on_time', '')}-{act.get('off_time', '')}")
@@ -1378,7 +1579,17 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     copyable_text = ', '.join(copyable_dates)
     status_badge = '<span class="badge badge-green">Detected</span>' if has_boiler else '<span class="badge badge-orange">Few activations</span>'
 
-    return f"""
+    # Warning if multiple phases detected
+    multi_phase_warning = ""
+    if len(phase_distribution) > 1:
+        multi_phase_warning = f"""
+        <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 10px; margin-bottom: 15px;">
+            <strong>⚠️ Multiple phases detected:</strong> {phase_dist_str}<br>
+            <small>Boiler is typically single-phase. Showing only dominant phase ({dominant_phase}) below.</small>
+        </div>
+        """
+
+    html = f"""
     <h4>Water Heater (Boiler) {status_badge}</h4>
     <div class="metrics-row" style="border-top: none; padding-top: 0; margin-bottom: 15px;">
         <div class="metric">
@@ -1393,12 +1604,17 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
             <span class="metric-label">Avg Power:</span>
             <span class="metric-value">{avg_magnitude:.0f}W</span>
         </div>
+        <div class="metric">
+            <span class="metric-label">Dominant Phase:</span>
+            <span class="metric-value">{dominant_phase or 'N/A'}</span>
+        </div>
     </div>
+    {multi_phase_warning}
     <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
         Isolated long-duration (≥25 min) high-power (≥1500W) events with no medium-duration events nearby
     </p>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
-        Showing all {len(activations)} activations
+        Showing {len(dominant_activations)} activations on phase {dominant_phase or 'all'}
     </p>
     <div style="max-height: 400px; overflow-y: auto;">
     <table class="data-table small">
@@ -1410,7 +1626,6 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
                 <th>OFF Time</th>
                 <th>Duration</th>
                 <th>Power</th>
-                <th>Phase</th>
             </tr>
         </thead>
         <tbody>{''.join(activation_rows)}</tbody>
@@ -1427,6 +1642,67 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     </div>
     """
 
+    # Add suspicious multi-phase section if any
+    if multi_phase_activations:
+        multi_rows = []
+        for idx, act in enumerate(multi_phase_activations[:20]):  # Limit to 20
+            duration = act.get('duration_minutes', 0) or 0
+            if duration < 0:
+                duration = duration + 1440
+            magnitude = act.get('magnitude', 0) or 0
+            other_phases = ', '.join(str(p) for p in act.get('other_phases_active', []))
+
+            multi_rows.append(f"""
+            <tr>
+                <td>{idx+1}</td>
+                <td>{act.get('date', '')}</td>
+                <td>{act.get('on_time', '')}</td>
+                <td>{duration:.0f} min</td>
+                <td>{magnitude}W</td>
+                <td>{act.get('phase', '')}</td>
+                <td>{other_phases}</td>
+                <td>{act.get('num_phases_active', 1)}</td>
+            </tr>
+            """)
+
+        likely_device = suspicious_multi.get('likely_device', 'unknown')
+        device_label = "Likely EV Charging or Central Device" if likely_device == 'EV_charging_or_central_device' else "Unknown Device"
+
+        html += f"""
+        <div style="margin-top: 25px; padding: 15px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 8px;">
+            <h5 style="margin: 0 0 10px 0; color: #721c24;">⚡ Suspicious Multi-Phase Events ({len(multi_phase_activations)} events)</h5>
+            <p style="font-size: 0.9em; color: #721c24; margin-bottom: 10px;">
+                These events have boiler-like characteristics (long duration, high power) but have
+                simultaneous activity on multiple phases. This suggests they may be <strong>{device_label}</strong>
+                rather than a water heater.
+            </p>
+            <div style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
+                3-phase events: {suspicious_multi.get('three_phase_count', 0)} |
+                2-phase events: {suspicious_multi.get('two_phase_count', 0)}
+            </div>
+            <div style="max-height: 300px; overflow-y: auto;">
+            <table class="data-table small">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Date</th>
+                        <th>ON Time</th>
+                        <th>Duration</th>
+                        <th>Power</th>
+                        <th>Phase</th>
+                        <th>Other Active</th>
+                        <th># Phases</th>
+                    </tr>
+                </thead>
+                <tbody>{''.join(multi_rows)}</tbody>
+            </table>
+            </div>
+            {'<p style="font-size: 0.8em; color: #666; margin-top: 5px;">Showing first 20 of ' + str(len(multi_phase_activations)) + ' events</p>' if len(multi_phase_activations) > 20 else ''}
+        </div>
+        """
+
+    return html
+
 
 def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
     """Generate HTML section for device usage patterns by season and time of day."""
@@ -1438,8 +1714,8 @@ def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
     # Check if we have any data to show
     has_data = False
     for device, data in device_usage.items():
-        seasonal = data.get('seasonal', {})
-        time_of_day = data.get('time_of_day', {})
+        seasonal = data.get('seasonal', {}) or {}
+        time_of_day = data.get('time_of_day', {}) or {}
         if sum(seasonal.values()) > 0 or sum(time_of_day.values()) > 0:
             has_data = True
             break
@@ -1463,8 +1739,8 @@ def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
     }
 
     for device, data in device_usage.items():
-        seasonal = data.get('seasonal', {})
-        time_of_day = data.get('time_of_day', {})
+        seasonal = data.get('seasonal', {}) or {}
+        time_of_day = data.get('time_of_day', {}) or {}
 
         total_seasonal = sum(seasonal.values())
         total_time = sum(time_of_day.values())
@@ -1536,8 +1812,8 @@ def _generate_device_usage_html(device_usage: Dict[str, Any]) -> str:
 
 def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
     """Generate HTML table for monthly breakdown of matching performance."""
-    monthly = analysis.get('monthly', {})
-    monthly_data = monthly.get('monthly_data', [])
+    monthly = analysis.get('monthly', {}) or {}
+    monthly_data = monthly.get('monthly_data', []) or []
 
     if not monthly_data:
         return ""
@@ -1546,12 +1822,13 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
     rows = []
     for m in monthly_data:
         month = m.get('month', '?')
-        on_events = m.get('on_events', 0)
-        off_events = m.get('off_events', on_events)  # Fallback to on_events if not available
-        matches = m.get('total_matches', 0)
-        matching_rate = m.get('matching_rate', 0)
-        matched_power = m.get('matched_power', 0) / 1000 if m.get('matched_power') else 0
-        matched_minutes = m.get('matched_minutes', 0)
+        on_events = m.get('on_events', 0) or 0
+        off_events = m.get('off_events', on_events) or on_events or 0
+        matches = m.get('total_matches', 0) or 0
+        matching_rate = m.get('matching_rate', 0) or 0
+        matched_power_raw = m.get('matched_power', 0) or 0
+        matched_power = matched_power_raw / 1000 if matched_power_raw else 0
+        matched_minutes = m.get('matched_minutes', 0) or 0
 
         # Highlight problematic months
         row_class = ' style="background-color: #fff3cd;"' if matching_rate < 0.4 else ''
@@ -1569,9 +1846,9 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
         """)
 
     # Summary stats
-    problematic = monthly.get('problematic_months', [])
-    best = monthly.get('best_months', [])
-    avg_rate = monthly.get('avg_monthly_matching_rate', 0)
+    problematic = monthly.get('problematic_months', []) or []
+    best = monthly.get('best_months', []) or []
+    avg_rate = monthly.get('avg_monthly_matching_rate', 0) or 0
 
     summary_html = ""
     if problematic:
@@ -1623,7 +1900,7 @@ def _generate_monthly_breakdown_html(analysis: Dict[str, Any]) -> str:
 
 def _generate_flags_section(analysis: Dict[str, Any]) -> str:
     """Generate flags/issues section with colored badges."""
-    flags = analysis.get('flags', {})
+    flags = analysis.get('flags', {}) or {}
 
     if not flags:
         return '<p>No issues detected.</p>'
@@ -1662,14 +1939,14 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
     """Generate charts for single house."""
     charts_html = []
 
-    first = analysis.get('first_iteration', {})
+    first = analysis.get('first_iteration', {}) or {}
 
     # Power Distribution pie chart with percentages
-    seg = first.get('segmentation', {})
+    seg = first.get('segmentation', {}) or {}
     if seg:
         chart_id = 'seg-pie-chart'
-        segmented = seg.get('total_segmented_power', 0) / 1000
-        remaining = seg.get('total_remaining_power', 0) / 1000
+        segmented = (seg.get('total_segmented_power', 0) or 0) / 1000
+        remaining = (seg.get('total_remaining_power', 0) or 0) / 1000
         total = segmented + remaining
         seg_pct = (segmented / total * 100) if total > 0 else 0
         rem_pct = (remaining / total * 100) if total > 0 else 0
@@ -1706,15 +1983,15 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         ''')
 
     # Minutes Distribution pie chart (alongside power chart)
-    matching = first.get('matching', {})
-    total_matched_minutes = matching.get('total_matched_minutes', 0)
+    matching = first.get('matching', {}) or {}
+    total_matched_minutes = matching.get('total_matched_minutes', 0) or 0
     if total_matched_minutes > 0:
         chart_id = 'minutes-pie-chart'
         # Get minutes by duration category
-        duration_minutes = matching.get('duration_minutes_breakdown', {})
-        short_min = duration_minutes.get('short', 0)
-        medium_min = duration_minutes.get('medium', 0)
-        long_min = duration_minutes.get('long', 0)
+        duration_minutes = matching.get('duration_minutes_breakdown', {}) or {}
+        short_min = duration_minutes.get('short', 0) or 0
+        medium_min = duration_minutes.get('medium', 0) or 0
+        long_min = duration_minutes.get('long', 0) or 0
         total_min = short_min + medium_min + long_min
 
         if total_min > 0:
@@ -1755,7 +2032,7 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
             ''')
 
     # Duration breakdown chart (short/medium/long) - MOVED BEFORE Match Types
-    duration_breakdown = first.get('matching', {}).get('duration_breakdown', {})
+    duration_breakdown = (first.get('matching', {}) or {}).get('duration_breakdown', {}) or {}
     if duration_breakdown:
         chart_id = 'duration-chart'
         categories = ['Short (1-2 min)', 'Medium (3-24 min)', 'Long (25+ min)']
@@ -1797,7 +2074,7 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         ''')
 
     # Tag breakdown pie chart - MOVED AFTER Duration
-    tag_breakdown = first.get('matching', {}).get('tag_breakdown', {})
+    tag_breakdown = (first.get('matching', {}) or {}).get('tag_breakdown', {}) or {}
     if tag_breakdown:
         chart_id = 'tag-pie-chart'
         colors = {'NON-M': '#28a745', 'NOISY': '#ffc107', 'PARTIAL': '#17a2b8'}
@@ -1839,9 +2116,9 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         ''')
 
     # Time of Day distribution chart
-    patterns = first.get('patterns', {})
-    time_dist = patterns.get('time_distribution', {})
-    by_period = time_dist.get('by_period', {})
+    patterns = first.get('patterns', {}) or {}
+    time_dist = patterns.get('time_distribution', {}) or {}
+    by_period = time_dist.get('by_period', {}) or {}
 
     if by_period:
         chart_id = 'time-dist-chart'
@@ -1882,7 +2159,7 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
         ''')
 
     # Magnitude Minutes bar chart (minutes by power range)
-    magnitude_minutes = first.get('matching', {}).get('magnitude_minutes_breakdown', {})
+    magnitude_minutes = (first.get('matching', {}) or {}).get('magnitude_minutes_breakdown', {}) or {}
     if magnitude_minutes:
         chart_id = 'magnitude-minutes-chart'
         bins = ['1.3-1.8kW', '1.8-2.5kW', '2.5-3.5kW', '3.5-5kW', '5kW+']

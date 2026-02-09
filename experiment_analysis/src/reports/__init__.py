@@ -13,7 +13,8 @@ from reports.aggregate_report import (
     generate_summary_report,
     create_comparison_table,
     get_focus_houses,
-    generate_monthly_analysis
+    generate_monthly_analysis,
+    load_pre_analysis_scores
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     'create_comparison_table',
     'get_focus_houses',
     'generate_monthly_analysis',
+    'load_pre_analysis_scores',
 ]

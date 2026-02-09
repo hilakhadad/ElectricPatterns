@@ -103,6 +103,7 @@ def calculate_phase_metrics(
         'minutes_explained_pct': round(time_pct_iteration, 2),
         'minutes_explained_cumulative': minutes_below_th_cumulative,
         'minutes_explained_cumulative_pct': round(time_pct_cumulative, 2),
+        'threshold_explanation_pct': round(time_pct_cumulative, 2),  # Alias for clarity
         'minutes_negative': minutes_negative,
         'power_negative': round(power_negative, 2),
         'minutes_missing': minutes_missing,

@@ -20,6 +20,7 @@ source activate nilm_stat_env
 cd /home/hilakese/role_based_segregation_dev/house_analysis/scripts/
 
 # Run analysis - uses default paths automatically
-python run_analysis.py
+# -u flag for unbuffered output (shows progress immediately)
+python -u run_analysis.py
 
 echo "Analysis completed at $(date)"

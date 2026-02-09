@@ -79,17 +79,14 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
     # Calculate daily statistics
     metrics['daily_stats'] = _calculate_daily_stats(on_off_df, matches_df)
 
-    # Calculate recurring events (same time each day) - individual ON/OFF events
-    metrics['recurring_events'] = _find_recurring_events(on_off_df)
+    # NOTE: recurring_events and proximity_stats removed - not displayed in HTML
+    # This saves significant computation time
 
     # Calculate recurring MATCHES (ON+OFF pairs that repeat regularly)
     if matches_df is not None and len(matches_df) > 0:
         metrics['recurring_matches'] = _find_recurring_matches(matches_df)
     else:
         metrics['recurring_matches'] = {'patterns': [], 'total_recurring': 0}
-
-    # Calculate proximity statistics
-    metrics['proximity_stats'] = _calculate_proximity_stats(on_off_df)
 
     # Calculate time-of-day distribution
     metrics['time_distribution'] = _calculate_time_distribution(on_off_df)
@@ -207,7 +204,7 @@ def _find_recurring_events(on_off_df: pd.DataFrame,
     # Sort by occurrences
     recurring_patterns.sort(key=lambda x: x['occurrences'], reverse=True)
 
-    result['recurring_patterns'] = recurring_patterns[:20]  # Top 20
+    result['recurring_patterns'] = recurring_patterns  # Keep all patterns
     result['total_recurring_events'] = len(events_in_patterns)
     result['recurring_event_percentage'] = (
         len(events_in_patterns) / len(on_off_df) * 100 if len(on_off_df) > 0 else 0
@@ -367,7 +364,7 @@ def _find_recurring_matches(matches_df: pd.DataFrame,
     # Sort by occurrences
     recurring_patterns.sort(key=lambda x: x['occurrences'], reverse=True)
 
-    result['patterns'] = recurring_patterns[:30]  # Top 30
+    result['patterns'] = recurring_patterns  # Keep all patterns
     result['total_recurring'] = len(matches_in_patterns)
     result['recurring_percentage'] = (
         len(matches_in_patterns) / len(df) * 100 if len(df) > 0 else 0
@@ -596,6 +593,8 @@ def _calculate_proximity_stats(on_off_df: pd.DataFrame,
     """
     Calculate statistics about events that occur close together.
 
+    Uses binary search (searchsorted) for O(n log n) instead of O(n²).
+
     Args:
         on_off_df: Events DataFrame
         proximity_threshold_minutes: Events within this time are considered "close"
@@ -617,27 +616,24 @@ def _calculate_proximity_stats(on_off_df: pd.DataFrame,
     df = on_off_df.sort_values('start').reset_index(drop=True)
     threshold = pd.Timedelta(minutes=proximity_threshold_minutes)
 
-    # Count neighbors for each event
-    neighbor_counts = []
-    events_with_neighbors = 0
+    # Convert to numpy array of timestamps (nanoseconds) for fast searchsorted
+    starts = df['start'].values.astype('int64')  # nanoseconds
+    threshold_ns = int(threshold.total_seconds() * 1e9)
 
-    for i, row in df.iterrows():
-        start = row['start']
-        # Count events within threshold (before and after)
-        close_events = df[
-            (abs(df['start'] - start) <= threshold) &
-            (df.index != i)
-        ]
-        n_neighbors = len(close_events)
-        neighbor_counts.append(n_neighbors)
-        if n_neighbors > 0:
-            events_with_neighbors += 1
+    # Use searchsorted for O(n log n) neighbor counting
+    # For each event, find range of events within [start - threshold, start + threshold]
+    left_indices = np.searchsorted(starts, starts - threshold_ns, side='left')
+    right_indices = np.searchsorted(starts, starts + threshold_ns, side='right')
+
+    # Neighbor count = events in range minus self
+    neighbor_counts = (right_indices - left_indices) - 1
+    events_with_neighbors = int((neighbor_counts > 0).sum())
 
     stats['events_with_close_neighbors'] = events_with_neighbors
     stats['percentage_with_close_neighbors'] = (
         events_with_neighbors / len(df) * 100 if len(df) > 0 else 0
     )
-    stats['avg_neighbors_per_event'] = np.mean(neighbor_counts) if neighbor_counts else 0
+    stats['avg_neighbors_per_event'] = float(np.mean(neighbor_counts)) if len(neighbor_counts) > 0 else 0
 
     # Find event clusters (groups of events close together)
     clusters = _find_event_clusters(df, threshold)
@@ -649,46 +645,35 @@ def _calculate_proximity_stats(on_off_df: pd.DataFrame,
 
 
 def _find_event_clusters(df: pd.DataFrame, threshold: pd.Timedelta) -> List[Dict]:
-    """Find clusters of events that occur close together."""
+    """Find clusters of events that occur close together.
+
+    Optimized: since data is sorted, only need to check distance to previous event.
+    """
     if len(df) == 0:
         return []
 
     df = df.sort_values('start').reset_index(drop=True)
+
+    # Vectorized: calculate time diff to previous event
+    time_diffs = df['start'].diff()
+
+    # An event starts a new cluster if gap to previous > threshold (or it's the first)
+    new_cluster_mask = (time_diffs > threshold) | time_diffs.isna()
+
+    # Assign cluster IDs
+    cluster_ids = new_cluster_mask.cumsum()
+
+    # Group by cluster and build cluster info
     clusters = []
-    current_cluster = [0]
-
-    for i in range(1, len(df)):
-        # Check if this event is close to any event in current cluster
-        close_to_cluster = any(
-            abs(df.loc[i, 'start'] - df.loc[j, 'start']) <= threshold
-            for j in current_cluster
-        )
-
-        if close_to_cluster:
-            current_cluster.append(i)
-        else:
-            # Save cluster if it has more than 1 event
-            if len(current_cluster) > 1:
-                cluster_df = df.loc[current_cluster]
-                clusters.append({
-                    'size': len(current_cluster),
-                    'start': cluster_df['start'].min(),
-                    'end': cluster_df['start'].max(),
-                    'duration_minutes': (cluster_df['start'].max() - cluster_df['start'].min()).total_seconds() / 60,
-                    'phases': cluster_df['phase'].unique().tolist(),
-                })
-            current_cluster = [i]
-
-    # Don't forget last cluster
-    if len(current_cluster) > 1:
-        cluster_df = df.loc[current_cluster]
-        clusters.append({
-            'size': len(current_cluster),
-            'start': cluster_df['start'].min(),
-            'end': cluster_df['start'].max(),
-            'duration_minutes': (cluster_df['start'].max() - cluster_df['start'].min()).total_seconds() / 60,
-            'phases': cluster_df['phase'].unique().tolist(),
-        })
+    for cluster_id, group in df.groupby(cluster_ids):
+        if len(group) > 1:
+            clusters.append({
+                'size': len(group),
+                'start': group['start'].min(),
+                'end': group['start'].max(),
+                'duration_minutes': (group['start'].max() - group['start'].min()).total_seconds() / 60,
+                'phases': group['phase'].unique().tolist() if 'phase' in group.columns else [],
+            })
 
     return clusters
 
@@ -1160,6 +1145,7 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
             phase_matches[phase] = phase_df
 
     # Find central AC activations (synchronized across phases)
+    # Optimized: use merge_asof instead of iterrows
     central_activations = []
     used_match_ids = set()
 
@@ -1168,67 +1154,103 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
     if reference_phase not in phase_matches:
         return result
 
-    ref_matches = phase_matches[reference_phase]
+    ref_matches = phase_matches[reference_phase].copy()
+    ref_matches = ref_matches.sort_values('on_start').reset_index(drop=True)
 
-    for _, ref_match in ref_matches.iterrows():
-        ref_on_start = ref_match['on_start']
-        ref_off_end = ref_match.get('off_end', ref_match.get('off_start'))
-        ref_id = ref_match.get('on_event_id', '')
+    # Use merge_asof to find synchronized events on other phases
+    merged = ref_matches[['on_start', 'on_event_id', 'on_magnitude', 'off_end', 'off_start', 'duration']].copy()
+    merged = merged.rename(columns={
+        'on_event_id': f'id_{reference_phase}',
+        'on_magnitude': f'mag_{reference_phase}',
+        'off_end': f'off_end_{reference_phase}',
+        'off_start': f'off_start_{reference_phase}',
+        'duration': f'dur_{reference_phase}'
+    })
 
-        if ref_id in used_match_ids:
+    other_phases_in_merge = []
+    for other_phase in active_phases:
+        if other_phase == reference_phase or other_phase not in phase_matches:
             continue
 
-        # Look for synchronized matches on other phases
-        sync_phases = {reference_phase: ref_match}
-        total_magnitude = abs(ref_match.get('on_magnitude', 0))
+        other_df = phase_matches[other_phase][['on_start', 'on_event_id', 'on_magnitude', 'off_end', 'off_start', 'duration']].copy()
+        other_df = other_df.sort_values('on_start').reset_index(drop=True)
+        other_df = other_df.rename(columns={
+            'on_start': f'on_start_{other_phase}',
+            'on_event_id': f'id_{other_phase}',
+            'on_magnitude': f'mag_{other_phase}',
+            'off_end': f'off_end_{other_phase}',
+            'off_start': f'off_start_{other_phase}',
+            'duration': f'dur_{other_phase}'
+        })
 
-        for other_phase in active_phases:
-            if other_phase == reference_phase:
+        # Merge with tolerance - ensure both DataFrames have reset index
+        merged = merged.sort_values('on_start').reset_index(drop=True)
+        other_df = other_df.sort_values(f'on_start_{other_phase}').reset_index(drop=True)
+
+        merged = pd.merge_asof(
+            merged,
+            other_df,
+            left_on='on_start',
+            right_on=f'on_start_{other_phase}',
+            tolerance=tolerance,
+            direction='nearest'
+        )
+        other_phases_in_merge.append(other_phase)
+
+    # Filter rows where ALL phases have matches (central AC)
+    if other_phases_in_merge:
+        all_matched_mask = merged[f'id_{reference_phase}'].notna()
+        for other_phase in other_phases_in_merge:
+            all_matched_mask &= merged[f'id_{other_phase}'].notna()
+
+        central_rows = merged[all_matched_mask]
+
+        for _, row in central_rows.iterrows():
+            ref_id = row[f'id_{reference_phase}']
+            if ref_id in used_match_ids:
                 continue
-            if other_phase not in phase_matches:
+
+            # Check if any other phase ID is already used
+            skip = False
+            for other_phase in other_phases_in_merge:
+                if row[f'id_{other_phase}'] in used_match_ids:
+                    skip = True
+                    break
+            if skip:
                 continue
 
-            other_df = phase_matches[other_phase]
+            # Mark all IDs as used
+            used_match_ids.add(ref_id)
+            for other_phase in other_phases_in_merge:
+                used_match_ids.add(row[f'id_{other_phase}'])
 
-            # Find matches with ON start within tolerance
-            sync_candidates = other_df[
-                (abs(other_df['on_start'] - ref_on_start) <= tolerance) &
-                (~other_df['on_event_id'].isin(used_match_ids))
-            ]
+            # Calculate totals
+            total_magnitude = abs(row.get(f'mag_{reference_phase}', 0) or 0)
+            durations = [row.get(f'dur_{reference_phase}', 0) or 0]
+            off_times = []
 
-            if not sync_candidates.empty:
-                # Take the closest one
-                sync_candidates = sync_candidates.copy()
-                sync_candidates['time_diff'] = abs(sync_candidates['on_start'] - ref_on_start)
-                best_match = sync_candidates.loc[sync_candidates['time_diff'].idxmin()]
-                sync_phases[other_phase] = best_match
-                total_magnitude += abs(best_match.get('on_magnitude', 0))
+            ref_off = row.get(f'off_end_{reference_phase}') or row.get(f'off_start_{reference_phase}')
+            if pd.notna(ref_off):
+                off_times.append(ref_off)
 
-        # Check if we have synchronized events on all active phases (or 2+ phases)
-        # Central AC requires all active phases to be synchronized
-        is_central = len(sync_phases) == len(active_phases) and len(sync_phases) >= 2
+            phase_magnitudes = {reference_phase: int(abs(row.get(f'mag_{reference_phase}', 0) or 0))}
 
-        if is_central:
-            # Mark all matched event IDs as used
-            for phase, match in sync_phases.items():
-                used_match_ids.add(match.get('on_event_id', ''))
+            for other_phase in other_phases_in_merge:
+                mag = row.get(f'mag_{other_phase}', 0) or 0
+                total_magnitude += abs(mag)
+                phase_magnitudes[other_phase] = int(abs(mag))
 
-            # Calculate average duration across phases
-            durations = []
-            for phase, match in sync_phases.items():
-                if 'duration' in match:
-                    durations.append(match['duration'])
+                dur = row.get(f'dur_{other_phase}', 0)
+                if dur:
+                    durations.append(dur)
+
+                off = row.get(f'off_end_{other_phase}') or row.get(f'off_start_{other_phase}')
+                if pd.notna(off):
+                    off_times.append(off)
 
             avg_duration = np.mean(durations) if durations else 0
-
-            # Get OFF time (latest off_end among phases)
-            off_times = []
-            for phase, match in sync_phases.items():
-                off_time = match.get('off_end', match.get('off_start'))
-                if pd.notna(off_time):
-                    off_times.append(off_time)
-
-            off_end = max(off_times) if off_times else ref_off_end
+            off_end = max(off_times) if off_times else ref_off
+            ref_on_start = row['on_start']
 
             activation = {
                 'date': ref_on_start.strftime('%Y-%m-%d'),
@@ -1236,8 +1258,8 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
                 'off_time': off_end.strftime('%H:%M') if pd.notna(off_end) else '',
                 'duration_minutes': int(round(avg_duration)),
                 'total_magnitude': int(total_magnitude),
-                'phases': list(sync_phases.keys()),
-                'phase_magnitudes': {p: int(abs(m.get('on_magnitude', 0))) for p, m in sync_phases.items()},
+                'phases': [reference_phase] + other_phases_in_merge,
+                'phase_magnitudes': phase_magnitudes,
             }
             central_activations.append(activation)
 
@@ -1268,34 +1290,33 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
         if phase not in phase_matches:
             continue
 
-        phase_df = phase_matches[phase]
+        phase_df = phase_matches[phase].copy()
+
+        # Vectorized filtering instead of iterrows
+        filtered = phase_df[
+            (~phase_df['on_event_id'].isin(used_match_ids)) &
+            (phase_df['on_magnitude'].abs() >= 800) &
+            (phase_df['duration'] >= MIN_CYCLE_DURATION) &
+            (phase_df['duration'] <= MAX_CYCLE_DURATION)
+        ].copy()
+
+        if filtered.empty:
+            continue
+
+        # Vectorized: prepare off_time column
+        filtered['off_time_val'] = filtered['off_end'].fillna(filtered['off_start'])
+
+        # Build activations list (still need a loop for dict creation, but much smaller dataset now)
         phase_activations = []
-
-        for _, match in phase_df.iterrows():
-            match_id = match.get('on_event_id', '')
-
-            if match_id in used_match_ids:
-                continue
-
-            # Check if this is a high-power event (likely AC)
-            magnitude = abs(match.get('on_magnitude', 0))
-            if magnitude < 800:  # AC typically > 800W
-                continue
-
-            on_start = match['on_start']
-            off_end = match.get('off_end', match.get('off_start'))
-            duration = match.get('duration', 0)
-
-            # Filter by cycle duration - AC compressor cycles are typically 3-30 min
-            if duration < MIN_CYCLE_DURATION or duration > MAX_CYCLE_DURATION:
-                continue
-
+        for _, row in filtered.iterrows():
+            on_start = row['on_start']
+            off_end = row['off_time_val']
             activation = {
                 'date': on_start.strftime('%Y-%m-%d'),
                 'on_time': on_start.strftime('%H:%M'),
                 'off_time': off_end.strftime('%H:%M') if pd.notna(off_end) else '',
-                'duration_minutes': int(round(duration)),
-                'magnitude': int(magnitude),
+                'duration_minutes': int(round(row['duration'])),
+                'magnitude': int(abs(row['on_magnitude'])),
                 'phase': phase,
             }
             phase_activations.append(activation)
@@ -1506,61 +1527,151 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
 
     isolation_window = pd.Timedelta(minutes=isolation_window_minutes)
 
+    # Optimized: use merge_asof to find nearby medium events
+    # Process each phase separately
     boiler_activations = []
 
-    for _, long_match in long_matches.iterrows():
-        on_start = long_match['on_start']
-        off_end = long_match.get('off_end', long_match.get('off_start'))
-        phase = long_match.get('phase', '')
-        magnitude = abs(long_match.get('on_magnitude', 0))
-        duration = long_match.get('duration', 0)
+    for phase in long_matches['phase'].unique():
+        phase_long = long_matches[long_matches['phase'] == phase].copy()
+        phase_long = phase_long.sort_values('on_start').reset_index(drop=True)
 
-        if pd.isna(on_start):
-            continue
+        if medium_matches.empty:
+            # No medium events - all long events are isolated
+            isolated = phase_long
+        else:
+            phase_medium = medium_matches[medium_matches['phase'] == phase].copy()
 
-        # Check if isolated: no medium matches within window before/after on same phase
-        if not medium_matches.empty:
-            same_phase_medium = medium_matches[medium_matches['phase'] == phase]
+            if phase_medium.empty:
+                # No medium events on this phase - all isolated
+                isolated = phase_long
+            else:
+                phase_medium = phase_medium.sort_values('on_start').reset_index(drop=True)
 
-            if not same_phase_medium.empty:
-                # Check for medium matches within isolation window
-                window_start = on_start - isolation_window
-                window_end = (off_end if pd.notna(off_end) else on_start) + isolation_window
+                # Use merge_asof to find nearest medium event
+                # Ensure both DataFrames are sorted and have reset index (merge_asof requires this)
+                left_df = phase_long[['on_start', 'off_end', 'off_start', 'on_magnitude', 'duration', 'phase']].copy()
+                left_df = left_df.sort_values('on_start').reset_index(drop=True)
+                right_df = phase_medium[['on_start']].rename(columns={'on_start': 'nearby_medium_start'}).copy()
+                right_df = right_df.sort_values('nearby_medium_start').reset_index(drop=True)
 
-                nearby_medium = same_phase_medium[
-                    (same_phase_medium['on_start'] >= window_start) &
-                    (same_phase_medium['on_start'] <= window_end)
-                ]
+                merged = pd.merge_asof(
+                    left_df,
+                    right_df,
+                    left_on='on_start',
+                    right_on='nearby_medium_start',
+                    tolerance=isolation_window,
+                    direction='nearest'
+                )
 
-                # Exclude the long match itself if it somehow appears
-                nearby_medium = nearby_medium[
-                    nearby_medium['on_start'] != on_start
-                ]
+                # Isolated = no nearby medium event found
+                isolated = merged[merged['nearby_medium_start'].isna()].copy()
 
-                if len(nearby_medium) > 0:
-                    # Not isolated - has medium events nearby
-                    continue
+        # Build activation dicts
+        for _, row in isolated.iterrows():
+            on_start = row['on_start']
+            if pd.isna(on_start):
+                continue
+            off_end = row.get('off_end') if pd.notna(row.get('off_end')) else row.get('off_start')
 
-        # This is an isolated long high-power event - likely a boiler!
-        activation = {
-            'date': on_start.strftime('%Y-%m-%d'),
-            'on_time': on_start.strftime('%H:%M'),
-            'off_time': off_end.strftime('%H:%M') if pd.notna(off_end) else '',
-            'duration_minutes': int(round(duration)),
-            'magnitude': int(magnitude),
-            'phase': phase,
-        }
-        boiler_activations.append(activation)
+            activation = {
+                'date': on_start.strftime('%Y-%m-%d'),
+                'on_time': on_start.strftime('%H:%M'),
+                'off_time': off_end.strftime('%H:%M') if pd.notna(off_end) else '',
+                'duration_minutes': int(round(row['duration'])),
+                'magnitude': int(abs(row['on_magnitude'])),
+                'phase': phase,
+            }
+            boiler_activations.append(activation)
 
     # Sort by date and time
     boiler_activations.sort(key=lambda x: (x['date'], x['on_time']))
 
-    result['boiler']['activations'] = boiler_activations
-    result['boiler']['total_count'] = len(boiler_activations)
-    result['has_boiler'] = len(boiler_activations) >= 3  # Need at least 3 activations
+    # ===== NEW: Detect multi-phase simultaneous events (might be EV charging, not boiler) =====
+    # Boiler should only use ONE phase. If multiple phases are active at the same time,
+    # it's likely something else (EV charging, heavy industrial equipment, etc.)
 
+    sync_tolerance = pd.Timedelta(minutes=5)  # Events within 5 min are "simultaneous"
+
+    # Convert to DataFrame for easier processing
     if boiler_activations:
-        result['boiler']['avg_duration'] = sum(a['duration_minutes'] for a in boiler_activations) / len(boiler_activations)
-        result['boiler']['avg_magnitude'] = sum(a['magnitude'] for a in boiler_activations) / len(boiler_activations)
+        boiler_df = pd.DataFrame(boiler_activations)
+        boiler_df['on_datetime'] = pd.to_datetime(boiler_df['date'] + ' ' + boiler_df['on_time'])
+
+        # Find events that have other-phase events at the same time
+        multi_phase_events = []
+        single_phase_events = []
+
+        for i, row in boiler_df.iterrows():
+            on_time = row['on_datetime']
+            phase = row['phase']
+
+            # Find other-phase events at similar time
+            other_phase_events = boiler_df[
+                (boiler_df['phase'] != phase) &
+                (abs(boiler_df['on_datetime'] - on_time) <= sync_tolerance)
+            ]
+
+            if len(other_phase_events) > 0:
+                # This event has simultaneous activity on other phases
+                event = row.to_dict()
+                event['other_phases_active'] = other_phase_events['phase'].unique().tolist()
+                event['num_phases_active'] = len(other_phase_events['phase'].unique()) + 1
+                event.pop('on_datetime', None)  # Remove helper column
+                multi_phase_events.append(event)
+            else:
+                # Single-phase event - likely real boiler
+                event = row.to_dict()
+                event['other_phases_active'] = []
+                event['num_phases_active'] = 1
+                event.pop('on_datetime', None)
+                single_phase_events.append(event)
+
+        # Count events per phase for single-phase events
+        phase_counts = {}
+        for evt in single_phase_events:
+            p = evt['phase']
+            phase_counts[p] = phase_counts.get(p, 0) + 1
+
+        # Find dominant phase (most boiler events)
+        dominant_phase = max(phase_counts, key=phase_counts.get) if phase_counts else None
+        result['boiler']['dominant_phase'] = dominant_phase
+        result['boiler']['phase_distribution'] = phase_counts
+
+        # Final boiler activations = single-phase events only
+        result['boiler']['activations'] = single_phase_events
+        result['boiler']['total_count'] = len(single_phase_events)
+
+        if single_phase_events:
+            result['boiler']['avg_duration'] = sum(a['duration_minutes'] for a in single_phase_events) / len(single_phase_events)
+            result['boiler']['avg_magnitude'] = sum(a['magnitude'] for a in single_phase_events) / len(single_phase_events)
+
+        # Multi-phase events table (might be EV charging or other heavy load)
+        result['suspicious_multi_phase'] = {
+            'activations': multi_phase_events,
+            'total_count': len(multi_phase_events),
+            'description': 'Events with boiler-like characteristics but multiple phases active simultaneously - may be EV charging or other high-power device',
+        }
+
+        if multi_phase_events:
+            # Check if these are truly synchronized (3 phases = likely EV or central device)
+            three_phase_count = sum(1 for e in multi_phase_events if e['num_phases_active'] == 3)
+            two_phase_count = sum(1 for e in multi_phase_events if e['num_phases_active'] == 2)
+
+            result['suspicious_multi_phase']['three_phase_count'] = three_phase_count
+            result['suspicious_multi_phase']['two_phase_count'] = two_phase_count
+
+            if three_phase_count > len(multi_phase_events) * 0.5:
+                result['suspicious_multi_phase']['likely_device'] = 'EV_charging_or_central_device'
+            else:
+                result['suspicious_multi_phase']['likely_device'] = 'unknown'
+
+    else:
+        result['boiler']['activations'] = []
+        result['boiler']['total_count'] = 0
+        result['boiler']['dominant_phase'] = None
+        result['boiler']['phase_distribution'] = {}
+        result['suspicious_multi_phase'] = {'activations': [], 'total_count': 0}
+
+    result['has_boiler'] = result['boiler']['total_count'] >= 3  # Need at least 3 single-phase activations
 
     return result

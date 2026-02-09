@@ -20,6 +20,84 @@ except ImportError:
 
 from reports.experiment_report import analyze_experiment_house
 from metrics.monthly import calculate_monthly_metrics, find_common_problematic_months
+import json
+
+
+def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
+    """
+    Load quality scores from house_analysis output.
+
+    Supports:
+    - Single JSON file with list of analyses
+    - Single JSON file with 'analyses' key
+    - Directory containing per-house JSON files (per_house/ or run_*/per_house/)
+
+    Args:
+        house_analysis_path: Path to house_analysis JSON file or directory
+
+    Returns:
+        Dictionary mapping house_id -> quality_score
+    """
+    scores = {}
+    house_analysis_path = Path(house_analysis_path)
+
+    if not house_analysis_path.exists():
+        print(f"Warning: Pre-analysis path not found: {house_analysis_path}")
+        return scores
+
+    # If it's a directory, look for per_house JSON files
+    if house_analysis_path.is_dir():
+        # Check for per_house subdirectory
+        per_house_dir = house_analysis_path / "per_house"
+        if not per_house_dir.exists():
+            per_house_dir = house_analysis_path  # Maybe it IS the per_house dir
+
+        json_files = list(per_house_dir.glob("analysis_*.json"))
+        if not json_files:
+            print(f"Warning: No analysis_*.json files found in {per_house_dir}")
+            return scores
+
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    analysis = json.load(f)
+                house_id = str(analysis.get('house_id', ''))
+                quality = analysis.get('data_quality', {})
+                quality_score = quality.get('quality_score', None)
+                if house_id and quality_score is not None:
+                    scores[house_id] = quality_score
+            except Exception as e:
+                print(f"Warning: Failed to load {json_file}: {e}")
+
+        print(f"Loaded pre-analysis quality scores for {len(scores)} houses from {per_house_dir}")
+        return scores
+
+    # It's a file - try to read as JSON
+    try:
+        with open(house_analysis_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Handle list of analyses or dict with 'analyses' key
+        if isinstance(data, list):
+            analyses = data
+        elif isinstance(data, dict) and 'analyses' in data:
+            analyses = data['analyses']
+        else:
+            print(f"Warning: Unexpected format in {house_analysis_path}")
+            return scores
+
+        for analysis in analyses:
+            house_id = str(analysis.get('house_id', ''))
+            quality = analysis.get('data_quality', {})
+            quality_score = quality.get('quality_score', None)
+            if house_id and quality_score is not None:
+                scores[house_id] = quality_score
+
+        print(f"Loaded pre-analysis quality scores for {len(scores)} houses")
+    except Exception as e:
+        print(f"Warning: Failed to load pre-analysis scores: {e}")
+
+    return scores
 
 
 def _analyze_single_house(args):
@@ -32,11 +110,54 @@ def _analyze_single_house(args):
     return result
 
 
+def _save_house_report_incremental(analysis: Dict[str, Any], output_dir: Path) -> bool:
+    """
+    Save house report immediately after analysis completes.
+
+    Saves: JSON data, text report, and HTML report.
+
+    Returns:
+        True if all saves succeeded, False if any failed
+    """
+    from reports.experiment_report import generate_experiment_report
+
+    house_id = analysis.get('house_id', 'unknown')
+    all_success = True
+
+    # Save JSON analysis data
+    json_path = output_dir / f"house_{house_id}_analysis.json"
+    try:
+        # Remove non-serializable fields
+        serializable = {k: v for k, v in analysis.items() if not k.startswith('_')}
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(serializable, f, indent=2, default=str)
+    except Exception as e:
+        print(f"    !! Failed to save JSON for house {house_id}: {e}", flush=True)
+        all_success = False
+
+    # Save text report
+    txt_path = output_dir / f"house_{house_id}.txt"
+    try:
+        report_text = generate_experiment_report(analysis)
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(report_text)
+    except Exception as e:
+        print(f"    !! Failed to save TXT for house {house_id}: {e}", flush=True)
+        all_success = False
+
+    # HTML reports are generated at the end (after all houses complete)
+    # to avoid None formatting issues during incremental saving
+
+    return all_success
+
+
 def aggregate_experiment_results(experiment_dir: Path,
                                  house_ids: Optional[List[str]] = None,
                                  max_iterations: int = 10,
                                  max_workers: int = 4,
-                                 fast_mode: bool = False) -> List[Dict[str, Any]]:
+                                 fast_mode: bool = False,
+                                 pre_analysis_scores: Optional[Dict[str, float]] = None,
+                                 incremental_output_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     """
     Aggregate experiment results for multiple houses.
 
@@ -46,6 +167,8 @@ def aggregate_experiment_results(experiment_dir: Path,
         max_iterations: Maximum iterations to check per house
         max_workers: Number of parallel workers
         fast_mode: Skip expensive pattern analysis for faster results
+        pre_analysis_scores: Optional dict mapping house_id -> quality_score from house_analysis
+        incremental_output_dir: Optional dir to save reports incrementally as each house completes
 
     Returns:
         List of analysis results for each house
@@ -55,8 +178,8 @@ def aggregate_experiment_results(experiment_dir: Path,
         house_ids = _detect_houses(experiment_dir)
 
     mode_str = " (FAST MODE)" if fast_mode else ""
-    print(f"Detected {len(house_ids)} houses to analyze{mode_str}")
-    print(f"Houses: {', '.join(house_ids[:5])}{'...' if len(house_ids) > 5 else ''}")
+    print(f"Detected {len(house_ids)} houses to analyze{mode_str}", flush=True)
+    print(f"Houses: {', '.join(house_ids[:5])}{'...' if len(house_ids) > 5 else ''}", flush=True)
 
     if len(house_ids) == 0:
         return []
@@ -69,8 +192,14 @@ def aggregate_experiment_results(experiment_dir: Path,
     total_time = 0
     start_time = time.time()
 
-    print(f"\nStarting analysis with {max_workers} parallel workers...")
-    print("-" * 60)
+    print(f"\nStarting analysis with {max_workers} parallel workers...", flush=True)
+    print("-" * 60, flush=True)
+
+    # Prepare incremental output directory if specified
+    if incremental_output_dir:
+        incremental_output_dir = Path(incremental_output_dir)
+        incremental_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Incremental reports will be saved to: {incremental_output_dir}", flush=True)
 
     # Use parallel processing for speed
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -91,35 +220,86 @@ def aggregate_experiment_results(experiment_dir: Path,
                 house_time = result.get('_analysis_time', 0)
                 total_time += house_time
 
+                # === INCREMENTAL SAVE: Write report immediately after analysis ===
+                if incremental_output_dir:
+                    if result.get('status') == 'error':
+                        print(f"    !! Skipping save for house {house_id}: status=error", flush=True)
+                    else:
+                        save_success = _save_house_report_incremental(result, incremental_output_dir)
+                        if save_success:
+                            print(f"    -> Saved reports for house {house_id}", flush=True)
+                        # Errors are already logged by _save_house_report_incremental
+
                 # Calculate progress stats
                 elapsed = time.time() - start_time
                 avg_time = elapsed / completed_count
                 remaining = len(house_ids) - completed_count
                 eta_seconds = avg_time * remaining
 
-                # Log progress
+                # Log progress - verbose output
                 status = result.get('status', 'unknown')
                 score = result.get('scores', {}).get('overall_score', 0)
 
-                if not HAS_TQDM:
-                    print(f"[{completed_count}/{len(house_ids)}] House {house_id}: "
-                          f"{status} (score: {score:.0f}) - {house_time:.1f}s | "
-                          f"ETA: {eta_seconds/60:.1f}min")
-                else:
+                # Build verbose details string
+                details = []
+                iterations = result.get('iterations', {})
+                if iterations:
+                    details.append(f"iters:{len(iterations)}")
+
+                events = result.get('event_stats', {})
+                if events:
+                    on_count = events.get('on_events', 0)
+                    matches = events.get('matches', 0)
+                    if on_count:
+                        details.append(f"events:{on_count}")
+                    if matches:
+                        details.append(f"matches:{matches}")
+
+                ac_det = result.get('ac_detection', {})
+                if ac_det.get('has_central_ac'):
+                    details.append("central_ac")
+                if ac_det.get('has_regular_ac'):
+                    details.append("regular_ac")
+
+                boiler = result.get('boiler_detection', {})
+                if boiler.get('has_boiler'):
+                    details.append("boiler")
+
+                multi_phase = boiler.get('suspicious_multi_phase', {})
+                if multi_phase.get('total_count', 0) > 0:
+                    details.append(f"multi_phase:{multi_phase['total_count']}")
+
+                details_str = " | ".join(details) if details else "no patterns"
+
+                # Always print verbose output (flush=True for SLURM compatibility)
+                print(f"  House {house_id}: {status} | score:{score:.0f} | {details_str} | {house_time:.1f}s", flush=True)
+
+                if HAS_TQDM:
                     futures_iter.set_postfix(
                         last=house_id,
-                        time=f"{house_time:.1f}s",
+                        score=f"{score:.0f}",
                         eta=f"{eta_seconds/60:.1f}m"
                     )
             except Exception as e:
                 completed_count += 1
-                print(f"[{completed_count}/{len(house_ids)}] House {house_id}: ERROR - {e}")
+                print(f"[{completed_count}/{len(house_ids)}] House {house_id}: ERROR - {e}", flush=True)
                 analyses.append({'house_id': house_id, 'status': 'error', 'error': str(e)})
 
     total_elapsed = time.time() - start_time
     print("-" * 60)
     print(f"Analysis complete: {len(analyses)} houses in {total_elapsed:.1f}s "
           f"(avg: {total_elapsed/len(analyses):.1f}s/house)")
+
+    # Inject pre-analysis quality scores if provided
+    if pre_analysis_scores:
+        matched = 0
+        for analysis in analyses:
+            house_id = str(analysis.get('house_id', ''))
+            if house_id in pre_analysis_scores:
+                analysis['pre_analysis_quality_score'] = pre_analysis_scores[house_id]
+                matched += 1
+        if matched > 0:
+            print(f"Injected pre-analysis quality scores for {matched} houses")
 
     return analyses
 

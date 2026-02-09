@@ -212,8 +212,8 @@ def run_pipeline_for_house(
 # ============================================================================
 # STANDALONE CONFIGURATION (defaults, can be overridden by CLI args)
 # ============================================================================
-DEFAULT_HOUSE_ID = "140_debug"
-DEFAULT_EXPERIMENT_NAME = "exp006_partial_matching"
+DEFAULT_HOUSE_ID = "305"
+DEFAULT_EXPERIMENT_NAME = "exp007_symmetric_threshold"
 DEFAULT_MAX_ITERATIONS = 2
 
 

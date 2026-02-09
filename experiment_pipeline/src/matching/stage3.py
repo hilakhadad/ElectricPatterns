@@ -7,9 +7,14 @@ When ON and OFF magnitudes differ by more than threshold (350W), instead of reje
 
 This handles cases where two devices turn on at the same time but only one turns off,
 or vice versa.
+
+Match tags combine PARTIAL prefix with duration:
+- Format: PARTIAL-{duration}[-CORRECTED]
+- Example: PARTIAL-MEDIUM, PARTIAL-EXTENDED-CORRECTED
+- Note: No magnitude quality tag since magnitudes differ significantly by design
 """
 import pandas as pd
-from .validator import is_valid_partial_removal
+from .validator import is_valid_partial_removal, build_match_tag
 
 
 def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
@@ -24,7 +29,7 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
     1. Same phase
     2. OFF within time window (progressive: 15min -> 30min -> 1hr -> 2hr -> 4hr -> max)
     3. Magnitude difference > max_magnitude_diff (350W) - THIS IS THE TRIGGER
-    4. Stable power between ON and OFF (like NON-M)
+    4. Stable power between ON and OFF (like STABLE)
     5. Removing smaller magnitude doesn't create negative values
 
     These matches get tag "PARTIAL" and create a remainder event.
@@ -38,7 +43,8 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
         logger: Logger instance
 
     Returns:
-        Tuple of (matched_off_event, "PARTIAL", remainder_event) or (None, None, None)
+        Tuple of (matched_off_event, tag, remainder_event, correction) or (None, None, None, 0)
+        - correction: Amount to reduce match magnitude by (0 if no correction needed)
     """
     phase = on_event['phase']
     on_id = on_event['event_id']
@@ -93,7 +99,7 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
                 max_deviation = (phase_data - baseline_power).abs().max()
 
                 if max_deviation > max_magnitude_diff:
-                    logger.debug(f"[Stage 3] Rejected {on_id}-{off_id}: power not stable between events")
+                    logger.info(f"REJECTED {on_id}-{off_id}: partial_unstable_power (dev={max_deviation:.0f}W, threshold={max_magnitude_diff}W, baseline={baseline_power:.0f}W)")
                     continue
 
             # Calculate match magnitude and remainder
@@ -108,13 +114,18 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
             min_ratio = 1.50  # 150%
             actual_ratio = max(on_magnitude, off_magnitude) / match_magnitude if match_magnitude > 0 else float('inf')
             if actual_ratio <= min_ratio:
-                logger.debug(f"[Stage 3] Rejected {on_id}-{off_id}: magnitude ratio too small ({actual_ratio:.2f} <= {min_ratio:.2f})")
+                logger.info(f"REJECTED {on_id}-{off_id}: ratio_too_small ({actual_ratio:.2f} <= {min_ratio:.2f}, ON={on_magnitude:.0f}W OFF={off_magnitude:.0f}W)")
                 continue
 
             # Validate that removal with match_magnitude won't create negative values
-            if not is_valid_partial_removal(data, on_event, off_event, match_magnitude, logger):
-                logger.debug(f"[Stage 3] Rejected {on_id}-{off_id}: negative residuals with match_magnitude={match_magnitude}W")
+            is_valid, correction = is_valid_partial_removal(data, on_event, off_event, match_magnitude, logger)
+            if not is_valid:
+                # Rejection reason already logged by validator
                 continue
+
+            # Calculate duration for tagging
+            duration_minutes = (off_end - on_start).total_seconds() / 60
+            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_partial=True, is_corrected=correction > 0)
 
             # Create remainder event
             if on_magnitude > off_magnitude:
@@ -128,8 +139,8 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
                     'event': 'on',
                     'duration': on_duration
                 }
-                logger.info(f"Matched PARTIAL: {on_id}({on_magnitude}W) <-> {off_id}({off_magnitude}W), "
-                           f"match={match_magnitude}W, remainder ON={remainder_magnitude}W")
+                logger.info(f"Matched {tag}: {on_id}({on_magnitude}W) <-> {off_id}({off_magnitude}W), "
+                           f"match={match_magnitude}W, remainder ON={remainder_magnitude}W" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
             else:
                 # OFF was bigger - remainder is new OFF event
                 remainder = {
@@ -141,9 +152,9 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
                     'event': 'off',
                     'duration': off_duration
                 }
-                logger.info(f"Matched PARTIAL: {on_id}({on_magnitude}W) <-> {off_id}({off_magnitude}W), "
-                           f"match={match_magnitude}W, remainder OFF={remainder_magnitude}W")
+                logger.info(f"Matched {tag}: {on_id}({on_magnitude}W) <-> {off_id}({off_magnitude}W), "
+                           f"match={match_magnitude}W, remainder OFF={remainder_magnitude}W" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
 
-            return off_event, "PARTIAL", remainder
+            return off_event, tag, remainder, correction
 
-    return None, None, None
+    return None, None, None, 0
