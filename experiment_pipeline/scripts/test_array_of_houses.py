@@ -63,11 +63,11 @@ def get_houses_sorted_by_size():
 
 
 # Auto-detect all houses from INPUT directory, sorted by size
-HOUSE_IDS = get_houses_sorted_by_size()
-# HOUSE_IDS = ["5012", "5011", "330", "319", "253", "2080", "140", "49", "6005", "1", "1001", "2035", "2049"]
+# HOUSE_IDS = get_houses_sorted_by_size()
+HOUSE_IDS = ["305", "1"]
 
 # Experiment name (must match one in detection_config.py)
-EXPERIMENT_NAME = "exp006_partial_matching"
+EXPERIMENT_NAME = "exp007_symmetric_threshold"
 
 # Number of iterations per house
 MAX_ITERATIONS = 2

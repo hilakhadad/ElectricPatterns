@@ -97,14 +97,25 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             continue
 
         all_new_columns = {}
+        all_skipped_ids = []
 
         # Process each phase
         for phase in phases:
-            data, new_cols, _ = process_phase_segmentation(data, events, phase, logger)
+            data, new_cols, _, skipped_ids = process_phase_segmentation(data, events, phase, logger)
             all_new_columns.update(new_cols)
+            all_skipped_ids.extend(skipped_ids)
 
-        # Add new columns
-        data = pd.concat([data, pd.DataFrame(all_new_columns)], axis=1)
+        # Update matches file: remove events that were skipped during segmentation
+        if all_skipped_ids:
+            original_count = len(events)
+            events = events[~events['on_event_id'].isin(all_skipped_ids)]
+            removed_count = original_count - len(events)
+            logger.info(f"Removed {removed_count} skipped events from matches file ({month:02d}/{year})")
+            events.to_pickle(matches_file)
+
+        # Add new columns (direct assignment avoids index misalignment with pd.concat)
+        for col_name, col_values in all_new_columns.items():
+            data[col_name] = col_values
 
         # Create summary
         summary_df = summarize_segmentation(data, phases)

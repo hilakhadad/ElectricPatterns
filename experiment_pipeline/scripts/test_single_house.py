@@ -212,7 +212,7 @@ def run_pipeline_for_house(
 # ============================================================================
 # STANDALONE CONFIGURATION (defaults, can be overridden by CLI args)
 # ============================================================================
-DEFAULT_HOUSE_ID = "305"
+DEFAULT_HOUSE_ID = "1"
 DEFAULT_EXPERIMENT_NAME = "exp007_symmetric_threshold"
 DEFAULT_MAX_ITERATIONS = 2
 

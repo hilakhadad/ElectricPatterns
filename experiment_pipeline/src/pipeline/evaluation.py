@@ -109,11 +109,18 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
             how='left',
             suffixes=('', '_current')
         )
-        # Add baseline columns
+        # Add baseline columns (columns not already in merged_data)
         baseline_indexed = baseline_dedup.set_index('timestamp')
         for col in baseline_dedup.columns:
             if col != 'timestamp' and col not in merged_data.columns:
                 merged_data[col] = baseline_indexed[col].reindex(merged_data['timestamp']).values
+
+        # Overwrite original_{phase} with baseline values (run 0 originals)
+        # Current run's "original" is actually previous run's remaining - not the true original
+        for phase in ['w1', 'w2', 'w3']:
+            original_col = f'original_{phase}'
+            if original_col in baseline_indexed.columns:
+                merged_data[original_col] = baseline_indexed[original_col].reindex(merged_data['timestamp']).values
 
         # Merge previous run data if exists
         if prev_data is not None:

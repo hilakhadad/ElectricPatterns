@@ -15,6 +15,15 @@ import numpy as np
 # Default tolerance for negative values - if within this range, we correct instead of reject
 DEFAULT_NEGATIVE_TOLERANCE = -10  # watts
 
+# Maximum coefficient of variation for event segment stability
+# Events with CV > this are too spiky (not clean device ON/OFF) and will be rejected
+MAX_EVENT_CV = 0.30  # 30% of magnitude
+
+# Minimum event segment power as fraction of magnitude
+# If event_seg drops below this ratio * magnitude, the match crosses different events
+# A real device that is ON should not drop below 50% of its operating power
+MIN_EVENT_STABILITY_RATIO = 0.50
+
 
 def get_magnitude_quality_tag(on_magnitude: float, off_magnitude: float) -> str:
     """
@@ -159,8 +168,6 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
     power_arr = data[power_col].values
     diff_arr = data[diff_col].values
 
-    magnitude = on_magnitude
-
     try:
         # ON segment: indices [on_start_idx, on_end_idx)
         on_diff = diff_arr[on_start_idx:on_end_idx]
@@ -172,21 +179,30 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
             on_seg = np.array([])
             on_remain = np.array([])
 
+        # Track device power continuously via diffs (not fixed at on_magnitude)
+        # Device power at end of ON = actual accumulated power from the ramp
+        device_power = on_seg[-1] if len(on_seg) > 0 else on_magnitude
+
         # Event segment: indices (on_end_idx, off_start_idx)
+        # Track device power following diffs from end of ON segment, no upper clip
         event_diff = diff_arr[on_end_idx:off_start_idx]
         event_power = power_arr[on_end_idx:off_start_idx]
         if len(event_diff) > 0:
-            event_seg = magnitude + np.cumsum(event_diff)
+            event_seg = np.maximum(device_power + np.cumsum(event_diff), 0)
             event_remain = event_power - event_seg
         else:
             event_seg = np.array([])
             event_remain = np.array([])
 
+        # Device power at start of OFF = end of event segment
+        device_power = event_seg[-1] if len(event_seg) > 0 else device_power
+
         # OFF segment: indices [off_start_idx, off_end_idx)
+        # OFF ramp: device decreases from current tracked power to 0
         off_diff = diff_arr[off_start_idx:off_end_idx]
         off_power = power_arr[off_start_idx:off_end_idx]
         if len(off_diff) > 0:
-            off_seg = magnitude + np.cumsum(off_diff)
+            off_seg = np.maximum(device_power + np.cumsum(off_diff), 0)
             off_remain = off_power - off_seg
         else:
             off_seg = np.array([])
@@ -194,6 +210,23 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
     except Exception as e:
         logger.error(f"Error adjusting data ranges of {on_id} and {off_id}: {e}")
         return False, 0
+
+    # Check event segment stability - reject if too spiky (not a clean device event)
+    if len(event_seg) >= 3 and on_magnitude > 0:
+        # CV check: overall variability relative to ON magnitude
+        event_cv = np.std(event_seg) / on_magnitude
+        if event_cv > MAX_EVENT_CV:
+            logger.info(f"REJECTED {on_id}-{off_id}: unstable_event_segment (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
+            return False, 0
+
+        # Min power check: if event power drops below threshold, the match crosses different events
+        # A device that is ON should maintain at least MIN_EVENT_STABILITY_RATIO of its magnitude
+        min_event_power = np.min(event_seg)
+        min_ratio = min_event_power / on_magnitude
+        if min_ratio < MIN_EVENT_STABILITY_RATIO:
+            logger.info(f"REJECTED {on_id}-{off_id}: event_power_drop (min={min_event_power:.0f}W, "
+                        f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
+            return False, 0
 
     # Check remaining power - must not be negative
     min_remain = min(
@@ -297,21 +330,27 @@ def is_valid_partial_removal(data: pd.DataFrame, on_event: dict, off_event, matc
             on_seg = np.array([])
             on_remain = np.array([])
 
-        # Event segment
+        # Track device power continuously via diffs
+        device_power = on_seg[-1] if len(on_seg) > 0 else match_magnitude
+
+        # Event segment - track device power following diffs, no upper clip
         event_diff = diff_arr[on_end_idx:off_start_idx]
         event_power = power_arr[on_end_idx:off_start_idx]
         if len(event_diff) > 0:
-            event_seg = match_magnitude + np.cumsum(event_diff)
+            event_seg = np.maximum(device_power + np.cumsum(event_diff), 0)
             event_remain = event_power - event_seg
         else:
             event_seg = np.array([])
             event_remain = np.array([])
 
-        # OFF segment
+        # Device power at start of OFF = end of event segment
+        device_power = event_seg[-1] if len(event_seg) > 0 else device_power
+
+        # OFF segment - ramp down from current tracked power to 0
         off_diff = diff_arr[off_start_idx:off_end_idx]
         off_power = power_arr[off_start_idx:off_end_idx]
         if len(off_diff) > 0:
-            off_seg = match_magnitude + np.cumsum(off_diff)
+            off_seg = np.maximum(device_power + np.cumsum(off_diff), 0)
             off_remain = off_power - off_seg
         else:
             off_seg = np.array([])
@@ -319,6 +358,21 @@ def is_valid_partial_removal(data: pd.DataFrame, on_event: dict, off_event, matc
     except Exception as e:
         logger.error(f"Error adjusting data ranges of {on_id} and {off_id}: {e}")
         return False, 0
+
+    # Check event segment stability - reject if too spiky
+    if len(event_seg) >= 3 and match_magnitude > 0:
+        event_cv = np.std(event_seg) / match_magnitude
+        if event_cv > MAX_EVENT_CV:
+            logger.info(f"REJECTED {on_id}-{off_id}: partial_unstable_event (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
+            return False, 0
+
+        # Min power check: if event power drops below threshold, match crosses different events
+        min_event_power = np.min(event_seg)
+        min_ratio = min_event_power / match_magnitude
+        if min_ratio < MIN_EVENT_STABILITY_RATIO:
+            logger.info(f"REJECTED {on_id}-{off_id}: partial_event_power_drop (min={min_event_power:.0f}W, "
+                        f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
+            return False, 0
 
     # Check remaining power - must not be negative
     min_remain = min(

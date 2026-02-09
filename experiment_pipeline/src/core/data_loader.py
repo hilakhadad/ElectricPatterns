@@ -48,7 +48,7 @@ def load_power_data(filepath: Union[str, Path], parse_dates: bool = True) -> pd.
 
 def _load_single_file(filepath: Path, parse_dates: bool) -> pd.DataFrame:
     """Load a single pkl file."""
-    return pd.read_pickle(filepath)
+    return pd.read_pickle(filepath).reset_index(drop=True)
 
 
 def _load_from_folder(folder: Path, parse_dates: bool) -> pd.DataFrame:

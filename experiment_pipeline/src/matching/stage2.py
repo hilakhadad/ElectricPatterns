@@ -56,6 +56,7 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
     # Progressive window search: start small and expand
     # Windows in minutes: 15min, 30min, 1hr, 2hr, 4hr, then max_time_diff
     window_steps_minutes = [15, 30, 60, 120, 240, max_time_diff * 60]
+    candidates_logged = False
 
     for window_minutes in window_steps_minutes:
         if window_minutes > max_time_diff * 60:
@@ -77,6 +78,17 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
             magnitude_diff=abs(abs(candidates['magnitude']) - on_magnitude),
             time_diff=(candidates['start'] - on_end).abs()
         ).sort_values(by=['magnitude_diff', 'time_diff'])
+
+        # Log candidates on first window that has them
+        if not candidates_logged:
+            candidates_logged = True
+            summary = ", ".join([
+                f"{row['event_id']}({abs(row['magnitude']):.0f}W, +{row['time_diff'].total_seconds()/60:.0f}m)"
+                for _, row in candidates.head(5).iterrows()
+            ])
+            if len(candidates) > 5:
+                summary += f", ... +{len(candidates)-5} more"
+            logger.info(f"[Stage 2] {on_id}({on_magnitude:.0f}W) candidates[{window_minutes}m]: {summary}")
 
         for _, off_event in candidates.iterrows():
             off_start = off_event['start']

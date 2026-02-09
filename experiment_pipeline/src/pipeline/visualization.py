@@ -34,8 +34,10 @@ def process_visualization(house_id: str, run_number: int, threshold: int = DEFAU
 
     # Load both matches and unmatched individual events
     matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")) if matches_dir.exists() else []
-    on_off_dir = seg_dir / "on_off"
-    on_off_files = sorted(on_off_dir.glob(f"on_off_{house_id}_*.pkl")) if on_off_dir.exists() else []
+    unmatched_on_dir = seg_dir / "unmatched_on"
+    unmatched_off_dir = seg_dir / "unmatched_off"
+    unmatched_on_files = sorted(unmatched_on_dir.glob(f"unmatched_on_{house_id}_*.pkl")) if unmatched_on_dir.exists() else []
+    unmatched_off_files = sorted(unmatched_off_dir.glob(f"unmatched_off_{house_id}_*.pkl")) if unmatched_off_dir.exists() else []
 
     events_list = []
 
@@ -50,19 +52,18 @@ def process_visualization(house_id: str, run_number: int, threshold: int = DEFAU
             except Exception as e:
                 logger.warning(f"Could not load {matches_file}: {e}")
 
-    # Load unmatched events from on_off
-    if on_off_files:
-        logger.info(f"Loading unmatched events from {len(on_off_files)} files")
-        for on_off_file in on_off_files:
+    # Load unmatched events from unmatched_on and unmatched_off directories
+    all_unmatched_files = unmatched_on_files + unmatched_off_files
+    if all_unmatched_files:
+        logger.info(f"Loading unmatched events: {len(unmatched_on_files)} ON + {len(unmatched_off_files)} OFF files")
+        for unmatched_file in all_unmatched_files:
             try:
-                with open(on_off_file, 'rb') as f:
-                    on_off_df = pickle.load(f)
-                    # Filter only unmatched events
-                    unmatched = on_off_df[on_off_df['matched'] == 0].copy()
-                    if not unmatched.empty:
-                        events_list.append(unmatched)
+                with open(unmatched_file, 'rb') as f:
+                    unmatched_df = pickle.load(f)
+                    if not unmatched_df.empty:
+                        events_list.append(unmatched_df)
             except Exception as e:
-                logger.warning(f"Could not load {on_off_file}: {e}")
+                logger.warning(f"Could not load {unmatched_file}: {e}")
 
     if not events_list:
         logger.error("No event data could be loaded")
@@ -75,7 +76,7 @@ def process_visualization(house_id: str, run_number: int, threshold: int = DEFAU
             events[col] = pd.to_datetime(events[col], errors='coerce')
 
     # Load summarized data from monthly files
-    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.csv"))
+    summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
     if not summarized_files:
         logger.error(f"No summarized files found in {summarized_dir}")
         return

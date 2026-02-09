@@ -72,27 +72,39 @@ def split_by_day_night(
     Returns:
         Tuple of (segments_list, points_by_segment_list)
     """
-    total_rows = sum(1 for _ in open(filepath)) - 1
-    total_chunks = (total_rows // chunksize) + (1 if total_rows % chunksize > 0 else 0)
+    # Support both CSV and PKL file formats
+    is_pkl = filepath.endswith('.pkl')
 
     segments = []
     points_by_segment = []
     segment_start = None
 
-    for chunk in tqdm(pd.read_csv(filepath, chunksize=chunksize, dayfirst=True), total=total_chunks):
-        chunk['timestamp'] = pd.to_datetime(chunk['timestamp'], format='mixed', dayfirst=True)
-        chunk = chunk.sort_values('timestamp').reset_index(drop=True)
+    # Compute session start/end columns once (handle both matched and unmatched events)
+    if 'start' in sessions_df.columns and 'on_start' in sessions_df.columns:
+        session_start_col = sessions_df['on_start'].fillna(sessions_df['start'])
+        session_end_col = sessions_df.get('off_end', sessions_df['end']).fillna(sessions_df['end'])
+    elif 'on_start' in sessions_df.columns:
+        session_start_col = sessions_df['on_start']
+        session_end_col = sessions_df['off_end'] if 'off_end' in sessions_df.columns else sessions_df['on_end']
+    else:
+        session_start_col = sessions_df['start']
+        session_end_col = sessions_df['end']
 
-        if segment_start is None:
-            segment_start = _get_initial_segment_start(chunk.iloc[0]['timestamp'])
+    if is_pkl:
+        # PKL: already in memory, process as single DataFrame (no chunking)
+        all_data = pd.read_pickle(filepath)
+        all_data['timestamp'] = pd.to_datetime(all_data['timestamp'], format='mixed', dayfirst=True)
+        all_data = all_data.sort_values('timestamp').reset_index(drop=True)
 
-        while segment_start <= chunk['timestamp'].max():
+        segment_start = _get_initial_segment_start(all_data.iloc[0]['timestamp'])
+
+        while segment_start <= all_data['timestamp'].max():
             segment_end = segment_start + timedelta(hours=12)
-            segment = chunk[(chunk['timestamp'] >= segment_start) & (chunk['timestamp'] < segment_end)]
+            segment = all_data[(all_data['timestamp'] >= segment_start) & (all_data['timestamp'] < segment_end)]
 
             relevant_sessions = sessions_df[
-                (sessions_df['start'] < segment_end) &
-                (sessions_df['end'] > segment_start)
+                (session_start_col < segment_end) &
+                (session_end_col > segment_start)
             ]
 
             if not segment.empty and not relevant_sessions.empty:
@@ -100,18 +112,44 @@ def split_by_day_night(
                 points_by_segment.append(relevant_sessions)
 
             segment_start = segment_end
+    else:
+        total_rows = sum(1 for _ in open(filepath)) - 1
+        total_chunks = (total_rows // chunksize) + (1 if total_rows % chunksize > 0 else 0)
+        chunks = pd.read_csv(filepath, chunksize=chunksize, dayfirst=True)
+
+        for chunk in tqdm(chunks, total=total_chunks):
+            chunk['timestamp'] = pd.to_datetime(chunk['timestamp'], format='mixed', dayfirst=True)
+            chunk = chunk.sort_values('timestamp').reset_index(drop=True)
+
+            if segment_start is None:
+                segment_start = _get_initial_segment_start(chunk.iloc[0]['timestamp'])
+
+            while segment_start <= chunk['timestamp'].max():
+                segment_end = segment_start + timedelta(hours=12)
+                segment = chunk[(chunk['timestamp'] >= segment_start) & (chunk['timestamp'] < segment_end)]
+
+                relevant_sessions = sessions_df[
+                    (session_start_col < segment_end) &
+                    (session_end_col > segment_start)
+                ]
+
+                if not segment.empty and not relevant_sessions.empty:
+                    segments.append(segment)
+                    points_by_segment.append(relevant_sessions)
+
+                segment_start = segment_end
 
     return segments, points_by_segment
 
 
 def _get_initial_segment_start(first_time: pd.Timestamp) -> pd.Timestamp:
-    """Calculate the initial segment start time."""
+    """Calculate the initial segment start time (06:00 or 18:00 boundary)."""
     if 6 <= first_time.hour < 18:
-        segment_start = first_time.replace(hour=6, minute=0, second=0)
+        # Day segment: starts at 06:00 same day
+        return first_time.replace(hour=6, minute=0, second=0)
+    elif first_time.hour >= 18:
+        # Night segment: starts at 18:00 same day
+        return first_time.replace(hour=18, minute=0, second=0)
     else:
-        segment_start = first_time.replace(hour=18, minute=0, second=0)
-        if first_time.hour < 6:
-            segment_start -= timedelta(days=1)
-        if segment_start < first_time:
-            segment_start += timedelta(hours=12)
-    return segment_start
+        # Before 06:00: night segment started at 18:00 previous day
+        return (first_time - timedelta(days=1)).replace(hour=18, minute=0, second=0)

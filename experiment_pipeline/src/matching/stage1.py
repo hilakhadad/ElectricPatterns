@@ -64,6 +64,7 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
     # Windows in minutes: 15min, 30min, 1hr, 2hr, 4hr, then max_time_diff
     window_steps_minutes = [15, 30, 60, 120, 240, max_time_diff * 60]
     on_magnitude = abs(on_event['magnitude'])
+    candidates_logged = False
 
     for window_minutes in window_steps_minutes:
         if window_minutes > max_time_diff * 60:
@@ -87,7 +88,8 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
         ).sort_values(by=['magnitude_diff', 'time_diff'])
 
         # Log candidates summary on first window that has candidates
-        if len(candidates) > 0 and window_minutes == window_steps_minutes[0]:
+        if not candidates_logged:
+            candidates_logged = True
             summary = ", ".join([
                 f"{row['event_id']}({abs(row['magnitude']):.0f}W, +{row['time_diff'].total_seconds()/60:.0f}m)"
                 for _, row in candidates.head(5).iterrows()

@@ -87,7 +87,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         monthly_files = [data_path]
 
     phases = ['w1', 'w2', 'w3']
-    partial_threshold = threshold * 0.8
+    partial_threshold = threshold
     total_events = 0
     event_counters = {(phase, event): 0 for phase in phases for event in ['on', 'off']}
 
@@ -246,11 +246,13 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
         logger.info(f"  Detecting gradual events for {phase}...")
         gradual_on = detect_gradual_events(
             data, diff_col, threshold, event_type='on',
-            window_minutes=gradual_window, progressive_search=progressive_search
+            window_minutes=gradual_window, progressive_search=progressive_search,
+            partial_factor=1.0
         )
         gradual_off = detect_gradual_events(
             data, diff_col, threshold, event_type='off',
-            window_minutes=gradual_window, progressive_search=progressive_search
+            window_minutes=gradual_window, progressive_search=progressive_search,
+            partial_factor=1.0
         )
 
         if len(gradual_on) > 0:
