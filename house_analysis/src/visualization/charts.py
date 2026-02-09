@@ -11,6 +11,71 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 
 
+def create_days_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
+    """
+    Create histogram showing how many houses are in each days range.
+
+    Args:
+        analyses: List of house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    # Define day ranges (bins) - 6-month intervals from 0 to 4+ years
+    # 6 months ≈ 182 days
+    bins = [0, 182, 365, 548, 730, 913, 1095, 1278, 1460, float('inf')]
+    bin_labels = ['0-6m', '6m-1y', '1-1.5y', '1.5-2y', '2-2.5y', '2.5-3y', '3-3.5y', '3.5-4y', '4y+']
+    bin_colors = ['#e74c3c', '#e67e22', '#f39c12', '#f1c40f', '#d4ac0d', '#27ae60', '#1abc9c', '#3498db', '#2980b9']
+
+    # Count houses in each bin
+    bin_counts = [0] * len(bin_labels)
+    houses_per_bin = [[] for _ in bin_labels]
+
+    for a in analyses:
+        days = a.get('coverage', {}).get('days_span', 0)
+        house_id = a.get('house_id', 'unknown')
+
+        for i in range(len(bins) - 1):
+            if bins[i] <= days < bins[i + 1]:
+                bin_counts[i] += 1
+                houses_per_bin[i].append(str(house_id))
+                break
+
+    # Create hover text with house IDs
+    hover_texts = []
+    for i, (label, count, houses) in enumerate(zip(bin_labels, bin_counts, houses_per_bin)):
+        if count > 0:
+            house_list = ', '.join(houses[:10])
+            if len(houses) > 10:
+                house_list += f'... (+{len(houses) - 10} more)'
+            hover_texts.append(f'{label} days<br>{count} houses<br>{house_list}')
+        else:
+            hover_texts.append(f'{label} days<br>0 houses')
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=bin_labels,
+        y=bin_counts,
+        marker_color=bin_colors,
+        text=bin_counts,
+        textposition='outside',
+        hovertext=hover_texts,
+        hoverinfo='text',
+        name='Houses'
+    ))
+
+    fig.update_layout(
+        title='Houses by Data Duration (Days)',
+        xaxis_title='Days Range',
+        yaxis_title='Number of Houses',
+        showlegend=False,
+        height=400
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
 def create_quality_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     """
     Create histogram of quality scores across all houses.
@@ -122,55 +187,52 @@ def create_phase_balance_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with embedded chart
     """
-    data = []
+    import plotly.graph_objects as go
 
-    for a in analyses:
-        house_id = a.get('house_id', 'unknown')
-        power = a.get('power_statistics', {})
+    try:
+        # Collect data per house
+        houses = []
+        w1_values = []
+        w2_values = []
+        w3_values = []
 
-        # Try both naming conventions
-        phases = {}
-        for phase_name in ['w1', 'w2', 'w3', '1', '2', '3']:
-            key = f'phase_{phase_name}_mean'
-            if key in power:
-                # Normalize phase name
-                normalized = phase_name.replace('w', 'Phase ')
-                if normalized.isdigit():
-                    normalized = f'Phase {normalized}'
-                phases[normalized] = power[key]
+        for a in analyses:
+            house_id = str(a.get('house_id', 'unknown'))
+            power = a.get('power_statistics', {})
 
-        if phases:
-            total = sum(phases.values())
-            for phase, value in phases.items():
-                data.append({
-                    'house_id': house_id,
-                    'phase': phase,
-                    'mean_power': value,
-                    'percentage': (value / total * 100) if total > 0 else 0
-                })
+            w1 = power.get('phase_w1_mean', 0) or 0
+            w2 = power.get('phase_w2_mean', 0) or 0
+            w3 = power.get('phase_w3_mean', 0) or 0
 
-    if not data:
-        return "<p>No phase data available</p>"
+            if w1 > 0 or w2 > 0 or w3 > 0:
+                houses.append(house_id)
+                w1_values.append(w1)
+                w2_values.append(w2)
+                w3_values.append(w3)
 
-    df = pd.DataFrame(data)
+        if not houses:
+            return "<p>No phase data available</p>"
 
-    fig = px.bar(
-        df,
-        x='house_id',
-        y='mean_power',
-        color='phase',
-        title='Phase Balance by House',
-        labels={'mean_power': 'Mean Power (W)', 'house_id': 'House ID'},
-        color_discrete_sequence=['#1f77b4', '#ff7f0e', '#2ca02c']
-    )
+        # Create stacked bar chart using graph_objects (more reliable than express)
+        fig = go.Figure(data=[
+            go.Bar(name='w1', x=houses, y=w1_values, marker_color='#1f77b4'),
+            go.Bar(name='w2', x=houses, y=w2_values, marker_color='#ff7f0e'),
+            go.Bar(name='w3', x=houses, y=w3_values, marker_color='#2ca02c')
+        ])
 
-    fig.update_layout(
-        barmode='stack',
-        height=400,
-        xaxis_tickangle=-45
-    )
+        fig.update_layout(
+            barmode='stack',
+            title='Phase Balance by House',
+            xaxis_title='House ID',
+            yaxis_title='Mean Power (W)',
+            height=400,
+            xaxis_tickangle=-45
+        )
 
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+        return fig.to_html(full_html=False, include_plotlyjs=False)
+
+    except Exception as e:
+        return f"<p>Error creating phase balance chart: {e}</p>"
 
 
 def create_day_night_scatter(analyses: List[Dict[str, Any]]) -> str:
@@ -734,18 +796,19 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     """
     quality = analysis.get('data_quality', {})
 
-    # Get score components
-    coverage_score = quality.get('coverage_score_contribution', 0)
-    days_score = quality.get('days_score_contribution', 0)
-    secondary_score = quality.get('secondary_score_contribution', 0)
-    balance_penalty = quality.get('balance_penalty', 0)
+    # Get score components (new scoring system)
+    completeness_score = quality.get('completeness_score', 0)
+    gap_score = quality.get('gap_score', 0)
+    balance_score = quality.get('balance_score', 0)
+    monthly_balance_score = quality.get('monthly_balance_score', 0)
+    noise_score = quality.get('noise_score', 0)
     final_score = quality.get('quality_score', 0)
 
     # Create waterfall chart
-    categories = ['Coverage<br>(max 60)', 'Days<br>(max 30)', 'Secondary<br>(max 10)',
-                  'Balance<br>Penalty', 'Final<br>Score']
-    values = [coverage_score, days_score, secondary_score, -balance_penalty, final_score]
-    colors = ['#667eea', '#3498db', '#2ecc71', '#e74c3c', '#9b59b6']
+    categories = ['Completeness<br>(max 30)', 'Gap Quality<br>(max 20)', 'Phase Balance<br>(max 15)',
+                  'Monthly Balance<br>(max 20)', 'Low Noise<br>(max 15)', 'Final<br>Score']
+    values = [completeness_score, gap_score, balance_score, monthly_balance_score, noise_score, final_score]
+    colors = ['#667eea', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']
 
     # Use bar chart with annotations
     fig = go.Figure()
@@ -755,7 +818,7 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
         x=categories[:-1],
         y=values[:-1],
         marker_color=colors[:-1],
-        text=[f'{v:.1f}' if v >= 0 else f'{v:.1f}' for v in values[:-1]],
+        text=[f'{v:.1f}' for v in values[:-1]],
         textposition='outside',
         name='Components',
         hovertemplate='%{x}<br>Points: %{y:.1f}<extra></extra>'
@@ -777,7 +840,160 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
         yaxis_title='Points',
         height=350,
         showlegend=False,
-        yaxis=dict(range=[min(0, min(values)) - 5, max(values) + 10])
+        yaxis=dict(range=[0, max(values) + 10])
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_mini_hourly_chart(hourly_pattern: Dict[str, Any], title: str = "") -> str:
+    """
+    Create a compact hourly pattern chart for monthly view.
+
+    Args:
+        hourly_pattern: Dictionary with 'hours' and 'mean' keys
+        title: Optional title for the chart
+
+    Returns:
+        HTML string with embedded mini chart
+    """
+    if not hourly_pattern:
+        return "<p>No data</p>"
+
+    hours = hourly_pattern.get('hours', list(range(24)))
+    mean_values = hourly_pattern.get('mean', [0] * 24)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=mean_values,
+        mode='lines',
+        line=dict(color='#667eea', width=2),
+        fill='tozeroy',
+        fillcolor='rgba(102, 126, 234, 0.3)',
+        hovertemplate='%{x}:00<br>%{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=12)) if title else None,
+        height=120,
+        margin=dict(l=30, r=10, t=25 if title else 5, b=20),
+        xaxis=dict(
+            tickmode='array',
+            tickvals=[0, 6, 12, 18, 23],
+            ticktext=['0', '6', '12', '18', '23'],
+            showgrid=False,
+            tickfont=dict(size=9)
+        ),
+        yaxis=dict(
+            showticklabels=False,
+            showgrid=False
+        ),
+        showlegend=False,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_year_hourly_chart(hourly_pattern: Dict[str, Any], year: int) -> str:
+    """
+    Create hourly pattern chart for a specific year.
+
+    Args:
+        hourly_pattern: Dictionary with 'hours', 'mean', and 'std' keys
+        year: Year number
+
+    Returns:
+        HTML string with embedded chart
+    """
+    if not hourly_pattern:
+        return "<p>No hourly pattern data available</p>"
+
+    hours = hourly_pattern.get('hours', list(range(24)))
+    mean_values = hourly_pattern.get('mean', [0] * 24)
+    std_values = hourly_pattern.get('std', [0] * 24)
+
+    # Calculate confidence band (mean ± std)
+    upper = [m + s for m, s in zip(mean_values, std_values)]
+    lower = [max(0, m - s) for m, s in zip(mean_values, std_values)]
+
+    fig = go.Figure()
+
+    # Confidence band
+    fig.add_trace(go.Scatter(
+        x=hours + hours[::-1],
+        y=upper + lower[::-1],
+        fill='toself',
+        fillcolor='rgba(102, 126, 234, 0.2)',
+        line=dict(color='rgba(255,255,255,0)'),
+        name='±1 Std Dev',
+        showlegend=True
+    ))
+
+    # Mean line
+    fig.add_trace(go.Scatter(
+        x=hours,
+        y=mean_values,
+        mode='lines+markers',
+        line=dict(color='#667eea', width=2),
+        marker=dict(size=5),
+        name='Average Power',
+        hovertemplate='Hour %{x}:00<br>Power: %{y:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title=f'Hourly Power Pattern - {year}',
+        xaxis_title='Hour of Day',
+        yaxis_title='Power (W)',
+        height=300,
+        xaxis=dict(tickmode='array', tickvals=list(range(0, 24, 2)),
+                   ticktext=[f'{h}:00' for h in range(0, 24, 2)]),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_year_heatmap(heatmap_data: Dict[str, Any], year: int) -> str:
+    """
+    Create power heatmap for a specific year.
+
+    Args:
+        heatmap_data: Dictionary with 'days', 'hours', and 'values' keys
+        year: Year number
+
+    Returns:
+        HTML string with embedded chart
+    """
+    if not heatmap_data:
+        return "<p>No heatmap data available</p>"
+
+    days = heatmap_data.get('days', list(range(7)))
+    hours = heatmap_data.get('hours', list(range(24)))
+    values = heatmap_data.get('values', [[0]*24]*7)
+
+    day_names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    hour_labels = [f'{h}:00' for h in hours]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=values,
+        x=hour_labels,
+        y=[day_names[d] for d in days],
+        colorscale='YlOrRd',
+        colorbar=dict(title='Power (W)'),
+        hovertemplate='%{y} %{x}<br>Power: %{z:.0f}W<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title=f'Power Consumption Heatmap - {year}',
+        xaxis_title='Hour of Day',
+        yaxis_title='Day of Week',
+        height=280,
+        xaxis=dict(tickmode='array', tickvals=list(range(0, 24, 3)),
+                   ticktext=[f'{h}:00' for h in range(0, 24, 3)])
     )
 
     return fig.to_html(full_html=False, include_plotlyjs=False)

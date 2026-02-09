@@ -16,7 +16,7 @@ from metrics import (
     calculate_temporal_patterns,
     calculate_data_quality_metrics
 )
-from metrics.temporal import calculate_flat_segments
+from metrics.temporal import calculate_flat_segments, calculate_temporal_patterns_by_period
 
 
 def analyze_single_house(data: pd.DataFrame, house_id: str,
@@ -49,10 +49,22 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     temporal = calculate_temporal_patterns(data, phase_cols)
     results['temporal_patterns'] = temporal
 
-    # Data quality (pass coverage ratio and days span for scoring)
+    # Temporal patterns by year/month (for yearly breakdown reports)
+    temporal_by_period = calculate_temporal_patterns_by_period(data, phase_cols)
+    results['temporal_by_period'] = temporal_by_period
+
+    # Data quality (pass coverage metrics for scoring)
     coverage_ratio = coverage.get('coverage_ratio', 1.0)
     days_span = coverage.get('days_span', 0)
-    quality = calculate_data_quality_metrics(data, phase_cols, coverage_ratio=coverage_ratio, days_span=days_span)
+    max_gap_minutes = coverage.get('max_gap_minutes', 0)
+    pct_gaps_over_2min = coverage.get('pct_gaps_over_2min', 0)
+    quality = calculate_data_quality_metrics(
+        data, phase_cols,
+        coverage_ratio=coverage_ratio,
+        days_span=days_span,
+        max_gap_minutes=max_gap_minutes,
+        pct_gaps_over_2min=pct_gaps_over_2min
+    )
     results['data_quality'] = quality
 
     # Flat segments
@@ -89,6 +101,7 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['short_duration'] = coverage.get('days_span', 365) < 30
     flags['has_large_gaps'] = coverage.get('max_gap_minutes', 0) > 60
     flags['many_gaps'] = coverage.get('pct_gaps_over_2min', 0) > 5  # More than 5% gaps over 2min
+    flags['has_duplicate_timestamps'] = coverage.get('has_duplicate_timestamps', False)
 
     # Quality flags
     flags['has_negative_values'] = any(

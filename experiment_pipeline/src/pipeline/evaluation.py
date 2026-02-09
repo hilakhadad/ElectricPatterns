@@ -51,9 +51,16 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
         logger.error(f"No summarized files found in {summarized_dir}")
         return None
 
+    def normalize_timestamps(df):
+        """Ensure timestamps are datetime64[ns] for consistent merging."""
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        return df
+
     try:
         # Load and concatenate current data
         current_data = pd.concat([pd.read_pickle(f) for f in summarized_files], ignore_index=True)
+        current_data = normalize_timestamps(current_data)
 
         # Load baseline data
         if run_number == 0:
@@ -61,6 +68,7 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
         else:
             baseline_files = sorted(baseline_dir.glob(f"summarized_{house_id}_*.pkl"))
             baseline_data = pd.concat([pd.read_pickle(f) for f in baseline_files], ignore_index=True)
+            baseline_data = normalize_timestamps(baseline_data)
 
         # Load previous run data
         prev_data = None
@@ -70,33 +78,48 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
                 prev_files = sorted(prev_summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
                 if prev_files:
                     prev_data = pd.concat([pd.read_pickle(f) for f in prev_files], ignore_index=True)
+                    prev_data = normalize_timestamps(prev_data)
             if prev_eval_path and prev_eval_path.exists():
                 prev_eval = pd.read_csv(prev_eval_path)
     except Exception as e:
         logger.error(f"Failed to read data: {e}")
         return None
 
+    # Count duplicate timestamps for data quality reporting
+    baseline_duplicates = baseline_data['timestamp'].duplicated().sum()
+    current_duplicates = current_data['timestamp'].duplicated().sum() if run_number > 0 else baseline_duplicates
+    logger.info(f"Duplicate timestamps - baseline: {baseline_duplicates}, current: {current_duplicates}")
+
     # Merge data on timestamp for proper alignment
     # This ensures we compare the same timestamps across runs
     if run_number == 0:
         merged_data = baseline_data.copy()
     else:
+        # Remove duplicate timestamps to prevent Cartesian product explosion
+        baseline_dedup = baseline_data.drop_duplicates(subset=['timestamp'], keep='first')
+        current_dedup = current_data.drop_duplicates(subset=['timestamp'], keep='first')
+
+        logger.info(f"Baseline: {len(baseline_data)} rows, {len(baseline_dedup)} unique timestamps")
+        logger.info(f"Current: {len(current_data)} rows, {len(current_dedup)} unique timestamps")
+
         # Merge baseline with current on timestamp
-        merged_data = baseline_data[['timestamp']].merge(
-            current_data,
+        merged_data = baseline_dedup[['timestamp']].merge(
+            current_dedup,
             on='timestamp',
             how='left',
             suffixes=('', '_current')
         )
         # Add baseline columns
-        for col in baseline_data.columns:
+        baseline_indexed = baseline_dedup.set_index('timestamp')
+        for col in baseline_dedup.columns:
             if col != 'timestamp' and col not in merged_data.columns:
-                merged_data[col] = baseline_data.set_index('timestamp')[col].reindex(merged_data['timestamp']).values
+                merged_data[col] = baseline_indexed[col].reindex(merged_data['timestamp']).values
 
         # Merge previous run data if exists
         if prev_data is not None:
+            prev_dedup = prev_data.drop_duplicates(subset=['timestamp'], keep='first')
             prev_cols = {f'remaining_{p}': f'prev_remaining_{p}' for p in ['w1', 'w2', 'w3']}
-            prev_subset = prev_data[['timestamp'] + [f'remaining_{p}' for p in ['w1', 'w2', 'w3']]].rename(columns=prev_cols)
+            prev_subset = prev_dedup[['timestamp'] + [f'remaining_{p}' for p in ['w1', 'w2', 'w3']]].rename(columns=prev_cols)
             merged_data = merged_data.merge(prev_subset, on='timestamp', how='left')
 
     # Calculate metrics
@@ -147,6 +170,7 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
             'run_number': run_number,
             'threshold': threshold,
             'phase': phase,
+            'duplicate_timestamps': current_duplicates,
             **metrics
         }
         results_list.append(result)

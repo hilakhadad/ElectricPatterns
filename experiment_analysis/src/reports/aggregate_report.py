@@ -25,19 +25,54 @@ import json
 
 def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
     """
-    Load quality scores from house_analysis JSON output.
+    Load quality scores from house_analysis output.
+
+    Supports:
+    - Single JSON file with list of analyses
+    - Single JSON file with 'analyses' key
+    - Directory containing per-house JSON files (per_house/ or run_*/per_house/)
 
     Args:
-        house_analysis_path: Path to house_analysis JSON file (e.g., analyses.json)
+        house_analysis_path: Path to house_analysis JSON file or directory
 
     Returns:
         Dictionary mapping house_id -> quality_score
     """
     scores = {}
+    house_analysis_path = Path(house_analysis_path)
+
     if not house_analysis_path.exists():
-        print(f"Warning: Pre-analysis file not found: {house_analysis_path}")
+        print(f"Warning: Pre-analysis path not found: {house_analysis_path}")
         return scores
 
+    # If it's a directory, look for per_house JSON files
+    if house_analysis_path.is_dir():
+        # Check for per_house subdirectory
+        per_house_dir = house_analysis_path / "per_house"
+        if not per_house_dir.exists():
+            per_house_dir = house_analysis_path  # Maybe it IS the per_house dir
+
+        json_files = list(per_house_dir.glob("analysis_*.json"))
+        if not json_files:
+            print(f"Warning: No analysis_*.json files found in {per_house_dir}")
+            return scores
+
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    analysis = json.load(f)
+                house_id = str(analysis.get('house_id', ''))
+                quality = analysis.get('data_quality', {})
+                quality_score = quality.get('quality_score', None)
+                if house_id and quality_score is not None:
+                    scores[house_id] = quality_score
+            except Exception as e:
+                print(f"Warning: Failed to load {json_file}: {e}")
+
+        print(f"Loaded pre-analysis quality scores for {len(scores)} houses from {per_house_dir}")
+        return scores
+
+    # It's a file - try to read as JSON
     try:
         with open(house_analysis_path, 'r', encoding='utf-8') as f:
             data = json.load(f)

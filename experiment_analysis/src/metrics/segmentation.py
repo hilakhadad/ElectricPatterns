@@ -217,3 +217,149 @@ def calculate_segmentation_quality(seg_df: pd.DataFrame,
         metrics[f'{phase}_zero_remaining_pct'] = (remaining == 0).sum() / len(remaining) * 100
 
     return metrics
+
+
+def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
+                                            run_number: int = 0,
+                                            threshold: float = 1300) -> Dict[str, Any]:
+    """
+    Calculate how many high-power minutes are explained by segregation.
+
+    For each phase, counts:
+    1. Minutes where original power > threshold (high power)
+    2. Minutes where original > threshold BUT remaining < threshold (explained)
+
+    A minute is "explained" when the segregation successfully attributed enough
+    power to events that the remaining power dropped below the threshold.
+
+    Args:
+        experiment_dir: Path to experiment output directory
+        house_id: House identifier
+        run_number: Run number to analyze (0 = compare original vs run_0 output)
+        threshold: Power threshold in watts (default 1300W, matching pipeline config)
+
+    Returns:
+        Dictionary with threshold explanation metrics per phase and total
+    """
+    metrics = {
+        'threshold': threshold,
+        'house_id': house_id,
+        'run_number': run_number,
+    }
+
+    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+
+    # Load summarized data
+    summarized_dir = house_dir / "summarized"
+    if summarized_dir.exists():
+        summarized_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
+    else:
+        summarized_files = list(house_dir.glob("summarized_*.pkl"))
+
+    if not summarized_files:
+        metrics['error'] = 'No summarized file found'
+        return metrics
+
+    phases = ['w1', 'w2', 'w3']
+
+    # Initialize counters per phase
+    phase_stats = {p: {'above_th': 0, 'explained': 0} for p in phases}
+    total_minutes = 0
+
+    # Process all files
+    for data_file in summarized_files:
+        df = pd.read_pickle(data_file)
+        total_minutes += len(df)
+
+        for phase in phases:
+            # Original power column
+            orig_col = f'original_{phase}'
+            if orig_col not in df.columns:
+                orig_col = phase
+            if orig_col not in df.columns:
+                continue
+
+            # Remaining power column for this phase
+            remaining_col = f'remaining_{phase}'
+            if remaining_col not in df.columns:
+                continue
+
+            # Minutes above threshold in original
+            above_th_mask = df[orig_col] > threshold
+            above_th_count = above_th_mask.sum()
+            phase_stats[phase]['above_th'] += above_th_count
+
+            # Minutes explained: original > TH but remaining < TH
+            # This means the segregation "explained" the high power
+            if above_th_count > 0:
+                explained_mask = above_th_mask & (df[remaining_col] < threshold)
+                explained_count = explained_mask.sum()
+                phase_stats[phase]['explained'] += explained_count
+
+    # Calculate per-phase metrics
+    total_above_th = 0
+    total_explained = 0
+
+    for phase in phases:
+        above_th = phase_stats[phase]['above_th']
+        explained = phase_stats[phase]['explained']
+
+        metrics[f'{phase}_minutes_above_th'] = above_th
+        metrics[f'{phase}_minutes_explained'] = explained
+        if above_th > 0:
+            metrics[f'{phase}_explanation_rate'] = explained / above_th
+        else:
+            metrics[f'{phase}_explanation_rate'] = 0
+
+        total_above_th += above_th
+        total_explained += explained
+
+    # Total metrics
+    metrics['total_minutes'] = total_minutes
+    metrics['total_minutes_above_th'] = total_above_th
+    metrics['total_minutes_explained'] = total_explained
+    if total_above_th > 0:
+        metrics['total_explanation_rate'] = total_explained / total_above_th
+    else:
+        metrics['total_explanation_rate'] = 0
+
+    return metrics
+
+
+def calculate_threshold_explanation_all_iterations(experiment_dir: Path, house_id: str,
+                                                    max_iterations: int = 10,
+                                                    threshold: float = 1300) -> List[Dict[str, Any]]:
+    """
+    Calculate threshold explanation metrics for all iterations.
+
+    Args:
+        experiment_dir: Path to experiment output directory
+        house_id: House identifier
+        max_iterations: Maximum number of iterations to check
+        threshold: Power threshold in watts (default 1300W, matching pipeline config)
+
+    Returns:
+        List of dictionaries with metrics per iteration
+    """
+    results = []
+
+    for run_number in range(max_iterations):
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+
+        # Check if this iteration exists
+        summarized_dir = house_dir / "summarized"
+        if summarized_dir.exists():
+            summarized_files = list(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
+        else:
+            summarized_files = list(house_dir.glob("summarized_*.pkl"))
+
+        if not summarized_files:
+            break  # No more iterations
+
+        metrics = calculate_threshold_explanation_metrics(
+            experiment_dir, house_id, run_number, threshold
+        )
+        metrics['iteration'] = run_number
+        results.append(metrics)
+
+    return results

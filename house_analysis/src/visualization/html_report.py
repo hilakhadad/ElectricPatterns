@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 
 from visualization.charts import (
+    create_days_distribution_chart,
     create_quality_distribution_chart,
     create_coverage_comparison_chart,
     create_phase_balance_chart,
@@ -22,6 +23,9 @@ from visualization.charts import (
     create_power_heatmap_chart,
     create_power_histogram,
     create_score_breakdown_chart,
+    create_mini_hourly_chart,
+    create_year_hourly_chart,
+    create_year_heatmap,
 )
 
 
@@ -82,6 +86,7 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     n_low_quality = sum(1 for a in analyses if a.get('flags', {}).get('low_quality_score', False))
     n_low_coverage = sum(1 for a in analyses if a.get('flags', {}).get('low_coverage', False))
     n_negative = sum(1 for a in analyses if a.get('flags', {}).get('has_negative_values', False))
+    n_duplicates = sum(1 for a in analyses if a.get('flags', {}).get('has_duplicate_timestamps', False))
 
     return f"""
     <div class="summary-grid">
@@ -114,6 +119,9 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
             <li class="{'alert' if n_negative > 0 else ''}">
                 <strong>{n_negative}</strong> houses with negative power values
             </li>
+            <li class="{'alert' if n_duplicates > 0 else ''}">
+                <strong>{n_duplicates}</strong> houses with duplicate timestamps
+            </li>
         </ul>
     </div>
     """
@@ -128,6 +136,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'short_duration': 'Less Than 30 Days',
         'has_large_gaps': 'Gaps Over 1 Hour',
         'many_gaps': '>5% Gaps Over 2min',
+        'has_duplicate_timestamps': 'Duplicate Timestamps',
         'has_negative_values': 'Negative Values',
         'many_outliers': '>1% Outliers (3σ)',
         'many_large_jumps': '>500 Jumps Over 2kW',
@@ -199,16 +208,32 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         """)
 
     return f"""
+    <div class="table-legend" style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-size: 0.9em;">
+        <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100)</h4>
+        <div style="display: flex; flex-wrap: wrap; gap: 20px;">
+            <div><strong>Completeness (30 pts):</strong> % of expected data present</div>
+            <div><strong>Gap Quality (20 pts):</strong> Deductions for large gaps and high gap %</div>
+            <div><strong>Phase Balance (15 pts):</strong> Balanced phases (ratio 1-2 = 15pts, 2-3 = 10pts, etc.)</div>
+            <div><strong>Monthly Balance (20 pts):</strong> Even coverage across all months</div>
+            <div><strong>Low Noise (15 pts):</strong> Reasonable variability (not too flat/noisy)</div>
+        </div>
+    </div>
+    <div class="column-legend" style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
+        <strong>Days</strong> = data duration |
+        <strong>Coverage</strong> = % of expected minutes present |
+        <strong>Phase Balance</strong> = max(phases)/min(phases), ideal=1 |
+        <strong>Night/Day</strong> = avg night power / avg day power
+    </div>
     <table class="data-table" id="comparison-table">
         <thead>
             <tr>
                 <th onclick="sortTable(0)">House ID</th>
-                <th onclick="sortTable(1)">Days</th>
-                <th onclick="sortTable(2)">Coverage</th>
-                <th onclick="sortTable(3)">Quality</th>
-                <th onclick="sortTable(4)">Avg Power (W)</th>
-                <th onclick="sortTable(5)">Phase Balance</th>
-                <th onclick="sortTable(6)">Night/Day</th>
+                <th onclick="sortTable(1)">Days<br><small>(duration)</small></th>
+                <th onclick="sortTable(2)">Coverage<br><small>(completeness)</small></th>
+                <th onclick="sortTable(3)">Quality<br><small>(0-100)</small></th>
+                <th onclick="sortTable(4)">Avg Power<br><small>(Watts)</small></th>
+                <th onclick="sortTable(5)">Phase Balance<br><small>(max/min)</small></th>
+                <th onclick="sortTable(6)">Night/Day<br><small>(power ratio)</small></th>
                 <th>Issues</th>
             </tr>
         </thead>
@@ -222,6 +247,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate all charts HTML."""
     charts = []
+
+    # Days distribution (how many houses per days range)
+    charts.append(('Houses by Days Range', create_days_distribution_chart(analyses)))
 
     # Quality distribution
     charts.append(('Quality Score Distribution', create_quality_distribution_chart(analyses)))
@@ -300,10 +328,17 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
     return f'<div class="tiers-grid">{"".join(html_parts)}</div>'
 
 
+def _get_month_name(month_num: int) -> str:
+    """Get month name from number."""
+    months = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December']
+    return months[month_num] if 1 <= month_num <= 12 else str(month_num)
+
+
 def generate_single_house_html_report(analysis: Dict[str, Any],
                                        output_path: str) -> str:
     """
-    Generate HTML report for a single house.
+    Generate HTML report for a single house with year tabs and monthly details.
 
     Args:
         analysis: Analysis results from analyze_single_house
@@ -317,6 +352,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     quality = analysis.get('data_quality', {})
     power = analysis.get('power_statistics', {})
     temporal = analysis.get('temporal_patterns', {})
+    temporal_by_period = analysis.get('temporal_by_period', {})
     flags = analysis.get('flags', {})
 
     # Quality badge
@@ -338,7 +374,11 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
-    # Create all charts for this house
+    # Get years from temporal_by_period
+    years_data = temporal_by_period.get('by_year', {})
+    years = sorted(years_data.keys())
+
+    # Create all charts for "All Data" tab
     hourly_chart = create_hourly_pattern_chart(analysis)
     phase_chart = create_phase_power_chart(analysis)
     monthly_chart = create_monthly_pattern_chart(analysis)
@@ -346,6 +386,99 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     heatmap_chart = create_power_heatmap_chart(analysis)
     histogram_chart = create_power_histogram(analysis)
     score_breakdown_chart = create_score_breakdown_chart(analysis)
+
+    # Generate year tabs
+    year_tabs_html = '<button class="tab-btn active" onclick="showTab(\'all\')">All Data</button>'
+    for year in years:
+        year_tabs_html += f'<button class="tab-btn" onclick="showTab(\'{year}\')">{year}</button>'
+
+    # Generate year content sections
+    year_sections_html = ""
+
+    for year in years:
+        year_data = years_data[year]
+        months_data = year_data.get('months', {})
+
+        # Year summary cards
+        year_days = year_data.get('days', 0)
+        year_coverage = year_data.get('coverage_ratio', 0)
+        year_avg_power = year_data.get('avg_power', 0)
+
+        # Year charts
+        year_hourly = create_year_hourly_chart(year_data.get('hourly_pattern', {}), year)
+        year_heatmap = create_year_heatmap(year_data.get('power_heatmap', {}), year)
+
+        # Monthly cards with mini charts
+        months_cards_html = ""
+        for month_num in sorted(months_data.keys()):
+            month_info = months_data[month_num]
+            month_name = _get_month_name(month_num)
+            month_days = month_info.get('days', 0)
+            month_avg = month_info.get('avg_power', 0)
+            month_coverage = month_info.get('coverage_ratio', 0)
+            mini_chart = create_mini_hourly_chart(month_info.get('hourly_pattern', {}))
+
+            months_cards_html += f"""
+            <div class="month-card">
+                <div class="month-header">
+                    <strong>{month_name} {year}</strong>
+                </div>
+                <div class="month-stats">
+                    <span>Days: {month_days}</span>
+                    <span>Avg: {month_avg:.0f}W</span>
+                    <span>Coverage: {month_coverage:.0%}</span>
+                </div>
+                <div class="mini-chart">
+                    {mini_chart}
+                </div>
+            </div>
+            """
+
+        year_sections_html += f"""
+        <div id="tab-{year}" class="tab-content" style="display: none;">
+            <div class="card">
+                <h2>{year} Summary</h2>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <div class="metric-value">{year_days}</div>
+                        <div class="metric-label">Days of Data</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{year_coverage:.1%}</div>
+                        <div class="metric-label">Coverage</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{year_avg_power:.0f}W</div>
+                        <div class="metric-label">Avg Power</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{len(months_data)}</div>
+                        <div class="metric-label">Months</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>{year} Power Patterns</h2>
+                <div class="chart-card" style="margin-bottom: 20px;">
+                    {year_hourly}
+                </div>
+                <div class="chart-card">
+                    {year_heatmap}
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Monthly Details</h2>
+                <button class="expand-btn" onclick="toggleMonths('{year}')">
+                    Show Monthly Details
+                </button>
+                <div id="months-{year}" class="months-container" style="display: none;">
+                    {months_cards_html}
+                </div>
+            </div>
+        </div>
+        """
 
     html_content = f"""
 <!DOCTYPE html>
@@ -363,7 +496,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             line-height: 1.6;
             padding: 20px;
         }}
-        .container {{ max-width: 1000px; margin: 0 auto; }}
+        .container {{ max-width: 1100px; margin: 0 auto; }}
         header {{
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -381,7 +514,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         .card h2 {{ margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
         .metrics-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
         }}
         .metric {{
@@ -390,8 +523,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             border-radius: 8px;
             text-align: center;
         }}
-        .metric-value {{ font-size: 1.8em; font-weight: bold; color: #667eea; }}
-        .metric-label {{ color: #666; font-size: 0.9em; }}
+        .metric-value {{ font-size: 1.6em; font-weight: bold; color: #667eea; }}
+        .metric-label {{ color: #666; font-size: 0.85em; }}
         .charts-grid {{
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -404,9 +537,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             padding: 15px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }}
-        .chart-full-width {{
-            grid-column: span 2;
-        }}
+        .chart-full-width {{ grid-column: span 2; }}
         @media (max-width: 900px) {{
             .charts-grid {{ grid-template-columns: 1fr; }}
             .chart-full-width {{ grid-column: span 1; }}
@@ -425,6 +556,72 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         .back-link {{ margin-bottom: 15px; }}
         .back-link a {{ color: #667eea; text-decoration: none; }}
         .back-link a:hover {{ text-decoration: underline; }}
+
+        /* Year tabs */
+        .tabs-container {{
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }}
+        .tab-btn {{
+            padding: 10px 20px;
+            border: none;
+            background: #e9ecef;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.2s;
+        }}
+        .tab-btn:hover {{ background: #dee2e6; }}
+        .tab-btn.active {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
+
+        /* Monthly details */
+        .expand-btn {{
+            padding: 10px 20px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            margin-bottom: 15px;
+        }}
+        .expand-btn:hover {{ background: #f0f0ff; }}
+        .months-container {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }}
+        .month-card {{
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+        }}
+        .month-header {{
+            font-size: 1.1em;
+            margin-bottom: 8px;
+            color: #495057;
+        }}
+        .month-stats {{
+            display: flex;
+            gap: 15px;
+            font-size: 0.85em;
+            color: #6c757d;
+            margin-bottom: 10px;
+        }}
+        .mini-chart {{
+            background: white;
+            border-radius: 4px;
+            padding: 5px;
+        }}
     </style>
 </head>
 <body>
@@ -438,86 +635,146 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>
         </header>
 
-        <div class="card">
-            <h2>Coverage & Quality</h2>
-            <div class="metrics-grid">
-                <div class="metric">
-                    <div class="metric-value">{coverage.get('days_span', 0)}</div>
-                    <div class="metric-label">Days of Data</div>
+        <div class="tabs-container">
+            {year_tabs_html}
+        </div>
+
+        <!-- All Data Tab -->
+        <div id="tab-all" class="tab-content active">
+            <div class="card">
+                <h2>Coverage & Quality</h2>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <div class="metric-value">{coverage.get('days_span', 0)}</div>
+                        <div class="metric-label">Days of Data</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{coverage.get('coverage_ratio', 0):.1%}</div>
+                        <div class="metric-label">Coverage Ratio</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{quality.get('quality_score', 0):.0f}</div>
+                        <div class="metric-label">Quality Score</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{coverage.get('max_gap_minutes', 0):.0f}</div>
+                        <div class="metric-label">Max Gap (min)</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{coverage.get('duplicate_timestamps_count', 0):,}</div>
+                        <div class="metric-label">Duplicate TS</div>
+                    </div>
                 </div>
-                <div class="metric">
-                    <div class="metric-value">{coverage.get('coverage_ratio', 0):.1%}</div>
-                    <div class="metric-label">Coverage Ratio</div>
+            </div>
+
+            <div class="card">
+                <h2>Power Statistics</h2>
+                <div class="metrics-grid">
+                    <div class="metric">
+                        <div class="metric-value">{power.get('total_mean', 0):.0f}W</div>
+                        <div class="metric-label">Average Power</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{power.get('total_max', 0):.0f}W</div>
+                        <div class="metric-label">Max Power</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{power.get('phase_balance_ratio', 0):.2f}</div>
+                        <div class="metric-label">Phase Balance</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
+                        <div class="metric-label">Night/Day Ratio</div>
+                    </div>
                 </div>
-                <div class="metric">
-                    <div class="metric-value">{quality.get('quality_score', 0):.0f}</div>
-                    <div class="metric-label">Quality Score</div>
+            </div>
+
+            <div class="card">
+                <h2>Power Patterns & Analysis</h2>
+                <div class="charts-grid">
+                    <div class="chart-card chart-full-width">
+                        {hourly_chart}
+                    </div>
+                    <div class="chart-card">
+                        {phase_chart}
+                    </div>
+                    <div class="chart-card">
+                        {histogram_chart}
+                    </div>
+                    <div class="chart-card">
+                        {weekly_chart}
+                    </div>
+                    <div class="chart-card">
+                        {monthly_chart}
+                    </div>
+                    <div class="chart-card">
+                        {score_breakdown_chart}
+                    </div>
+                    <div class="chart-card chart-full-width">
+                        {heatmap_chart}
+                    </div>
                 </div>
-                <div class="metric">
-                    <div class="metric-value">{coverage.get('max_gap_minutes', 0):.0f}</div>
-                    <div class="metric-label">Max Gap (min)</div>
-                </div>
+            </div>
+
+            <div class="card">
+                <h2>Issues & Flags</h2>
+                <p class="flags">{flags_html}</p>
             </div>
         </div>
 
-        <div class="card">
-            <h2>Power Statistics</h2>
-            <div class="metrics-grid">
-                <div class="metric">
-                    <div class="metric-value">{power.get('total_mean', 0):.0f}W</div>
-                    <div class="metric-label">Average Power</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-value">{power.get('total_max', 0):.0f}W</div>
-                    <div class="metric-label">Max Power</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-value">{power.get('phase_balance_ratio', 0):.2f}</div>
-                    <div class="metric-label">Phase Balance</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
-                    <div class="metric-label">Night/Day Ratio</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>Power Patterns & Analysis</h2>
-            <div class="charts-grid">
-                <div class="chart-card chart-full-width">
-                    {hourly_chart}
-                </div>
-                <div class="chart-card">
-                    {phase_chart}
-                </div>
-                <div class="chart-card">
-                    {histogram_chart}
-                </div>
-                <div class="chart-card">
-                    {weekly_chart}
-                </div>
-                <div class="chart-card">
-                    {monthly_chart}
-                </div>
-                <div class="chart-card">
-                    {score_breakdown_chart}
-                </div>
-                <div class="chart-card chart-full-width">
-                    {heatmap_chart}
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>Issues & Flags</h2>
-            <p class="flags">{flags_html}</p>
-        </div>
+        <!-- Year Tabs Content -->
+        {year_sections_html}
 
         <footer style="text-align: center; color: #888; padding: 20px;">
             Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         </footer>
     </div>
+
+    <script>
+        function showTab(tabId) {{
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {{
+                tab.classList.remove('active');
+                tab.style.display = 'none';
+            }});
+
+            // Deactivate all buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {{
+                btn.classList.remove('active');
+            }});
+
+            // Show selected tab
+            const selectedTab = document.getElementById('tab-' + tabId);
+            if (selectedTab) {{
+                selectedTab.classList.add('active');
+                selectedTab.style.display = 'block';
+            }}
+
+            // Activate button
+            event.target.classList.add('active');
+
+            // Trigger Plotly resize for charts
+            setTimeout(() => {{
+                window.dispatchEvent(new Event('resize'));
+            }}, 100);
+        }}
+
+        function toggleMonths(year) {{
+            const container = document.getElementById('months-' + year);
+            const btn = event.target;
+            if (container.style.display === 'none') {{
+                container.style.display = 'grid';
+                btn.textContent = 'Hide Monthly Details';
+            }} else {{
+                container.style.display = 'none';
+                btn.textContent = 'Show Monthly Details';
+            }}
+            // Trigger resize for mini charts
+            setTimeout(() => {{
+                window.dispatchEvent(new Event('resize'));
+            }}, 100);
+        }}
+    </script>
 </body>
 </html>
 """

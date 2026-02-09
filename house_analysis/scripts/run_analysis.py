@@ -11,6 +11,7 @@ import os
 import argparse
 from pathlib import Path
 from datetime import datetime
+from tqdm import tqdm
 
 # Add src directory to path
 SCRIPT_DIR = Path(__file__).parent.parent.absolute()
@@ -59,25 +60,30 @@ def load_house_data_from_folder(house_folder: Path):
     return data
 
 
-def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path) -> dict:
+def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
+                               quiet: bool = False) -> dict:
     """Run analysis on a single house."""
     from reports import analyze_single_house, generate_house_report
     from visualization import generate_single_house_html_report
 
+    def log(msg):
+        if not quiet:
+            print(msg)
+
     # Look for house folder
     house_folder = input_dir / house_id
     if not house_folder.exists() or not house_folder.is_dir():
-        print(f"Error: House folder not found: {house_folder}")
+        tqdm.write(f"Error: House folder not found: {house_folder}")
         return None
 
-    print(f"Analyzing house {house_id}...")
+    log(f"Analyzing house {house_id}...")
 
     # Load data from all monthly files in the folder
     data = load_house_data_from_folder(house_folder)
     if data is None or len(data) == 0:
-        print(f"Error: No data files found in {house_folder}")
+        tqdm.write(f"Error: No data files found in {house_folder}")
         return None
-    print(f"  Loaded {len(data)} rows")
+    log(f"  Loaded {len(data)} rows")
 
     # Run analysis
     analysis = analyze_single_house(data, house_id)
@@ -85,25 +91,25 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path) 
     # Generate JSON report
     house_output_dir = output_dir / "per_house"
     report_path = generate_house_report(analysis, str(house_output_dir), format='json')
-    print(f"  JSON report saved to: {report_path}")
+    log(f"  JSON report saved to: {report_path}")
 
     # Generate HTML report for this house
     html_path = house_output_dir / f"house_{house_id}.html"
     generate_single_house_html_report(analysis, str(html_path))
-    print(f"  HTML report saved to: {html_path}")
+    log(f"  HTML report saved to: {html_path}")
 
     # Print summary
     coverage = analysis.get('coverage', {})
     quality = analysis.get('data_quality', {})
     flags = analysis.get('flags', {})
 
-    print(f"  Coverage: {coverage.get('coverage_ratio', 0):.1%}")
-    print(f"  Days: {coverage.get('days_span', 0)}")
-    print(f"  Quality score: {quality.get('quality_score', 0):.0f}/100")
+    log(f"  Coverage: {coverage.get('coverage_ratio', 0):.1%}")
+    log(f"  Days: {coverage.get('days_span', 0)}")
+    log(f"  Quality score: {quality.get('quality_score', 0):.0f}/100")
 
     active_flags = [k for k, v in flags.items() if v]
     if active_flags:
-        print(f"  Flags: {', '.join(active_flags)}")
+        log(f"  Flags: {', '.join(active_flags)}")
 
     return analysis
 
@@ -133,14 +139,13 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
     all_analyses = []
     errors = []
 
-    for i, house_id in enumerate(houses, 1):
-        print(f"\n[{i}/{len(houses)}] ", end="")
+    for house_id in tqdm(houses, desc="Analyzing houses", unit="house", mininterval=30):
         try:
-            analysis = run_single_house_analysis(house_id, input_dir, run_output_dir)
+            analysis = run_single_house_analysis(house_id, input_dir, run_output_dir, quiet=False)
             if analysis:
                 all_analyses.append(analysis)
         except Exception as e:
-            print(f"  Error: {e}")
+            tqdm.write(f"  Error in house {house_id}: {e}")
             errors.append({'house_id': house_id, 'error': str(e)})
 
     print("\n" + "=" * 60)

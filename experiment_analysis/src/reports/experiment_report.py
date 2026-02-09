@@ -10,9 +10,13 @@ from typing import Dict, Any, Optional, List
 import pandas as pd
 
 from metrics.matching import calculate_matching_metrics
-from metrics.segmentation import calculate_segmentation_metrics
+from metrics.segmentation import (
+    calculate_segmentation_metrics,
+    calculate_threshold_explanation_metrics,
+    calculate_threshold_explanation_all_iterations
+)
 from metrics.events import calculate_event_metrics
-from metrics.iterations import calculate_iteration_metrics, analyze_iteration_progression
+from metrics.iterations import calculate_iteration_metrics
 from metrics.patterns import calculate_pattern_metrics, detect_ac_patterns, detect_boiler_patterns, analyze_device_usage_patterns
 from metrics.monthly import calculate_monthly_metrics
 
@@ -182,35 +186,28 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
     }
     log(f"First iteration done ({time.time()-t0:.2f}s)")
 
-    # Last iteration (if different from first)
-    last_run = iterations_completed - 1
-    if last_run > 0:
-        log(f"Analyzing last iteration (run_{last_run})...")
-        t0 = time.time()
-        last_iter_data = {
-            'matching': calculate_matching_metrics(experiment_dir, house_id, last_run),
-            'segmentation': calculate_segmentation_metrics(experiment_dir, house_id, last_run),
-            'events': calculate_event_metrics(experiment_dir, house_id, last_run),
-        }
-        # Skip expensive pattern analysis in fast mode
-        if not fast_mode:
-            last_iter_data['patterns'] = calculate_pattern_metrics(experiment_dir, house_id, last_run)
-        else:
-            last_iter_data['patterns'] = {}
-        analysis['last_iteration'] = last_iter_data
-        log(f"Last iteration done ({time.time()-t0:.2f}s)")
-
-    # Iteration progression analysis
-    if iteration_metrics.get('iterations_data'):
-        analysis['progression'] = analyze_iteration_progression(
-            iteration_metrics['iterations_data']
-        )
+    # NOTE: last_iteration and progression calculations removed - not displayed in HTML
+    # This saves ~50% of analysis time per house
 
     # Calculate monthly breakdown
     if not fast_mode:
         log("  - monthly metrics...")
         monthly_metrics = calculate_monthly_metrics(experiment_dir, house_id, 0)
         analysis['monthly'] = monthly_metrics
+
+    # Calculate threshold explanation metrics (using 1300W threshold from pipeline config)
+    log("  - threshold explanation metrics...")
+    threshold_metrics = calculate_threshold_explanation_metrics(
+        experiment_dir, house_id, 0, threshold=1300
+    )
+    analysis['threshold_explanation'] = threshold_metrics
+
+    # Calculate threshold explanation per iteration
+    log("  - threshold explanation per iteration...")
+    threshold_per_iter = calculate_threshold_explanation_all_iterations(
+        experiment_dir, house_id, max_iterations=10, threshold=1300
+    )
+    analysis['threshold_explanation_per_iteration'] = threshold_per_iter
 
     # Generate flags for easy filtering
     analysis['flags'] = _generate_experiment_flags(analysis)
@@ -515,8 +512,9 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
         lines.append(f"\n--- First Iteration Matching ---")
         lines.append(f"Total events: {matching.get('total_on_events', 0)} ON, "
                     f"{matching.get('total_off_events', 0)} OFF")
-        lines.append(f"Matched: {matching.get('matched_on_count', 0)} "
-                    f"({matching.get('on_matching_rate', 0):.1%})")
+        matched_on = matching.get('matched_on_events', 0) or 0
+        on_rate = matching.get('on_matching_rate', 0) or 0
+        lines.append(f"Matched: {matched_on} ({on_rate:.1%})")
 
         tag_breakdown = matching.get('tag_breakdown', {})
         if tag_breakdown:
@@ -532,6 +530,19 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
         neg_count = seg.get('negative_value_count', 0)
         if neg_count > 0:
             lines.append(f"WARNING: {neg_count} negative values detected!")
+
+    # High-Power Energy Explained
+    th_expl = analysis.get('threshold_explanation', {})
+    if th_expl and 'total_minutes_above_th' in th_expl:
+        lines.append(f"\n--- High-Power Energy Explained (>{th_expl.get('threshold', 1300)}W) ---")
+        lines.append(f"Total minutes above threshold: {th_expl.get('total_minutes_above_th', 0):,}")
+        lines.append(f"Minutes explained: {th_expl.get('total_minutes_explained', 0):,} "
+                    f"({th_expl.get('total_explanation_rate', 0):.1%})")
+        for phase in ['w1', 'w2', 'w3']:
+            above = th_expl.get(f'{phase}_minutes_above_th', 0)
+            explained = th_expl.get(f'{phase}_minutes_explained', 0)
+            rate = th_expl.get(f'{phase}_explanation_rate', 0)
+            lines.append(f"  {phase}: {above:,} above TH, {explained:,} explained ({rate:.1%})")
 
     # Scores
     scores = analysis.get('scores', {})

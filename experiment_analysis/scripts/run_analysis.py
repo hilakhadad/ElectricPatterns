@@ -30,7 +30,7 @@ src_dir = script_dir.parent / "src"
 sys.path.insert(0, str(src_dir))
 
 from reports.aggregate_report import aggregate_experiment_results, generate_summary_report, create_comparison_table, load_pre_analysis_scores
-from visualization.html_report import generate_html_report
+from visualization.html_report import generate_html_report, generate_house_html_report
 
 
 def find_latest_experiment() -> Path:
@@ -133,20 +133,38 @@ def main():
     run_output_dir = output_dir / f"analysis_{experiment_name}_{timestamp}"
     run_output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Experiment Analysis v2.8 (HTML at end only)", flush=True)
+    print(f"Experiment Analysis v2.10 (auto-detect house_analysis, per-house HTML)", flush=True)
     print(f"=" * 60, flush=True)
     print(f"Experiment directory: {experiment_dir}", flush=True)
     print(f"Output directory: {run_output_dir}", flush=True)
     print(flush=True)
 
-    # Load pre-analysis quality scores if provided
+    # Load pre-analysis quality scores
     pre_analysis_scores = None
     if args.pre_analysis:
         pre_analysis_path = Path(args.pre_analysis).resolve()
-        if pre_analysis_path.exists():
-            pre_analysis_scores = load_pre_analysis_scores(pre_analysis_path)
+    else:
+        # Auto-detect latest house_analysis run
+        house_analysis_output = script_dir.parent.parent / "house_analysis" / "OUTPUT"
+        if house_analysis_output.exists():
+            run_dirs = sorted(
+                [d for d in house_analysis_output.iterdir()
+                 if d.is_dir() and d.name.startswith("run_")],
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+            if run_dirs:
+                pre_analysis_path = run_dirs[0]  # Latest run
+                print(f"Auto-detected house_analysis output: {pre_analysis_path.name}")
+            else:
+                pre_analysis_path = None
         else:
-            print(f"Warning: Pre-analysis file not found: {pre_analysis_path}")
+            pre_analysis_path = None
+
+    if pre_analysis_path and pre_analysis_path.exists():
+        pre_analysis_scores = load_pre_analysis_scores(pre_analysis_path)
+    elif pre_analysis_path:
+        print(f"Warning: Pre-analysis path not found: {pre_analysis_path}")
 
     # Create house reports directory BEFORE analysis (for incremental saving)
     house_reports_dir = run_output_dir / "house_reports"
@@ -195,9 +213,21 @@ def main():
     comparison_df.to_csv(csv_path, index=False)
     print(f"  Saved: {csv_path} ({time.time()-t0:.1f}s)")
 
-    # Per-house reports were already saved incrementally during analysis
-    saved_reports = list(house_reports_dir.glob("house_*.html"))
-    print(f"Per-house reports: {len(saved_reports)} HTML files already saved to {house_reports_dir}")
+    # Generate per-house HTML reports (done at end to avoid None formatting issues)
+    print("Generating per-house HTML reports...")
+    t0 = time.time()
+    html_count = 0
+    html_errors = 0
+    for analysis in valid_analyses:
+        house_id = analysis.get('house_id', 'unknown')
+        html_path = house_reports_dir / f"house_{house_id}.html"
+        try:
+            generate_house_html_report(analysis, str(html_path))
+            html_count += 1
+        except Exception as e:
+            print(f"  !! Failed to generate HTML for house {house_id}: {e}")
+            html_errors += 1
+    print(f"  Generated {html_count} HTML files ({html_errors} errors) in {time.time()-t0:.1f}s")
 
     # Generate HTML report
     print("Generating HTML report...")
