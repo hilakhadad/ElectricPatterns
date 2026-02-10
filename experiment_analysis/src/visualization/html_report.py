@@ -1535,7 +1535,11 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     suspicious_multi = boiler_detection.get('suspicious_multi_phase', {}) or {}
     multi_phase_activations = suspicious_multi.get('activations', []) or []
 
-    if not activations and not multi_phase_activations:
+    # Get reclassified AC events
+    reclassified = boiler_detection.get('reclassified_as_ac', {}) or {}
+    reclassified_activations = reclassified.get('activations', []) or []
+
+    if not activations and not multi_phase_activations and not reclassified_activations:
         return """
         <h4>Water Heater (Boiler)</h4>
         <p>No boiler pattern detected (no isolated long high-power events found).</p>
@@ -1698,6 +1702,58 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
             </table>
             </div>
             {'<p style="font-size: 0.8em; color: #666; margin-top: 5px;">Showing first 20 of ' + str(len(multi_phase_activations)) + ' events</p>' if len(multi_phase_activations) > 20 else ''}
+        </div>
+        """
+
+    # Add reclassified AC section if any
+    if reclassified_activations:
+        reclass_rows = []
+        for idx, act in enumerate(reclassified_activations[:30]):
+            duration = act.get('duration_minutes', 0) or 0
+            if duration < 0:
+                duration = duration + 1440
+            magnitude = act.get('magnitude', 0) or 0
+            reason = act.get('reclassified_reason', '')
+
+            reclass_rows.append(f"""
+            <tr>
+                <td>{idx+1}</td>
+                <td>{act.get('date', '')}</td>
+                <td>{act.get('on_time', '')}</td>
+                <td>{act.get('off_time', '')}</td>
+                <td>{duration:.0f} min</td>
+                <td>{magnitude}W</td>
+                <td>{act.get('phase', '')}</td>
+                <td style="font-size: 0.8em;">{reason}</td>
+            </tr>
+            """)
+
+        html += f"""
+        <div style="margin-top: 25px; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 8px;">
+            <h5 style="margin: 0 0 10px 0; color: #155724;">Reclassified as AC ({len(reclassified_activations)} events)</h5>
+            <p style="font-size: 0.9em; color: #155724; margin-bottom: 10px;">
+                These events initially matched boiler criteria (long duration, high power, isolated) but were
+                reclassified as <strong>AC</strong> because compressor cycling patterns (short ON/OFF cycles)
+                were found nearby on the same phase.
+            </p>
+            <div style="max-height: 300px; overflow-y: auto;">
+            <table class="data-table small">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Date</th>
+                        <th>ON Time</th>
+                        <th>OFF Time</th>
+                        <th>Duration</th>
+                        <th>Power</th>
+                        <th>Phase</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody>{''.join(reclass_rows)}</tbody>
+            </table>
+            </div>
+            {'<p style="font-size: 0.8em; color: #666; margin-top: 5px;">Showing first 30 of ' + str(len(reclassified_activations)) + ' events</p>' if len(reclassified_activations) > 30 else ''}
         </div>
         """
 

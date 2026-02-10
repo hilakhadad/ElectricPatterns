@@ -1458,6 +1458,89 @@ def analyze_device_usage_patterns(ac_detection: Dict[str, Any],
     return result
 
 
+def _filter_ac_from_boiler_candidates(
+    boiler_activations: List[Dict],
+    matches_df: pd.DataFrame,
+    compressor_window_minutes: int = 60,
+    min_nearby_cycles: int = 2,
+    min_cycle_duration: int = 3,
+    max_cycle_duration: int = 24,
+    min_cycle_magnitude: int = 800,
+) -> tuple:
+    """
+    Filter out boiler candidates that have compressor cycling patterns nearby.
+
+    AC compressors create patterns that look like boilers (long, high power) but
+    are followed or preceded by short ON/OFF cycles (3-24 min). If such cycles
+    exist near a boiler candidate on the same phase, it's likely AC, not boiler.
+
+    Args:
+        boiler_activations: List of boiler candidate dicts
+        matches_df: All matches DataFrame with datetime columns
+        compressor_window_minutes: Window after off_end to search for cycling (default 60 min)
+        min_nearby_cycles: Minimum compressor cycles to reclassify (default 2)
+        min_cycle_duration: Min cycle duration in minutes (default 3)
+        max_cycle_duration: Max cycle duration in minutes (default 24)
+        min_cycle_magnitude: Min cycle magnitude in watts (default 800)
+
+    Returns:
+        Tuple of (remaining_boiler_activations, reclassified_as_ac)
+    """
+    if not boiler_activations or matches_df is None or matches_df.empty:
+        return boiler_activations, []
+
+    compressor_window = pd.Timedelta(minutes=compressor_window_minutes)
+
+    remaining_boiler = []
+    reclassified_ac = []
+
+    for activation in boiler_activations:
+        phase = activation['phase']
+        boiler_magnitude = activation['magnitude']
+
+        # Reconstruct timestamps
+        on_start = pd.to_datetime(f"{activation['date']} {activation['on_time']}")
+        if activation.get('off_time'):
+            off_end = pd.to_datetime(f"{activation['date']} {activation['off_time']}")
+            if off_end < on_start:
+                off_end += pd.Timedelta(days=1)
+        else:
+            off_end = on_start + pd.Timedelta(minutes=activation['duration_minutes'])
+
+        # Search window: from before on_start to after off_end
+        # The key fix: extend beyond off_end, not just from on_start
+        search_start = on_start - compressor_window
+        search_end = off_end + compressor_window
+
+        # Find compressor-like cycles on same phase in window
+        nearby = matches_df[
+            (matches_df['phase'] == phase) &
+            (matches_df['duration'] >= min_cycle_duration) &
+            (matches_df['duration'] <= max_cycle_duration) &
+            (matches_df['on_magnitude'].abs() >= min_cycle_magnitude) &
+            (matches_df['on_start'] >= search_start) &
+            (matches_df['on_start'] <= search_end)
+        ]
+
+        if len(nearby) >= min_nearby_cycles:
+            # Check magnitude similarity: cycles should be at least 50% of boiler magnitude
+            similar_cycles = nearby[
+                nearby['on_magnitude'].abs() >= boiler_magnitude * 0.5
+            ]
+
+            if len(similar_cycles) >= min_nearby_cycles:
+                activation['reclassified_reason'] = (
+                    f"Found {len(similar_cycles)} compressor cycles "
+                    f"({min_cycle_duration}-{max_cycle_duration} min) nearby on {phase}"
+                )
+                reclassified_ac.append(activation)
+                continue
+
+        remaining_boiler.append(activation)
+
+    return remaining_boiler, reclassified_ac
+
+
 def detect_boiler_patterns(experiment_dir: Path, house_id: str,
                            run_number: int = 0,
                            min_duration_minutes: int = 25,
@@ -1586,6 +1669,14 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
     # Sort by date and time
     boiler_activations.sort(key=lambda x: (x['date'], x['on_time']))
 
+    # ===== Filter out boiler candidates with compressor cycling nearby =====
+    # AC compressors create long activations followed by short ON/OFF cycles.
+    # The original isolation check misses these because it only checks near on_start,
+    # but compressor cycles after off_end can be >30 min from on_start for long events.
+    boiler_activations, reclassified_ac = _filter_ac_from_boiler_candidates(
+        boiler_activations, matches_df
+    )
+
     # ===== NEW: Detect multi-phase simultaneous events (might be EV charging, not boiler) =====
     # Boiler should only use ONE phase. If multiple phases are active at the same time,
     # it's likely something else (EV charging, heavy industrial equipment, etc.)
@@ -1671,7 +1762,14 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
         result['boiler']['dominant_phase'] = None
         result['boiler']['phase_distribution'] = {}
         result['suspicious_multi_phase'] = {'activations': [], 'total_count': 0}
+        reclassified_ac = []
 
     result['has_boiler'] = result['boiler']['total_count'] >= 3  # Need at least 3 single-phase activations
+
+    # Include reclassified events (boiler candidates that are actually AC)
+    result['reclassified_as_ac'] = {
+        'activations': reclassified_ac,
+        'total_count': len(reclassified_ac),
+    }
 
     return result

@@ -171,6 +171,19 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
         boiler_patterns = detect_boiler_patterns(experiment_dir, house_id, 0)
         patterns['boiler_detection'] = boiler_patterns
 
+        # Merge reclassified AC events (boiler candidates that turned out to be AC)
+        reclassified = boiler_patterns.get('reclassified_as_ac', {}).get('activations', [])
+        if reclassified:
+            log(f"  - {len(reclassified)} boiler candidates reclassified as AC")
+            existing_regular = ac_patterns.get('regular_ac', {}).get('activations', [])
+            existing_regular.extend(reclassified)
+            existing_regular.sort(key=lambda x: (x['date'], x['on_time']))
+            ac_patterns['regular_ac']['activations'] = existing_regular
+            ac_patterns['regular_ac']['total_count'] = len(existing_regular)
+            if not ac_patterns.get('has_regular_ac') and len(existing_regular) >= 3:
+                ac_patterns['has_regular_ac'] = True
+            patterns['ac_detection'] = ac_patterns
+
         # Analyze device usage patterns (seasonal and time of day)
         log("  - device usage patterns...")
         device_usage = analyze_device_usage_patterns(ac_patterns, boiler_patterns)
