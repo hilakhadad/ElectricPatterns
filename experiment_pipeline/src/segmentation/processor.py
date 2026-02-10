@@ -95,8 +95,8 @@ def _process_single_event(
 
     magnitude = event['on_magnitude']
     tag = event.get('tag', '')
-    is_noisy = tag == 'NOISY'
-    is_partial = tag == 'PARTIAL'
+    is_noisy = 'NOISY' in tag
+    is_partial = 'PARTIAL' in tag
 
     # Process ON segment
     # For PARTIAL matches: the ON event magnitude may be larger than match_magnitude
@@ -120,8 +120,8 @@ def _process_single_event(
         # For partial: constant magnitude extraction
         event_seg = pd.Series(magnitude, index=data.loc[event_range].index)
     else:
-        # Track device power following diffs from end of ON, no upper clip
-        event_seg = (device_power + data.loc[event_range, diff_col].cumsum()).clip(lower=0)
+        # Constant device power: don't track diffs during event to avoid absorbing other devices
+        event_seg = pd.Series(device_power, index=data.loc[event_range].index).clip(lower=0)
 
     event_remain = data.loc[event_range, remaining_col] - event_seg
 
