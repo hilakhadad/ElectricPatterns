@@ -11,6 +11,7 @@ from pathlib import Path
 import core
 from core import setup_logging, load_power_data, find_house_data_path
 from segmentation import process_phase_segmentation, summarize_segmentation, log_negative_values
+from segmentation.restore import restore_skipped_to_unmatched
 
 
 def process_segmentation(house_id: str, run_number: int, skip_large_file: bool = True) -> None:
@@ -106,7 +107,11 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             all_skipped_ids.extend(skipped_ids)
 
         # Update matches file: remove events that were skipped during segmentation
+        # Bug #14 fix: restore skipped events to unmatched files so no events are lost
         if all_skipped_ids:
+            skipped_matches = events[events['on_event_id'].isin(all_skipped_ids)]
+            restore_skipped_to_unmatched(skipped_matches, output_dir, house_id, month, year, logger)
+
             original_count = len(events)
             events = events[~events['on_event_id'].isin(all_skipped_ids)]
             removed_count = original_count - len(events)

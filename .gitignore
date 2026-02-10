@@ -21,6 +21,7 @@ errors/
 user_request_plots/
 output/
 INPUT/
+tests/
 *.log
 
 # Experiment pipeline data
