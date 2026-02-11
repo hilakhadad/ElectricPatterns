@@ -37,7 +37,7 @@ from .logging_setup import (
 )
 
 # Data loading
-from .data_loader import load_power_data, find_house_data_path
+from .data_loader import load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
 
 # Monthly I/O helpers
 from .monthly_io import (
@@ -77,6 +77,8 @@ __all__ = [
     # Data loading
     'load_power_data',
     'find_house_data_path',
+    'find_previous_run_summarized',
+    'build_data_files_dict',
     # Monthly I/O
     'save_dataframe_by_month',
     'load_dataframe_from_folder',

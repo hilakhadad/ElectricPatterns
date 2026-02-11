@@ -117,11 +117,11 @@ def _process_single_event(
         current_remaining = data.loc[event_range, remaining_col]
         event_seg = current_remaining.clip(upper=magnitude)
     elif is_partial:
-        # For partial: constant magnitude extraction
-        event_seg = pd.Series(magnitude, index=data.loc[event_range].index)
+        # For partial: constant magnitude extraction, clipped to remaining
+        event_seg = data.loc[event_range, remaining_col].clip(upper=magnitude).clip(lower=0)
     else:
-        # Constant device power: don't track diffs during event to avoid absorbing other devices
-        event_seg = pd.Series(device_power, index=data.loc[event_range].index).clip(lower=0)
+        # Constant device power, clipped to remaining to avoid negative remaining
+        event_seg = data.loc[event_range, remaining_col].clip(upper=device_power).clip(lower=0)
 
     event_remain = data.loc[event_range, remaining_col] - event_seg
 
@@ -135,10 +135,12 @@ def _process_single_event(
     elif is_partial:
         off_cumsum = data.loc[off_range, diff_col].cumsum()
         off_seg = (magnitude + off_cumsum).clip(lower=0)
+        off_seg = off_seg.clip(upper=data.loc[off_range, remaining_col])
         off_remain = data.loc[off_range, remaining_col] - off_seg
     else:
-        # OFF ramp: track device power from end of event, no upper clip
+        # OFF ramp: track device power from end of event, clipped to remaining
         off_seg = (device_power + data.loc[off_range, diff_col].cumsum()).clip(lower=0)
+        off_seg = off_seg.clip(upper=data.loc[off_range, remaining_col])
         off_remain = data.loc[off_range, remaining_col] - off_seg
 
     # Check for negative values BEFORE applying - skip event if would create negatives

@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 import core
-from core import setup_logging, load_power_data, find_house_data_path
+from core import setup_logging, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
 from segmentation import process_phase_segmentation, summarize_segmentation, log_negative_values
 from segmentation.restore import restore_skipped_to_unmatched
 
@@ -27,18 +27,18 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
     logger.info(f"Segmentation process for house {house_id}, run {run_number}")
 
     # Paths
-    input_dir = f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData/" if run_number != 0 else core.RAW_INPUT_DIRECTORY
     output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
     matches_dir = Path(output_dir) / "matches"
     summarized_dir = Path(output_dir) / "summarized"
-    next_input_dir = Path(f"{core.INPUT_DIRECTORY}/run_{run_number + 1}/HouseholdData/{house_id}")
 
     os.makedirs(summarized_dir, exist_ok=True)
-    os.makedirs(next_input_dir, exist_ok=True)
 
-    # Find data path
+    # Find data path: run 0 reads raw data, run N reads remaining from summarized of run N-1
     try:
-        data_path = find_house_data_path(input_dir, house_id)
+        if run_number == 0:
+            data_path = find_house_data_path(core.RAW_INPUT_DIRECTORY, house_id)
+        else:
+            data_path = find_previous_run_summarized(core.OUTPUT_BASE_PATH, house_id, run_number)
     except FileNotFoundError as e:
         logger.error(str(e))
         return
@@ -53,10 +53,10 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
         logger.error(f"No matches files found in {matches_dir}")
         return
 
-    # Get list of data monthly files
+    # Get list of data monthly files (handles both HouseholdData and summarized naming)
     data_path = Path(data_path)
     if data_path.is_dir():
-        data_files = {f.stem: f for f in data_path.glob("*.pkl")}
+        data_files = build_data_files_dict(data_path)
     else:
         data_files = {data_path.stem: data_path}
 
@@ -136,18 +136,8 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             log_negative_values(house_id, run_number, summary_df, cols, source, core.ERRORS_DIRECTORY, logger)
 
         # Save summary for this month
+        # Next iteration reads remaining_w1/w2/w3 directly from this file
         summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
         summary_df.to_pickle(summary_file)
-
-        # Save next input for this month
-        next_input = data[['timestamp', 'remaining_power_w1', 'remaining_power_w2', 'remaining_power_w3']].copy()
-        next_input.rename(columns={
-            'remaining_power_w1': '1',
-            'remaining_power_w2': '2',
-            'remaining_power_w3': '3'
-        }, inplace=True)
-
-        next_input_file = next_input_dir / f"{house_id}_{month:02d}_{year}.pkl"
-        next_input.to_pickle(next_input_file)
 
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")

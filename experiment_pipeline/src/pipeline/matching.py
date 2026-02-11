@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 import core
-from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path
+from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
 from matching import find_match, find_noisy_match, find_partial_match
 
 
@@ -27,7 +27,6 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
     logger.info(f"Matching process for house {house_id}, run {run_number}")
 
     # Paths
-    data_dir = core.RAW_INPUT_DIRECTORY if run_number == 0 else f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
     output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
     on_off_dir = Path(output_dir) / "on_off"
     matches_dir = Path(output_dir) / "matches"
@@ -38,9 +37,12 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
     os.makedirs(unmatched_on_dir, exist_ok=True)
     os.makedirs(unmatched_off_dir, exist_ok=True)
 
-    # Find data path
+    # Find data path: run 0 reads raw data, run N reads remaining from summarized of run N-1
     try:
-        data_path = find_house_data_path(data_dir, house_id)
+        if run_number == 0:
+            data_path = find_house_data_path(core.RAW_INPUT_DIRECTORY, house_id)
+        else:
+            data_path = find_previous_run_summarized(core.OUTPUT_BASE_PATH, house_id, run_number)
     except FileNotFoundError as e:
         logger.error(str(e))
         return
@@ -55,10 +57,10 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         logger.error(f"No on_off files found in {on_off_dir}")
         return
 
-    # Get list of data monthly files
+    # Get list of data monthly files (handles both HouseholdData and summarized naming)
     data_path = Path(data_path)
     if data_path.is_dir():
-        data_files = {f.stem: f for f in data_path.glob("*.pkl")}
+        data_files = build_data_files_dict(data_path)
     else:
         data_files = {data_path.stem: data_path}
 

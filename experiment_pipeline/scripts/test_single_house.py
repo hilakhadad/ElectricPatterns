@@ -92,7 +92,7 @@ def run_pipeline_for_house(
     process_evaluation = pipeline.evaluation.process_evaluation
     process_visualization = pipeline.visualization.process_visualization
 
-    from core import get_experiment, save_experiment_metadata, find_house_data_path
+    from core import get_experiment, save_experiment_metadata, find_house_data_path, find_previous_run_summarized
 
     # Load experiment config
     try:
@@ -137,20 +137,18 @@ def run_pipeline_for_house(
         logger.info(f"ITERATION {run_number} of {max_iterations}")
         logger.info(f"{'#'*60}")
 
-        # Check input file/folder (supports both old CSV and new monthly folder structure)
-        if run_number == 0:
-            input_dir = input_path
-        else:
-            input_dir = f"{output_path}/run_{run_number}/HouseholdData"
-
+        # Check input: run 0 reads raw data, run N reads remaining from summarized of run N-1
         try:
-            input_data_path = find_house_data_path(input_dir, house_id)
+            if run_number == 0:
+                input_data_path = find_house_data_path(input_path, house_id)
+            else:
+                input_data_path = find_previous_run_summarized(output_path, house_id, run_number)
             logger.info(f"Found input: {input_data_path}")
         except FileNotFoundError as e:
             if run_number == 0:
                 return {'success': False, 'iterations': 0, 'error': str(e)}
             else:
-                logger.info(f"No more data for iteration {run_number}, stopping")
+                logger.info(f"No summarized data from previous run, stopping at iteration {run_number}")
                 break
 
         try:
@@ -191,12 +189,10 @@ def run_pipeline_for_house(
 
             iterations_completed += 1
 
-            # Check for next iteration (supports both folder and file structure)
-            try:
-                next_input_dir = f"{output_path}/run_{run_number + 1}/HouseholdData"
-                find_house_data_path(next_input_dir, house_id)
-            except FileNotFoundError:
-                logger.info("No more events found, stopping iterations")
+            # Check if current run produced summarized output (= input for next iteration)
+            current_summarized = Path(f"{output_path}/run_{run_number}/house_{house_id}/summarized")
+            if not current_summarized.is_dir() or not any(current_summarized.glob(f"summarized_{house_id}_*.pkl")):
+                logger.info("No summarized output from current run, stopping iterations")
                 break
 
         except Exception as e:

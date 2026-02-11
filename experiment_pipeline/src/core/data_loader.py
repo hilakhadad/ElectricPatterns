@@ -13,9 +13,10 @@ def load_power_data(filepath: Union[str, Path], parse_dates: bool = True) -> pd.
     """
     Load power data with standardized column names.
 
-    Supports two input formats:
+    Supports three input formats:
     1. Single pkl file: loads directly
     2. Folder with monthly files: loads and concatenates all pkl files in folder
+    3. Summarized pkl file: extracts remaining_w1/w2/w3 as w1/w2/w3
 
     Automatically renames columns from raw format ('1', '2', '3')
     to phase format ('w1', 'w2', 'w3') and drops 'sum' column if present.
@@ -34,6 +35,14 @@ def load_power_data(filepath: Union[str, Path], parse_dates: bool = True) -> pd.
         data = _load_from_folder(path, parse_dates)
     else:
         data = _load_single_file(path, parse_dates)
+
+    # Handle summarized format (remaining_w1 → w1)
+    if 'remaining_w1' in data.columns:
+        result = data[['timestamp', 'remaining_w1', 'remaining_w2', 'remaining_w3']].copy()
+        result.rename(columns={
+            'remaining_w1': 'w1', 'remaining_w2': 'w2', 'remaining_w3': 'w3'
+        }, inplace=True)
+        return result
 
     # Rename columns if in raw format
     if '1' in data.columns:
@@ -140,3 +149,55 @@ def load_single_month(house_folder: Union[str, Path], month: int, year: int) -> 
         raise FileNotFoundError(f"Monthly file not found: {monthly_file}")
 
     return load_power_data(monthly_file)
+
+
+def find_previous_run_summarized(output_base: Union[str, Path], house_id: str, run_number: int) -> Path:
+    """
+    Find summarized directory from the previous run to use as input for the current run.
+
+    Instead of writing separate HouseholdData files for each iteration,
+    the pipeline reads remaining power directly from the previous run's
+    summarized output (remaining_w1/w2/w3 columns).
+
+    Args:
+        output_base: Base output path (OUTPUT_BASE_PATH)
+        house_id: House identifier
+        run_number: Current run number (will look for run_number - 1)
+
+    Returns:
+        Path to the summarized directory from the previous run
+
+    Raises:
+        FileNotFoundError: If no summarized data exists from the previous run
+    """
+    prev_run = run_number - 1
+    path = Path(output_base) / f"run_{prev_run}" / f"house_{house_id}" / "summarized"
+    if path.is_dir() and any(path.glob(f"summarized_{house_id}_*.pkl")):
+        return path
+    raise FileNotFoundError(
+        f"No summarized data from run {prev_run} for house {house_id} at {path}"
+    )
+
+
+def build_data_files_dict(data_path: Union[str, Path]) -> dict:
+    """
+    Build a {key: filepath} dict for monthly data files.
+
+    Normalizes keys for both HouseholdData format ({house_id}_MM_YYYY)
+    and summarized format (summarized_{house_id}_MM_YYYY → {house_id}_MM_YYYY).
+
+    Args:
+        data_path: Path to directory containing pkl files
+
+    Returns:
+        Dict mapping normalized stem → Path
+    """
+    data_path = Path(data_path)
+    data_files = {}
+    for f in data_path.glob("*.pkl"):
+        key = f.stem
+        # Strip 'summarized_' prefix for consistent key format
+        if key.startswith('summarized_'):
+            key = key[len('summarized_'):]
+        data_files[key] = f
+    return data_files

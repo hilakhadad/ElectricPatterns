@@ -10,7 +10,7 @@ import os
 
 from pathlib import Path
 import core
-from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path
+from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized
 from detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
 from detection.gradual import detect_gradual_events
 
@@ -58,11 +58,12 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         gradual_window = 3
         progressive_search = False
 
-    # Determine input path
-    input_dir = core.RAW_INPUT_DIRECTORY if run_number < 1 else f"{core.INPUT_DIRECTORY}/run_{run_number}/HouseholdData"
-
+    # Determine input path: run 0 reads raw data, run N reads remaining from summarized of run N-1
     try:
-        data_path = find_house_data_path(input_dir, house_id)
+        if run_number < 1:
+            data_path = find_house_data_path(core.RAW_INPUT_DIRECTORY, house_id)
+        else:
+            data_path = find_previous_run_summarized(core.OUTPUT_BASE_PATH, house_id, run_number)
     except FileNotFoundError as e:
         logger.error(str(e))
         return
