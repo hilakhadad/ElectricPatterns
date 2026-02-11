@@ -22,6 +22,15 @@ class ExperimentConfig:
     gradual_window_minutes: int
     gradual_direction_consistency: float
     progressive_window_search: bool = False
+    use_near_threshold_detection: bool = False
+    near_threshold_min_factor: float = 0.85
+    near_threshold_max_extend: int = 3
+    use_tail_extension: bool = False
+    tail_max_extension_minutes: int = 10
+    tail_min_residual: int = 100
+    tail_noise_tolerance: int = 30
+    tail_min_gain: int = 100
+    tail_min_residual_fraction: float = 0.05
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -35,6 +44,15 @@ class ExperimentConfig:
             'gradual_window_minutes': self.gradual_window_minutes,
             'gradual_direction_consistency': self.gradual_direction_consistency,
             'progressive_window_search': self.progressive_window_search,
+            'use_near_threshold_detection': self.use_near_threshold_detection,
+            'near_threshold_min_factor': self.near_threshold_min_factor,
+            'near_threshold_max_extend': self.near_threshold_max_extend,
+            'use_tail_extension': self.use_tail_extension,
+            'tail_max_extension_minutes': self.tail_max_extension_minutes,
+            'tail_min_residual': self.tail_min_residual,
+            'tail_noise_tolerance': self.tail_noise_tolerance,
+            'tail_min_gain': self.tail_min_gain,
+            'tail_min_residual_fraction': self.tail_min_residual_fraction,
         }
 
     def to_json(self, file_path: str):
@@ -144,6 +162,21 @@ EXPERIMENTS = {
         gradual_window_minutes=3,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
+        use_near_threshold_detection=True,
+    ),
+
+    'exp008_tail_extension': ExperimentConfig(
+        exp_id='exp008',
+        description='Tail extension: extend OFF events through residual power decay (monotonic, max 10min) to capture full magnitude',
+        threshold=1300,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=True,
+        use_tail_extension=True,
     ),
 }
 

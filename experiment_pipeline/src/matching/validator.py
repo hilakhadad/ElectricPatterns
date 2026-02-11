@@ -67,7 +67,8 @@ def get_duration_tag(duration_minutes: float) -> str:
 
 
 def build_match_tag(on_magnitude: float, off_magnitude: float, duration_minutes: float,
-                    is_noisy: bool = False, is_partial: bool = False, is_corrected: bool = False) -> str:
+                    is_noisy: bool = False, is_partial: bool = False, is_corrected: bool = False,
+                    is_tail_extended: bool = False) -> str:
     """
     Build a complete match tag combining magnitude quality and duration.
 
@@ -98,6 +99,10 @@ def build_match_tag(on_magnitude: float, off_magnitude: float, duration_minutes:
     # Suffix for corrected
     if is_corrected:
         parts.append("CORRECTED")
+
+    # Suffix for tail-extended events
+    if is_tail_extended:
+        parts.append("TAIL")
 
     return "-".join(parts)
 

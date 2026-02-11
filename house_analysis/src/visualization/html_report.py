@@ -147,6 +147,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'many_flat_segments': '>70% Flat Readings',
         'unusual_night_ratio': 'Night/Day > 3',
         'has_dead_phase': 'Dead Phase (<1%)',
+        'many_nan_values': 'NaN > 2%',
     }
 
     rows = []
@@ -199,6 +200,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             <td><a href="{house_link}" class="house-link"><strong>{house_id}</strong></a></td>
             <td>{coverage.get('days_span', 0)}</td>
             <td>{coverage.get('coverage_ratio', 0):.1%}</td>
+            <td>{coverage.get('avg_nan_pct', 0):.1f}%</td>
             <td>{score:.0f} {badge}</td>
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
@@ -212,7 +214,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100)</h4>
         <div style="display: flex; flex-wrap: wrap; gap: 20px;">
             <div><strong>Completeness (30 pts):</strong> % of expected data present</div>
-            <div><strong>Gap Quality (20 pts):</strong> Deductions for large gaps and high gap %</div>
+            <div><strong>Gap Quality (20 pts):</strong> Deductions for large gaps, high gap %, and scattered NaN values</div>
             <div><strong>Phase Balance (15 pts):</strong> Balanced phases (ratio 1-2 = 15pts, 2-3 = 10pts, etc.)</div>
             <div><strong>Monthly Balance (20 pts):</strong> Even coverage across all months</div>
             <div><strong>Low Noise (15 pts):</strong> Reasonable variability (not too flat/noisy)</div>
@@ -221,6 +223,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
     <div class="column-legend" style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
         <strong>Days</strong> = data duration |
         <strong>Coverage</strong> = % of expected minutes present |
+        <strong>NaN %</strong> = avg missing values within existing rows |
         <strong>Phase Balance</strong> = max(phases)/min(phases), ideal=1 |
         <strong>Night/Day</strong> = avg night power / avg day power
     </div>
@@ -230,10 +233,11 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 <th onclick="sortTable(0)">House ID</th>
                 <th onclick="sortTable(1)">Days<br><small>(duration)</small></th>
                 <th onclick="sortTable(2)">Coverage<br><small>(completeness)</small></th>
-                <th onclick="sortTable(3)">Quality<br><small>(0-100)</small></th>
-                <th onclick="sortTable(4)">Avg Power<br><small>(Watts)</small></th>
-                <th onclick="sortTable(5)">Phase Balance<br><small>(max/min)</small></th>
-                <th onclick="sortTable(6)">Night/Day<br><small>(power ratio)</small></th>
+                <th onclick="sortTable(3)">NaN %<br><small>(avg phases)</small></th>
+                <th onclick="sortTable(4)">Quality<br><small>(0-100)</small></th>
+                <th onclick="sortTable(5)">Avg Power<br><small>(Watts)</small></th>
+                <th onclick="sortTable(6)">Phase Balance<br><small>(max/min)</small></th>
+                <th onclick="sortTable(7)">Night/Day<br><small>(power ratio)</small></th>
                 <th>Issues</th>
             </tr>
         </thead>
@@ -655,6 +659,10 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     <div class="metric">
                         <div class="metric-value">{quality.get('quality_score', 0):.0f}</div>
                         <div class="metric-label">Quality Score</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">{coverage.get('avg_nan_pct', 0):.1f}%</div>
+                        <div class="metric-label">Avg NaN %</div>
                     </div>
                     <div class="metric">
                         <div class="metric-value">{coverage.get('max_gap_minutes', 0):.0f}</div>

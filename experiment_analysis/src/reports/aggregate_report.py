@@ -23,7 +23,7 @@ from metrics.monthly import calculate_monthly_metrics, find_common_problematic_m
 import json
 
 
-def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
+def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
     """
     Load quality scores from house_analysis output.
 
@@ -36,7 +36,7 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
         house_analysis_path: Path to house_analysis JSON file or directory
 
     Returns:
-        Dictionary mapping house_id -> quality_score
+        Dictionary mapping house_id -> quality_score (float) or 'faulty' (str)
     """
     scores = {}
     house_analysis_path = Path(house_analysis_path)
@@ -63,9 +63,13 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
                     analysis = json.load(f)
                 house_id = str(analysis.get('house_id', ''))
                 quality = analysis.get('data_quality', {})
+                quality_label = quality.get('quality_label', None)
                 quality_score = quality.get('quality_score', None)
-                if house_id and quality_score is not None:
-                    scores[house_id] = quality_score
+                if house_id:
+                    if quality_label == 'faulty':
+                        scores[house_id] = 'faulty'
+                    elif quality_score is not None:
+                        scores[house_id] = quality_score
             except Exception as e:
                 print(f"Warning: Failed to load {json_file}: {e}")
 
@@ -89,9 +93,13 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, float]:
         for analysis in analyses:
             house_id = str(analysis.get('house_id', ''))
             quality = analysis.get('data_quality', {})
+            quality_label = quality.get('quality_label', None)
             quality_score = quality.get('quality_score', None)
-            if house_id and quality_score is not None:
-                scores[house_id] = quality_score
+            if house_id:
+                if quality_label == 'faulty':
+                    scores[house_id] = 'faulty'
+                elif quality_score is not None:
+                    scores[house_id] = quality_score
 
         print(f"Loaded pre-analysis quality scores for {len(scores)} houses")
     except Exception as e:
@@ -140,7 +148,7 @@ def aggregate_experiment_results(experiment_dir: Path,
                                  max_iterations: int = 10,
                                  max_workers: int = 4,
                                  fast_mode: bool = False,
-                                 pre_analysis_scores: Optional[Dict[str, float]] = None,
+                                 pre_analysis_scores: Optional[Dict[str, Any]] = None,
                                  incremental_output_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
     """
     Aggregate experiment results for multiple houses.

@@ -50,27 +50,39 @@ OUTPUT/run_{timestamp}/
 ## Metrics
 
 ### Coverage Metrics
-- **Total Rows**: Number of data points
-- **Date Range**: First to last timestamp
-- **Coverage Ratio**: Actual rows / Expected rows
-- **Missing Data**: Gaps in time series
+- **Coverage Ratio**: Actual rows / Expected rows (% of expected minutes present)
+- **NaN %**: Average missing values across phases
+- **Gap Analysis**: Max gap, % of gaps over 2 minutes
+- **Duplicate Timestamps**: Detection of repeated timestamps
 
 ### Power Statistics
-- Mean, std, min, max per phase (w1, w2, w3)
-- Total power distribution
-- Phase balance analysis
+- Mean power per phase (w1, w2, w3)
+- Total power (mean, max)
+- Phase balance ratio (max/min)
+- Power range distribution (0-100W, 100-500W, 500-1000W, 1000-2000W, 2000W+)
 
 ### Temporal Patterns
-- Flat segments (no change periods)
-- Daily/weekly patterns
-- Anomaly detection
+- Day/Night power ratio (per phase and total)
+- Hourly, weekly, monthly patterns (total power)
+- Power consumption heatmap (hour x day-of-week)
+- Flat segment detection (% of readings with no change)
+- Yearly breakdown with monthly detail
 
-### Quality Score
-Composite score (0-100) based on:
-- Coverage completeness
-- Data consistency
-- Phase balance
-- Anomaly count
+### Quality Score (0-100)
+Composite score based on 5 components:
+
+| Component | Max Points | Description |
+|-----------|-----------|-------------|
+| Completeness | 30 | Coverage ratio × 30 |
+| Gap Quality | 20 | Deductions for large gaps, high gap %, NaN values |
+| Phase Balance | 15 | Based on max/min phase ratio (1-2=15, 2-3=10, 3-5=5, >5=0) |
+| Monthly Balance | 20 | Even coverage across months (low std = high score) |
+| Low Noise | 15 | Reasonable hourly variability (CV 0.3-0.8 = optimal) |
+
+### Faulty Phase Detection
+- Phase with >= 20% NaN values is marked as **faulty** (תקולה)
+- Houses with faulty phases get `quality_label='faulty'` instead of a numeric score
+- Dead phase detection: phase with < 1% of max phase power
 
 ## Usage in Code
 

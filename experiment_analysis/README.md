@@ -65,7 +65,12 @@ OUTPUT/analysis_{timestamp}/
 ### Segmentation Metrics
 - **Power Segmentation Ratio**: Segmented power / Total power
 - **Minutes Segmentation Ratio**: Matched minutes / Total minutes
+- **High-Power Energy Explained**: % of minutes above threshold where remaining dropped below threshold
 - **Negative Value Count**: Quality indicator
+
+### Pre-Quality Score
+- Loaded from house_analysis output (0-100 or 'faulty')
+- Houses with faulty phases (>= 20% NaN) displayed as "Faulty" instead of numeric score
 
 ### Device Detection
 

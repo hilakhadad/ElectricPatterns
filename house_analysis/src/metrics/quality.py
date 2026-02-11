@@ -12,7 +12,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
                                     coverage_ratio: float = None,
                                     days_span: int = None,
                                     max_gap_minutes: float = None,
-                                    pct_gaps_over_2min: float = None) -> Dict[str, Any]:
+                                    pct_gaps_over_2min: float = None,
+                                    avg_nan_pct: float = None) -> Dict[str, Any]:
     """
     Calculate data quality metrics for household data.
 
@@ -23,6 +24,7 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         days_span: Optional number of days of data
         max_gap_minutes: Optional maximum gap in minutes
         pct_gaps_over_2min: Optional percentage of gaps over 2 minutes
+        avg_nan_pct: Optional average NaN percentage across phases
 
     Returns:
         Dictionary with data quality metrics
@@ -38,74 +40,38 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics = {}
     metrics['coverage_ratio'] = coverage_ratio if coverage_ratio is not None else 1.0
 
-    # Negative values (should not exist in power data)
+    # Negative values count (used by has_negative_values flag)
     for col in phase_cols:
         if col not in data.columns:
             continue
+        metrics[f'{col}_negative_count'] = int((data[col] < 0).sum())
 
-        negative_count = (data[col] < 0).sum()
-        metrics[f'{col}_negative_count'] = int(negative_count)
-        metrics[f'{col}_negative_pct'] = negative_count / len(data) * 100 if len(data) > 0 else 0
-
-    # Zero values (potential metering issues if too many)
+    # Outliers detection - 3sd percentage (used by many_outliers flag)
     for col in phase_cols:
         if col not in data.columns:
             continue
-
-        zero_count = (data[col] == 0).sum()
-        metrics[f'{col}_zero_count'] = int(zero_count)
-        metrics[f'{col}_zero_pct'] = zero_count / len(data) * 100 if len(data) > 0 else 0
-
-    # Outliers detection (values beyond 3 standard deviations)
-    for col in phase_cols:
-        if col not in data.columns:
-            continue
-
         phase_data = data[col].dropna()
         if len(phase_data) == 0:
             continue
-
         mean = phase_data.mean()
         std = phase_data.std()
         if std > 0:
             z_scores = np.abs((phase_data - mean) / std)
-            outliers_3sd = (z_scores > 3).sum()
-            outliers_4sd = (z_scores > 4).sum()
-            metrics[f'{col}_outliers_3sd'] = int(outliers_3sd)
-            metrics[f'{col}_outliers_4sd'] = int(outliers_4sd)
-            metrics[f'{col}_outliers_3sd_pct'] = outliers_3sd / len(phase_data) * 100
+            metrics[f'{col}_outliers_3sd_pct'] = (z_scores > 3).sum() / len(phase_data) * 100
         else:
-            metrics[f'{col}_outliers_3sd'] = 0
-            metrics[f'{col}_outliers_4sd'] = 0
             metrics[f'{col}_outliers_3sd_pct'] = 0
 
-    # Sudden jumps detection (large changes between consecutive readings)
+    # Sudden jumps - >2000W count (used by many_large_jumps flag)
     for col in phase_cols:
         if col not in data.columns:
             continue
-
         phase_data = data[col].dropna()
         if len(phase_data) < 2:
             continue
-
         diffs = phase_data.diff().abs()
-        large_jumps_1000 = (diffs > 1000).sum()
-        large_jumps_2000 = (diffs > 2000).sum()
-        large_jumps_5000 = (diffs > 5000).sum()
+        metrics[f'{col}_jumps_over_2000W'] = int((diffs > 2000).sum())
 
-        metrics[f'{col}_jumps_over_1000W'] = int(large_jumps_1000)
-        metrics[f'{col}_jumps_over_2000W'] = int(large_jumps_2000)
-        metrics[f'{col}_jumps_over_5000W'] = int(large_jumps_5000)
-
-        # Max single jump
-        metrics[f'{col}_max_jump'] = diffs.max()
-
-    # Duplicate timestamps
-    if 'timestamp' in data.columns:
-        dup_timestamps = data['timestamp'].duplicated().sum()
-        metrics['duplicate_timestamps'] = int(dup_timestamps)
-
-    # Detect dead/faulty phases using relative threshold (same logic as experiment_analysis)
+    # Detect dead/faulty phases using relative threshold
     # A phase is considered damaged if its total power is less than 1% of the maximum phase's power
     dead_phases = []
     phase_powers = {}
@@ -122,7 +88,7 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
 
     # Find max power among phases
     max_power = max(phase_powers.values()) if phase_powers else 0
-    threshold_ratio = 0.01  # 1% threshold (same as experiment_analysis)
+    threshold_ratio = 0.01  # 1% threshold
 
     for col, power in phase_powers.items():
         ratio = power / max_power if max_power > 0 else 0
@@ -130,14 +96,26 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
             dead_phases.append(col)
 
     metrics['dead_phases'] = dead_phases
-    metrics['phase_powers'] = phase_powers
     metrics['has_dead_phase'] = len(dead_phases) > 0
-    metrics['active_phase_count'] = len(phase_cols) - len(dead_phases)
 
-    # Store days_span in metrics
-    metrics['days_span'] = days_span if days_span is not None else 0
+    # ===== FAULTY PHASE DETECTION (NaN >= 20%) =====
+    # A phase with >= 20% NaN values is considered faulty (תקולה)
+    # Houses with faulty phases get quality_label='faulty' instead of numeric score
+    FAULTY_NAN_THRESHOLD = 20.0  # percent
 
-    # ===== NEW QUALITY SCORING SYSTEM (0-100) =====
+    faulty_nan_phases = []
+    for col in phase_cols:
+        if col not in data.columns:
+            continue
+        col_nan_pct = data[col].isna().sum() / len(data) * 100 if len(data) > 0 else 0
+        metrics[f'{col}_nan_pct'] = col_nan_pct
+        if col_nan_pct >= FAULTY_NAN_THRESHOLD:
+            faulty_nan_phases.append(col)
+
+    metrics['faulty_nan_phases'] = faulty_nan_phases
+    metrics['has_faulty_nan_phase'] = len(faulty_nan_phases) > 0
+
+    # ===== QUALITY SCORING SYSTEM (0-100) =====
     # Based on: Completeness, Gap Quality, Phase Balance, Monthly Balance, Noise Level
 
     quality_score = 0
@@ -149,26 +127,22 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['completeness_score'] = completeness_score
 
     # ===== 2. GAP QUALITY (up to 20 points) =====
-    # Start with 20, deduct for gaps
     gap_score = 20
-
-    # Store gap metrics
-    metrics['max_gap_minutes'] = max_gap_minutes if max_gap_minutes is not None else 0
-    metrics['pct_gaps_over_2min'] = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
 
     # Penalty for max gap > 60 min (up to 10 pts)
     max_gap = max_gap_minutes if max_gap_minutes is not None else 0
     if max_gap > 60:
-        # Scale: 60 min = 0 penalty, 1440 min (1 day) = 10 penalty
-        gap_penalty = min((max_gap - 60) / 138, 10)
-        gap_score -= gap_penalty
+        gap_score -= min((max_gap - 60) / 138, 10)
 
     # Penalty for high gap percentage (up to 10 pts)
     gap_pct = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
     if gap_pct > 2:
-        # Scale: 2% = 0 penalty, 20% = 10 penalty
-        gap_pct_penalty = min((gap_pct - 2) / 1.8, 10)
-        gap_score -= gap_pct_penalty
+        gap_score -= min((gap_pct - 2) / 1.8, 10)
+
+    # Penalty for NaN values within existing rows (up to 10 pts)
+    nan_pct = avg_nan_pct if avg_nan_pct is not None else 0
+    if nan_pct > 1:
+        gap_score -= min((nan_pct - 1) / 1.9, 10)
 
     gap_score = max(0, gap_score)
     quality_score += gap_score
@@ -184,7 +158,6 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
 
     if len(phase_means) >= 2 and min(phase_means) > 0:
         balance_ratio = max(phase_means) / min(phase_means)
-        metrics['phase_balance_ratio'] = balance_ratio
 
         # Score based on ratio
         if balance_ratio <= 2:
@@ -196,14 +169,12 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         else:
             balance_score = 0   # Poor
     else:
-        metrics['phase_balance_ratio'] = 1.0
         balance_score = 15  # Default for single phase or can't calculate
 
     quality_score += balance_score
     metrics['balance_score'] = balance_score
 
     # ===== 4. MONTHLY COVERAGE BALANCE (up to 20 points) =====
-    # Calculate coverage per month and check variance
     monthly_balance_score = 20  # Start with max
 
     if 'timestamp' in data.columns:
@@ -211,34 +182,21 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
         data_temp['year_month'] = data_temp['timestamp'].dt.to_period('M')
 
-        # Calculate expected vs actual rows per month
         monthly_counts = data_temp.groupby('year_month').size()
 
         if len(monthly_counts) > 1:
-            # Calculate coverage ratio per month (assuming 1-min resolution)
             monthly_coverage = []
             for period, count in monthly_counts.items():
                 expected = period.days_in_month * 24 * 60  # minutes in month
-                coverage_ratio = min(count / expected, 1.0)
-                monthly_coverage.append(coverage_ratio)
+                monthly_coverage.append(min(count / expected, 1.0))
 
-            # Calculate std dev of monthly coverage
             monthly_std = np.std(monthly_coverage)
-            metrics['monthly_coverage_std'] = monthly_std
-            metrics['monthly_coverage_values'] = monthly_coverage
-
-            # Score: low std = high score
-            # std 0 = 20 pts, std 0.5 = 0 pts
             monthly_balance_score = max(0, 20 * (1 - monthly_std * 2))
-        else:
-            metrics['monthly_coverage_std'] = 0
-            # Single month - give full points
 
     quality_score += monthly_balance_score
     metrics['monthly_balance_score'] = monthly_balance_score
 
     # ===== 5. LOW NOISE / STABILITY (up to 15 points) =====
-    # Based on hourly coefficient of variation
     noise_score = 15  # Start with max
 
     hourly_cvs = []
@@ -262,14 +220,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
 
     if hourly_cvs:
         avg_cv = np.mean(hourly_cvs)
-        metrics['avg_hourly_cv'] = avg_cv
 
         # Score based on CV (coefficient of variation)
-        # Normal CV (0.3-0.8): 15 pts (healthy daily variation)
-        # Very low CV (<0.3): 10 pts (suspicious - too flat)
-        # High CV (0.8-1.5): 10 pts (some noise)
-        # Very high CV (1.5-2.0): 5 pts (noisy)
-        # Extreme CV (>2.0): 0 pts (very noisy/problematic)
         if 0.3 <= avg_cv <= 0.8:
             noise_score = 15
         elif avg_cv < 0.3:
@@ -280,14 +232,19 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
             noise_score = 5
         else:
             noise_score = 0
-    else:
-        metrics['avg_hourly_cv'] = 0
 
     quality_score += noise_score
     metrics['noise_score'] = noise_score
 
     # Ensure bounds
     metrics['quality_score'] = max(0, min(100, quality_score))
+
+    # Override: faulty phases → no numeric score
+    if metrics['has_faulty_nan_phase']:
+        metrics['quality_score'] = None
+        metrics['quality_label'] = 'faulty'
+    else:
+        metrics['quality_label'] = None
 
     return metrics
 

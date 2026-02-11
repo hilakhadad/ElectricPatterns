@@ -137,7 +137,8 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
 
             # Calculate duration for tagging
             duration_minutes = (off_end - on_start).total_seconds() / 60
-            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_partial=True, is_corrected=correction > 0)
+            tail_ext = on_event.get('tail_extended', False) or off_event.get('tail_extended', False)
+            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_partial=True, is_corrected=correction > 0, is_tail_extended=tail_ext)
 
             # Create remainder event
             if on_magnitude > off_magnitude:

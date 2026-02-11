@@ -111,7 +111,8 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
             if duration_minutes <= 2:
                 is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
                 if is_valid:
-                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    tail_ext = on_event.get('tail_extended', False) or off_event.get('tail_extended', False)
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0, is_tail_extended=tail_ext)
                     logger.info(f"Matched {tag}: {on_id} <-> {off_id}" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
                     return off_event, tag, correction
                 else:
@@ -127,7 +128,8 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
             if mag_diff <= SMALL_MAGNITUDE_DIFF_THRESHOLD:
                 is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
                 if is_valid:
-                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    tail_ext = on_event.get('tail_extended', False) or off_event.get('tail_extended', False)
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0, is_tail_extended=tail_ext)
                     logger.info(f"Matched {tag}: {on_id} <-> {off_id} (diff={mag_diff:.0f}W)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
                     return off_event, tag, correction
                 else:
@@ -148,7 +150,8 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
             if abs(max_deviation) <= max_magnitude_diff and abs(min_deviation) <= max_magnitude_diff:
                 is_valid, correction = is_valid_event_removal(data, on_event, off_event, logger)
                 if is_valid:
-                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0)
+                    tail_ext = on_event.get('tail_extended', False) or off_event.get('tail_extended', False)
+                    tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_corrected=correction > 0, is_tail_extended=tail_ext)
                     logger.info(f"Matched {tag}: {on_id} <-> {off_id} (window={window_minutes}m)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
                     return off_event, tag, correction
                 else:

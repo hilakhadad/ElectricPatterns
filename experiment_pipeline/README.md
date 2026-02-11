@@ -8,8 +8,8 @@ Core pipeline for energy consumption analysis - detecting, matching, and segment
 experiment_pipeline/
 ├── src/                           # Source code (modular structure)
 │   ├── core/                      # Configuration, paths, logging
-│   ├── detection/                 # Event detection (sharp, gradual)
-│   ├── matching/                  # Event matching (stage1, stage2)
+│   ├── detection/                 # Event detection (sharp, gradual, near-threshold, tail)
+│   ├── matching/                  # Event matching (stage1, stage2, stage3)
 │   ├── segmentation/              # Power segmentation & evaluation
 │   ├── visualization/             # Interactive & static plots
 │   ├── pipeline/                  # Orchestration (process_* functions)
@@ -78,10 +78,12 @@ Each iteration has 3 stages: **Detection** → **Matching** → **Segmentation**
 **Algorithm**:
 1. Calculate power difference: `diff = power[t] - power[t-1]`
 2. Detect **ON**: diff >= threshold (e.g., 1500W)
-3. Detect **OFF**: diff <= -threshold × 0.8
+3. Detect **OFF**: diff <= -threshold × off_factor
 4. **Expand** events - include adjacent small changes in same direction
 5. **Merge** consecutive ON/OFF events (multi-stage appliance turn-ons)
-6. Filter events below minimum magnitude
+6. **Near-threshold** detection: capture events at 85-100% of threshold, extend ±3min
+7. **Tail extension** (OFF only): extend through residual power decay (max 10min, monotonic)
+8. Filter events below minimum magnitude
 
 **Output**: List of ON/OFF events with timestamp, magnitude, phase
 
@@ -257,6 +259,8 @@ Central configuration and utilities:
 Event detection algorithms:
 - `sharp.py` - Single-minute power jumps
 - `gradual.py` - Multi-minute power ramps
+- `near_threshold.py` - Events at 85-100% of threshold
+- `tail_extension.py` - Extend OFF events through residual decay
 - `merger.py` - Merge overlapping events
 - `expander.py` - Expand events to include adjacent changes
 
@@ -299,6 +303,9 @@ Defined in `src/core/config.py`:
 | exp003_progressive_search | 1500W | Yes | Progressive window search |
 | exp004_noisy_matching | 1500W | Yes | + Noisy event matching |
 | exp005_asymmetric_windows | 1500W | Yes | Asymmetric time windows |
+| exp006_partial_matching | 1500W | Yes | + Partial matching (Stage 3) |
+| exp007_symmetric_threshold | 1300W | Yes | Symmetric ON/OFF (factor=1.0) |
+| exp008_tail_extension | 1300W | Yes | + Tail extension for OFF events |
 
 ## Output Structure
 

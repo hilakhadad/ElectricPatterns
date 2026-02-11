@@ -14,6 +14,11 @@ Bug reference (algorithm-only, not file loading):
   #14 Skipped matches deleted from matches file without returning to unmatched
   #17 Gradual detection: sub-threshold single steps must not be detected,
       but multi-step ramps that sum above threshold must be detected
+  #19 All ON events must appear in matching log at INFO level
+  #20 Near-threshold extension: sub-threshold diffs extended by adjacent minutes
+      to reach threshold, plus nearby_value stored for all events
+  #21 Tail extension: OFF events with residual power decay tails get extended
+      forward to capture full magnitude (soft landing pattern)
 """
 import pytest
 import numpy as np
@@ -32,9 +37,12 @@ from matching.validator import (
     MAX_EVENT_CV,
     MIN_EVENT_STABILITY_RATIO,
 )
+from matching.stage1 import find_match
 from segmentation.processor import _process_single_event, process_phase_segmentation
 from segmentation.restore import restore_skipped_to_unmatched
 from detection.gradual import detect_gradual_events
+from detection.near_threshold import detect_near_threshold_events
+from detection.tail_extension import extend_off_event_tails
 
 # ============================================================================
 # Helpers
@@ -1014,3 +1022,483 @@ class TestNaNGapBypassRejection:
         assert is_valid, (
             "Clean match with stable power and no NaN gaps must still be accepted."
         )
+
+
+# ============================================================================
+# Bug #19: All ON events must appear in matching log at INFO level
+#
+# Every ON event must produce a log entry at INFO level:
+# - Matched events: "Matched {tag}: {on_id} <-> {off_id}"
+# - Unmatched events: "[Stage 1] No match for {on_id}({magnitude}W)"
+#
+# Previously, "No match" was logged at DEBUG level, making it invisible
+# in production logs. Fix: changed to INFO level.
+# ============================================================================
+
+def _make_off_events_df(off_list):
+    """Create a DataFrame of OFF events suitable for find_match."""
+    if not off_list:
+        return pd.DataFrame(columns=['start', 'end', 'phase', 'magnitude', 'event_id', 'event'])
+    return pd.DataFrame(off_list)
+
+
+class TestAllOnEventsLogged:
+    """Bug #19: every ON event must appear in matching log at INFO level."""
+
+    #  min 0-1: 500W  (background)
+    #  min 2:   2000W (ON: +1500)
+    #  min 3-6: 2000W (stable event)
+    #  min 7:   500W  (OFF: -1500)
+    #  min 8:   500W
+    VALUES = [500, 500, 2000, 2000, 2000, 2000, 2000, 500, 500]
+
+    def test_matched_event_logged_at_info(self, caplog):
+        """When find_match succeeds, 'Matched' must appear at INFO level."""
+        logger = logging.getLogger('test_log_matched')
+        logger.setLevel(logging.DEBUG)
+
+        data = make_power_data(self.VALUES)
+        on_ev = make_on_event(2, 2, magnitude=1500, event_id='on_w1_101')
+        off_ev = make_off_event(7, 7, magnitude=1500, event_id='off_w1_201')
+        off_df = _make_off_events_df([off_ev])
+
+        with caplog.at_level(logging.INFO, logger='test_log_matched'):
+            result, tag, correction = find_match(
+                data, on_ev, off_df,
+                max_time_diff=6, max_magnitude_diff=350, logger=logger
+            )
+
+        assert result is not None, "Match should succeed for identical magnitudes"
+
+        # Verify "Matched" log entry at INFO level
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        matched_logs = [m for m in info_messages if 'Matched' in m and 'on_w1_101' in m]
+        assert len(matched_logs) >= 1, (
+            f"Matched ON event on_w1_101 must produce INFO log with 'Matched'. "
+            f"Got INFO logs: {info_messages}"
+        )
+
+    def test_unmatched_event_logged_at_info(self, caplog):
+        """When find_match fails, '[Stage 1] No match for' must appear at INFO level."""
+        logger = logging.getLogger('test_log_unmatched')
+        logger.setLevel(logging.DEBUG)
+
+        data = make_power_data(self.VALUES)
+        on_ev = make_on_event(2, 2, magnitude=1500, event_id='on_w1_102')
+        # OFF on wrong phase - no match possible for w1 ON event
+        off_df = _make_off_events_df([
+            make_off_event(7, 7, magnitude=1500, phase='w2', event_id='off_w2_999'),
+        ])
+
+        with caplog.at_level(logging.INFO, logger='test_log_unmatched'):
+            result, tag, correction = find_match(
+                data, on_ev, off_df,
+                max_time_diff=6, max_magnitude_diff=350, logger=logger
+            )
+
+        assert result is None, "Match should fail - OFF is on wrong phase"
+
+        # Verify "[Stage 1] No match for" at INFO level (not DEBUG)
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        no_match_logs = [m for m in info_messages if 'No match for' in m and 'on_w1_102' in m]
+        assert len(no_match_logs) >= 1, (
+            f"Unmatched ON event on_w1_102 must produce INFO log with 'No match for'. "
+            f"Got INFO logs: {info_messages}"
+        )
+
+    def test_unmatched_not_only_at_debug(self, caplog):
+        """'No match for' must NOT be only at DEBUG level (old behavior)."""
+        logger = logging.getLogger('test_log_debug_check')
+        logger.setLevel(logging.DEBUG)
+
+        data = make_power_data(self.VALUES)
+        on_ev = make_on_event(2, 2, magnitude=1500, event_id='on_w1_103')
+        # OFF on wrong phase - no match possible
+        off_df = _make_off_events_df([
+            make_off_event(7, 7, magnitude=1500, phase='w2', event_id='off_w2_998'),
+        ])
+
+        with caplog.at_level(logging.DEBUG, logger='test_log_debug_check'):
+            find_match(
+                data, on_ev, off_df,
+                max_time_diff=6, max_magnitude_diff=350, logger=logger
+            )
+
+        # "No match for" must appear at INFO, not just DEBUG
+        debug_only = [
+            r for r in caplog.records
+            if 'No match for' in r.message and r.levelno == logging.DEBUG
+        ]
+        assert len(debug_only) == 0, (
+            "'No match for' must be at INFO level, not DEBUG. "
+            "Old code used logger.debug() which hid unmatched events from production logs."
+        )
+
+    def test_every_on_event_has_log_entry(self, caplog):
+        """Multiple ON events: each must produce exactly one log entry (matched or unmatched)."""
+        logger = logging.getLogger('test_log_all_events')
+        logger.setLevel(logging.DEBUG)
+
+        # 3 ON events on same phase, only 1 matching OFF
+        #  min 0-1:  500W (background)
+        #  min 2:   2000W (ON1: +1500)
+        #  min 3:    500W (OFF1: -1500)
+        #  min 4:   2000W (ON2: +1500)
+        #  min 5:   2000W
+        #  min 6:   2000W (ON3 starts, but uses ON2's magnitude)
+        #  min 7:   2000W
+        #  min 8:    500W
+        values = [500, 500, 2000, 500, 2000, 2000, 2000, 2000, 500]
+        data = make_power_data(values)
+
+        on_events = [
+            make_on_event(2, 2, magnitude=1500, event_id='on_w1_201'),
+            make_on_event(4, 4, magnitude=1500, event_id='on_w1_202'),
+            make_on_event(6, 6, magnitude=1500, event_id='on_w1_203'),
+        ]
+        # Only 1 OFF event - only 1 ON can match
+        off_df = _make_off_events_df([
+            make_off_event(3, 3, magnitude=1500, event_id='off_w1_301'),
+        ])
+
+        used_off_ids = set()
+        with caplog.at_level(logging.INFO, logger='test_log_all_events'):
+            for on_ev in on_events:
+                available_off = off_df[~off_df['event_id'].isin(used_off_ids)]
+                result, tag, correction = find_match(
+                    data, on_ev, available_off,
+                    max_time_diff=6, max_magnitude_diff=350, logger=logger
+                )
+                if result is not None:
+                    used_off_ids.add(result['event_id'])
+
+        # Every ON event must appear in at least one INFO log
+        info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        for on_ev in on_events:
+            on_id = on_ev['event_id']
+            found = any(on_id in msg for msg in info_messages)
+            assert found, (
+                f"ON event {on_id} has no INFO log entry. "
+                f"Every ON event must appear as 'Matched' or 'No match for'. "
+                f"INFO logs: {info_messages}"
+            )
+
+
+# ============================================================================
+# Bug #20: Near-threshold extension detection
+#
+# When a single-minute diff is close to but below the threshold (near-miss),
+# extending by 1-3 adjacent minutes may push the total magnitude over threshold.
+#
+# Real case: House 1, phase w3, 21/06/2021.
+# ON at 18:21 (+1522W, detected). OFF at 19:57 (-1297W, NOT detected).
+# -1297W is 3W below the 1300W threshold. But power drops from 1580W (at 19:55)
+# to 280W (at 19:57) — magnitude = -1300W = threshold.
+# Including minute 19:56 (diff=-3W) in the event reaches the threshold.
+#
+# Also: nearby_value column stores power 1min before ON / 1min after OFF
+# for all events, to help validate matches later.
+# ============================================================================
+
+def _make_near_threshold_data(diffs, phase='w1'):
+    """Create power data and indexed version from diffs, starting at 500W."""
+    values = [500.0]
+    for d in diffs:
+        values.append(values[-1] + d)
+    timestamps = pd.date_range(start=BASE_TIME, periods=len(values), freq='min')
+    data = pd.DataFrame({
+        'timestamp': timestamps,
+        phase: values,
+    })
+    data[f'{phase}_diff'] = data[phase].diff()
+    data_indexed = data.set_index('timestamp')
+    return data, data_indexed
+
+
+class TestNearThresholdDetection:
+    """Bug #20: near-threshold diffs extended by adjacent minutes to reach threshold."""
+
+    THRESHOLD = 1300
+
+    def test_near_miss_off_extended_to_threshold(self):
+        """OFF diff -1297W (3W below TH), adjacent -3W brings total to -1300W.
+
+        Real case: House 1 w3, 19:56 diff=-3, 19:57 diff=-1297.
+        magnitude = power(end) - power(start-1min) = -1300W.
+        """
+        # min 0: 500, min 1: 500, min 2: 2080 (+1580 ON),
+        # min 3-4: 2080 (stable), min 5: 2077 (-3), min 6: 780 (-1297)
+        diffs = [0, 1580, 0, 0, -3, -1297, 0]
+        data, data_indexed = _make_near_threshold_data(diffs)
+
+        existing_on = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=2),
+            'end': BASE_TIME + pd.Timedelta(minutes=2),
+            'magnitude': 1580.0,
+        }])
+        existing_off = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+
+        on_df, off_df = detect_near_threshold_events(
+            data, data_indexed, 'w1_diff', self.THRESHOLD, self.THRESHOLD,
+            existing_on, existing_off, 'w1',
+            min_factor=0.85, max_extend_minutes=3
+        )
+
+        assert len(off_df) == 1, (
+            f"Near-miss OFF (-1297W, 3W below TH) with adjacent -3W must be detected. "
+            f"Got {len(off_df)} events."
+        )
+        event = off_df.iloc[0]
+        assert abs(event['magnitude']) >= self.THRESHOLD, (
+            f"Extended magnitude must reach threshold, got {event['magnitude']:.0f}W"
+        )
+
+    def test_near_miss_on_extended_to_threshold(self):
+        """ON diff +1250W (50W below TH), adjacent +100W brings total to +1350W."""
+        # min 0: 500, min 1: 500, min 2: 600 (+100), min 3: 1850 (+1250)
+        diffs = [0, 0, 100, 1250, 0, 0]
+        data, data_indexed = _make_near_threshold_data(diffs)
+
+        existing_on = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+        existing_off = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+
+        on_df, off_df = detect_near_threshold_events(
+            data, data_indexed, 'w1_diff', self.THRESHOLD, self.THRESHOLD,
+            existing_on, existing_off, 'w1',
+            min_factor=0.85, max_extend_minutes=3
+        )
+
+        assert len(on_df) == 1, (
+            f"Near-miss ON (+1250W) with adjacent +100W must be detected. "
+            f"Got {len(on_df)} events."
+        )
+        assert on_df.iloc[0]['magnitude'] >= self.THRESHOLD, (
+            f"Extended magnitude must reach threshold, got {on_df.iloc[0]['magnitude']:.0f}W"
+        )
+
+    def test_already_detected_not_duplicated(self):
+        """A diff already covered by an existing event must NOT create a near-threshold event."""
+        # -1500W is above threshold, already detected
+        diffs = [0, 1500, 0, 0, -1500, 0]
+        data, data_indexed = _make_near_threshold_data(diffs)
+
+        # The -1500W at min 5 is already part of an existing OFF event
+        existing_on = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+        existing_off = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=5),
+            'end': BASE_TIME + pd.Timedelta(minutes=5),
+            'magnitude': -1500.0,
+        }])
+
+        on_df, off_df = detect_near_threshold_events(
+            data, data_indexed, 'w1_diff', self.THRESHOLD, self.THRESHOLD,
+            existing_on, existing_off, 'w1',
+            min_factor=0.85, max_extend_minutes=3
+        )
+
+        assert len(off_df) == 0, (
+            f"Already-detected OFF must not create duplicate near-threshold event. "
+            f"Got {len(off_df)} events."
+        )
+
+    def test_diff_too_small_not_detected(self):
+        """A diff below min_factor (1000W < 85% of 1300 = 1105W) must NOT be detected."""
+        diffs = [0, 0, -1000, 0, 0]
+        data, data_indexed = _make_near_threshold_data(diffs)
+
+        existing_on = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+        existing_off = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+
+        on_df, off_df = detect_near_threshold_events(
+            data, data_indexed, 'w1_diff', self.THRESHOLD, self.THRESHOLD,
+            existing_on, existing_off, 'w1',
+            min_factor=0.85, max_extend_minutes=3
+        )
+
+        assert len(off_df) == 0, (
+            f"-1000W is below 85% of 1300 (1105W), must not be detected. "
+            f"Got {len(off_df)} events."
+        )
+
+    def test_extension_limited_to_max(self):
+        """Near-miss -1200W + tiny diffs that never reach TH within max_extend must NOT be detected."""
+        # -1200W at min 3, surrounded by +10W noise that won't help reach 1300
+        diffs = [0, 10, 10, -1200, 10, 10, 0]
+        data, data_indexed = _make_near_threshold_data(diffs)
+
+        existing_on = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+        existing_off = pd.DataFrame(columns=['start', 'end', 'magnitude'])
+
+        on_df, off_df = detect_near_threshold_events(
+            data, data_indexed, 'w1_diff', self.THRESHOLD, self.THRESHOLD,
+            existing_on, existing_off, 'w1',
+            min_factor=0.85, max_extend_minutes=3
+        )
+
+        assert len(off_df) == 0, (
+            f"-1200W with +10W noise around it cannot reach -1300W threshold. "
+            f"Got {len(off_df)} events."
+        )
+
+
+class TestNearbyValue:
+    """Bug #20: nearby_value stores power 1min before ON / 1min after OFF."""
+
+    def _import_add_nearby_value(self):
+        """Import _add_nearby_value from pipeline.detection without triggering full package init."""
+        import importlib.util
+        mod_path = str(Path(__file__).resolve().parent.parent / 'src' / 'pipeline' / 'detection.py')
+        spec = importlib.util.spec_from_file_location('pipeline_detection', mod_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod._add_nearby_value
+
+    def test_nearby_value_on_event(self):
+        """ON event nearby_value must be power at (start - 1min)."""
+        _add_nearby_value = self._import_add_nearby_value()
+
+        values = [500, 500, 2000, 2000, 2000, 500, 500]
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        on_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=2),
+            'end': BASE_TIME + pd.Timedelta(minutes=2),
+            'magnitude': 1500.0,
+        }])
+
+        result = _add_nearby_value(on_events, data_indexed, 'w1', 'on')
+
+        assert 'nearby_value' in result.columns, "nearby_value column must exist"
+        # Power at min 1 (1min before ON at min 2) = 500
+        assert result.iloc[0]['nearby_value'] == 500.0, (
+            f"ON nearby_value should be 500 (power 1min before ON), "
+            f"got {result.iloc[0]['nearby_value']}"
+        )
+
+    def test_nearby_value_off_event(self):
+        """OFF event nearby_value must be power at (end + 1min)."""
+        _add_nearby_value = self._import_add_nearby_value()
+
+        values = [500, 500, 2000, 2000, 2000, 500, 500]
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        off_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=5),
+            'end': BASE_TIME + pd.Timedelta(minutes=5),
+            'magnitude': -1500.0,
+        }])
+
+        result = _add_nearby_value(off_events, data_indexed, 'w1', 'off')
+
+        assert 'nearby_value' in result.columns, "nearby_value column must exist"
+        # Power at min 6 (1min after OFF at min 5) = 500
+        assert result.iloc[0]['nearby_value'] == 500.0, (
+            f"OFF nearby_value should be 500 (power 1min after OFF), "
+            f"got {result.iloc[0]['nearby_value']}"
+        )
+
+
+# ============================================================================
+# Bug #21: Tail extension — OFF events with residual power decay
+# ============================================================================
+
+class TestTailExtensionDetection:
+    """
+    Bug #21: OFF events with residual power tails should be extended forward.
+
+    When a device turns off, the sharp power drop may leave residual power
+    (e.g., fan coasting) that decays to zero over several minutes.
+    The tail extension captures this decay to get the full magnitude.
+
+    Example: AC turns off → 1600W drops to 280W (sharp) → 280W decays to 0W (tail).
+    Without extension: magnitude = -1300W. With extension: magnitude = -1600W.
+    """
+
+    def test_off_tail_extended(self):
+        """OFF event with decaying residual gets extended and magnitude increases."""
+        # Power: 0 for 20min, 1600 for 90min, sharp drop to 300, then decay to 0
+        values = [0]*20 + [1600]*90 + [300]*3 + [150]*3 + [0]*10
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        # OFF event: sharp drop at minute 110 (1600→300), end at minute 112
+        off_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=110),
+            'end': BASE_TIME + pd.Timedelta(minutes=112),
+            'magnitude': -1300.0,  # 300 - 1600
+        }])
+
+        result = extend_off_event_tails(off_events, data_indexed, 'w1')
+
+        assert result.iloc[0]['tail_extended'] == True, "Event should be tail-extended"
+        assert 'tail_original_end' in result.columns, "tail_original_end column must exist"
+        assert result.iloc[0]['tail_original_end'] == BASE_TIME + pd.Timedelta(minutes=112), \
+            "Original end should be preserved"
+        # New end should be at minute 115 (where power reaches 0) or later
+        assert result.iloc[0]['end'] > BASE_TIME + pd.Timedelta(minutes=112), \
+            "End should be extended beyond original"
+        # Magnitude should be larger (more negative)
+        assert abs(result.iloc[0]['magnitude']) > 1300, \
+            f"Magnitude should increase, got {abs(result.iloc[0]['magnitude'])}"
+
+    def test_flat_residual_not_extended(self):
+        """OFF event with flat residual (no decay) should NOT be extended."""
+        # Power: 0 for 20min, 1600 for 90min, sharp drop to 300, stays flat
+        values = [0]*20 + [1600]*90 + [300]*30
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        off_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=110),
+            'end': BASE_TIME + pd.Timedelta(minutes=112),
+            'magnitude': -1300.0,
+        }])
+
+        result = extend_off_event_tails(off_events, data_indexed, 'w1')
+
+        # Residual is 300W but flat — gain < min_gain (100W), so no extension
+        assert result.iloc[0]['tail_extended'] == False, \
+            "Flat residual should NOT trigger tail extension"
+        assert result.iloc[0]['end'] == BASE_TIME + pd.Timedelta(minutes=112), \
+            "End should remain unchanged"
+
+    def test_extension_stops_at_rise(self):
+        """Extension stops when power rises (another device turns on)."""
+        # Power: 0 for 20min, 1600 for 90min, drop to 300, decay to 100, then rise to 250
+        values = [0]*20 + [1600]*90 + [300, 200, 100, 250] + [250]*10
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        off_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=110),
+            'end': BASE_TIME + pd.Timedelta(minutes=110),
+            'magnitude': -1300.0,
+        }])
+
+        result = extend_off_event_tails(off_events, data_indexed, 'w1')
+
+        assert result.iloc[0]['tail_extended'] == True, "Should extend through decay portion"
+        # End should be at minute 112 (100W), NOT at 113 (250W — power rose)
+        assert result.iloc[0]['end'] == BASE_TIME + pd.Timedelta(minutes=112), \
+            f"Should stop at last non-rising point, got {result.iloc[0]['end']}"
+
+    def test_gain_too_small_not_extended(self):
+        """No extension when magnitude gain is below min_gain threshold."""
+        # Power: 0 for 20min, 1600 for 90min, drop to 300, tiny decay
+        values = [0]*20 + [1600]*90 + [300, 260, 230] + [230]*10
+        data = make_power_data(values)
+        data_indexed = data.set_index('timestamp')
+
+        off_events = pd.DataFrame([{
+            'start': BASE_TIME + pd.Timedelta(minutes=110),
+            'end': BASE_TIME + pd.Timedelta(minutes=110),
+            'magnitude': -1300.0,
+        }])
+
+        result = extend_off_event_tails(off_events, data_indexed, 'w1')
+
+        # Gain = 300 - 230 = 70W < min_gain (100W)
+        assert result.iloc[0]['tail_extended'] == False, \
+            "Gain of 70W is below min_gain=100W, should NOT extend"

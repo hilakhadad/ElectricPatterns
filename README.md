@@ -17,6 +17,8 @@ Analysis pipeline for detecting and segregating electricity consumption patterns
 ### Event Detection
 - **Sharp detection**: Single-sample threshold crossing
 - **Gradual detection**: Multi-minute ramp-ups/downs
+- **Near-threshold detection**: Captures events at 85-100% of threshold
+- **Tail extension**: Extends OFF events through residual power decay
 - **Progressive window search**: Better event separation
 
 ### Event Matching (3 Stages)
@@ -180,6 +182,9 @@ Defined in `experiment_pipeline/src/core/config.py`:
 | exp003_progressive_search | 1500W | + Progressive windows |
 | exp004_noisy_matching | 1500W | + Stage 2 matching |
 | exp005_asymmetric_windows | 1500W | Asymmetric time windows |
+| exp006_partial_matching | 1500W | + Stage 3 partial matching |
+| exp007_symmetric_threshold | 1300W | Symmetric ON/OFF (factor=1.0) |
+| exp008_tail_extension | 1300W | + Tail extension for OFF events |
 
 ## Requirements
 

@@ -29,7 +29,6 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
 
     metrics = {}
 
-    # Overall statistics
     for col in phase_cols:
         if col not in data.columns:
             continue
@@ -40,27 +39,10 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
 
         prefix = f'phase_{col}'
 
-        # Basic stats
+        # Mean power (used by phase balance chart, phase power chart)
         metrics[f'{prefix}_mean'] = phase_data.mean()
-        metrics[f'{prefix}_median'] = phase_data.median()
-        metrics[f'{prefix}_std'] = phase_data.std()
-        metrics[f'{prefix}_min'] = phase_data.min()
-        metrics[f'{prefix}_max'] = phase_data.max()
 
-        # Percentiles
-        metrics[f'{prefix}_p25'] = phase_data.quantile(0.25)
-        metrics[f'{prefix}_p75'] = phase_data.quantile(0.75)
-        metrics[f'{prefix}_p95'] = phase_data.quantile(0.95)
-        metrics[f'{prefix}_p99'] = phase_data.quantile(0.99)
-        metrics[f'{prefix}_iqr'] = metrics[f'{prefix}_p75'] - metrics[f'{prefix}_p25']
-
-        # Coefficient of variation
-        if metrics[f'{prefix}_mean'] > 0:
-            metrics[f'{prefix}_cv'] = metrics[f'{prefix}_std'] / metrics[f'{prefix}_mean']
-        else:
-            metrics[f'{prefix}_cv'] = 0
-
-        # Power range distribution (share of time in each range)
+        # Power range distribution (used by power distribution chart, histogram)
         total = len(phase_data)
         metrics[f'{prefix}_share_0_100'] = (phase_data < 100).sum() / total
         metrics[f'{prefix}_share_100_500'] = ((phase_data >= 100) & (phase_data < 500)).sum() / total
@@ -74,7 +56,6 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
         total_power = data[sum_cols].sum(axis=1)
         metrics['total_mean'] = total_power.mean()
         metrics['total_max'] = total_power.max()
-        metrics['total_p95'] = total_power.quantile(0.95)
 
     # Phase balance
     if len(sum_cols) >= 2:
@@ -84,7 +65,6 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
         else:
             metrics['phase_balance_ratio'] = float('inf')
 
-        metrics['phase_balance_std'] = np.std(phase_means)
         metrics['active_phases'] = sum(1 for m in phase_means if m > 50)  # >50W considered active
 
     return metrics

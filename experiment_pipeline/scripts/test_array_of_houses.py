@@ -67,7 +67,7 @@ def get_houses_sorted_by_size():
 HOUSE_IDS = ["305", "1"]
 
 # Experiment name (must match one in detection_config.py)
-EXPERIMENT_NAME = "exp007_symmetric_threshold"
+EXPERIMENT_NAME = "exp008_tail_extension"
 
 # Number of iterations per house
 MAX_ITERATIONS = 2

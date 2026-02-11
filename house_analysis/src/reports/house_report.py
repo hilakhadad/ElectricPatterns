@@ -58,12 +58,14 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     days_span = coverage.get('days_span', 0)
     max_gap_minutes = coverage.get('max_gap_minutes', 0)
     pct_gaps_over_2min = coverage.get('pct_gaps_over_2min', 0)
+    avg_nan_pct = coverage.get('avg_nan_pct', 0)
     quality = calculate_data_quality_metrics(
         data, phase_cols,
         coverage_ratio=coverage_ratio,
         days_span=days_span,
         max_gap_minutes=max_gap_minutes,
-        pct_gaps_over_2min=pct_gaps_over_2min
+        pct_gaps_over_2min=pct_gaps_over_2min,
+        avg_nan_pct=avg_nan_pct,
     )
     results['data_quality'] = quality
 
@@ -101,6 +103,7 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['short_duration'] = coverage.get('days_span', 365) < 30
     flags['has_large_gaps'] = coverage.get('max_gap_minutes', 0) > 60
     flags['many_gaps'] = coverage.get('pct_gaps_over_2min', 0) > 5  # More than 5% gaps over 2min
+    flags['many_nan_values'] = coverage.get('avg_nan_pct', 0) > 2  # More than 2% NaN across phases
     flags['has_duplicate_timestamps'] = coverage.get('has_duplicate_timestamps', False)
 
     # Quality flags
@@ -140,6 +143,7 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
 
     # Faulty/defective meter flags
     flags['has_dead_phase'] = quality.get('has_dead_phase', False)
+    flags['has_faulty_nan_phase'] = quality.get('has_faulty_nan_phase', False)
 
     return flags
 

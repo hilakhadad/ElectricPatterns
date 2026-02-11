@@ -215,7 +215,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
 
         # Pre-analysis quality score (from house_analysis)
         pre_quality = a.get('pre_analysis_quality_score', None)
-        if pre_quality is not None:
+        if pre_quality == 'faulty':
+            pre_quality_html = '<span style="color: #dc3545; font-weight: bold;" title="Phase with ≥20% NaN values">Faulty</span>'
+        elif pre_quality is not None:
             pre_q_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
             pre_quality_html = f'<span style="color: {pre_q_color}; font-weight: bold;">{pre_quality:.0f}</span>'
         else:
@@ -672,8 +674,15 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     pre_quality = analysis.get('pre_analysis_quality_score', None)
 
     # Pre-quality display values (computed outside f-string to avoid format issues)
-    pre_quality_display = f'{pre_quality:.0f}' if pre_quality is not None else '-'
-    pre_quality_color = '#28a745' if pre_quality and pre_quality >= 75 else '#ffc107' if pre_quality and pre_quality >= 50 else '#dc3545' if pre_quality else '#999'
+    if pre_quality == 'faulty':
+        pre_quality_display = 'Faulty'
+        pre_quality_color = '#dc3545'
+    elif pre_quality is not None:
+        pre_quality_display = f'{pre_quality:.0f}'
+        pre_quality_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
+    else:
+        pre_quality_display = '-'
+        pre_quality_color = '#999'
 
     # Threshold explanation metrics
     th_explanation_rate = th_expl.get('total_explanation_rate', 0) or 0

@@ -130,7 +130,8 @@ def find_noisy_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFram
             # Calculate duration for tagging
             off_magnitude = abs(off_event['magnitude'])
             duration_minutes = (off_event['end'] - on_event['start']).total_seconds() / 60
-            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_noisy=True, is_corrected=correction > 0)
+            tail_ext = on_event.get('tail_extended', False) or off_event.get('tail_extended', False)
+            tag = build_match_tag(on_magnitude, off_magnitude, duration_minutes, is_noisy=True, is_corrected=correction > 0, is_tail_extended=tail_ext)
             logger.info(f"Matched {tag}: {on_id} <-> {off_id} (window={window_minutes}m)" + (f" (correction={correction:.0f}W)" if correction > 0 else ""))
             return off_event, tag, correction
 

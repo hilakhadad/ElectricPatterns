@@ -13,6 +13,7 @@ import core
 from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized
 from detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
 from detection.gradual import detect_gradual_events
+from detection.near_threshold import detect_near_threshold_events
 
 
 def _calc_magnitude(df: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.Timestamp) -> float:
@@ -29,6 +30,28 @@ def _calc_magnitude(df: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.T
     value_before = before_row[phase].values[0] if len(before_row) > 0 else 0
 
     return value_end - value_before
+
+
+def _safe_lookup(data_indexed, phase, timestamp):
+    """Look up power value at timestamp, return NaN if not found."""
+    try:
+        return float(data_indexed.loc[timestamp, phase])
+    except KeyError:
+        return float('nan')
+
+
+def _add_nearby_value(events, data_indexed, phase, event_type):
+    """Add nearby_value column: power 1min before ON, power 1min after OFF."""
+    if len(events) == 0:
+        events['nearby_value'] = []
+        return events
+    if event_type == 'on':
+        events['nearby_value'] = events['start'].apply(
+            lambda ts: _safe_lookup(data_indexed, phase, ts - pd.Timedelta(minutes=1)))
+    else:
+        events['nearby_value'] = events['end'].apply(
+            lambda ts: _safe_lookup(data_indexed, phase, ts + pd.Timedelta(minutes=1)))
+    return events
 
 
 def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, config=None, input_file: str = None) -> None:
@@ -51,12 +74,30 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         use_gradual = config.use_gradual_detection
         gradual_window = config.gradual_window_minutes
         progressive_search = getattr(config, 'progressive_window_search', False)
-        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}")
+        use_near_threshold = getattr(config, 'use_near_threshold_detection', False)
+        near_threshold_min_factor = getattr(config, 'near_threshold_min_factor', 0.85)
+        near_threshold_max_extend = getattr(config, 'near_threshold_max_extend', 3)
+        use_tail_extension = getattr(config, 'use_tail_extension', False)
+        tail_max_minutes = getattr(config, 'tail_max_extension_minutes', 10)
+        tail_min_residual = getattr(config, 'tail_min_residual', 100)
+        tail_noise_tolerance = getattr(config, 'tail_noise_tolerance', 30)
+        tail_min_gain = getattr(config, 'tail_min_gain', 100)
+        tail_min_residual_fraction = getattr(config, 'tail_min_residual_fraction', 0.05)
+        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}")
     else:
         off_threshold_factor = 1.0
         use_gradual = True
         gradual_window = 3
         progressive_search = False
+        use_near_threshold = False
+        near_threshold_min_factor = 0.85
+        near_threshold_max_extend = 3
+        use_tail_extension = False
+        tail_max_minutes = 10
+        tail_min_residual = 100
+        tail_noise_tolerance = 30
+        tail_min_gain = 100
+        tail_min_residual_fraction = 0.05
 
     # Determine input path: run 0 reads raw data, run N reads remaining from summarized of run N-1
     try:
@@ -122,7 +163,16 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         for phase in phases:
             on_events, off_events = _detect_phase_events(
                 data, data_indexed, phase, threshold, off_threshold_factor,
-                use_gradual, gradual_window, progressive_search, logger
+                use_gradual, gradual_window, progressive_search, logger,
+                use_near_threshold=use_near_threshold,
+                near_threshold_min_factor=near_threshold_min_factor,
+                near_threshold_max_extend=near_threshold_max_extend,
+                use_tail_extension=use_tail_extension,
+                tail_max_minutes=tail_max_minutes,
+                tail_min_residual=tail_min_residual,
+                tail_noise_tolerance=tail_noise_tolerance,
+                tail_min_gain=tail_min_gain,
+                tail_min_residual_fraction=tail_min_residual_fraction,
             )
 
             on_events['phase'] = phase
@@ -174,7 +224,12 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
 
 
 def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_factor,
-                         use_gradual, gradual_window, progressive_search, logger):
+                         use_gradual, gradual_window, progressive_search, logger,
+                         use_near_threshold=False, near_threshold_min_factor=0.85,
+                         near_threshold_max_extend=3,
+                         use_tail_extension=False, tail_max_minutes=10,
+                         tail_min_residual=100, tail_noise_tolerance=30,
+                         tail_min_gain=100, tail_min_residual_fraction=0.05):
     """Detect ON and OFF events for a single phase.
 
     Args:
@@ -272,8 +327,43 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
         if len(results_off) < before_off:
             logger.info(f"    Merged {before_off - len(results_off)} overlapping OFF events")
 
+    # Near-threshold detection
+    if use_near_threshold:
+        near_on, near_off = detect_near_threshold_events(
+            data, data_indexed, diff_col, threshold, off_threshold,
+            results_on, results_off, phase,
+            min_factor=near_threshold_min_factor,
+            max_extend_minutes=near_threshold_max_extend
+        )
+        if len(near_on) > 0:
+            logger.info(f"    Found {len(near_on)} near-threshold ON events for {phase}")
+            results_on = pd.concat([results_on, near_on], ignore_index=True)
+        if len(near_off) > 0:
+            logger.info(f"    Found {len(near_off)} near-threshold OFF events for {phase}")
+            results_off = pd.concat([results_off, near_off], ignore_index=True)
+        # Merge overlapping in case near-threshold events overlap with existing
+        results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase)
+        results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase)
+
+    # Tail extension (OFF events only - devices have soft landing but sharp ON)
+    if use_tail_extension:
+        from detection.tail_extension import extend_off_event_tails
+        results_off = extend_off_event_tails(
+            results_off, data_indexed, phase,
+            max_minutes=tail_max_minutes, min_residual=tail_min_residual,
+            noise_tolerance=tail_noise_tolerance, min_gain=tail_min_gain,
+            min_residual_fraction=tail_min_residual_fraction
+        )
+        extended = results_off['tail_extended'].sum() if 'tail_extended' in results_off.columns else 0
+        if extended > 0:
+            logger.info(f"    Tail extended: {extended} OFF events for {phase}")
+
     # Add duration
     results_on['duration'] = (results_on['end'] - results_on['start']).dt.total_seconds() / 60
     results_off['duration'] = (results_off['end'] - results_off['start']).dt.total_seconds() / 60
+
+    # Add nearby_value: power 1min before ON, power 1min after OFF
+    results_on = _add_nearby_value(results_on, data_indexed, phase, 'on')
+    results_off = _add_nearby_value(results_off, data_indexed, phase, 'off')
 
     return results_on, results_off
