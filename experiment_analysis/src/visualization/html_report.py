@@ -102,16 +102,23 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
         <div class="summary-card">
             <div class="summary-number">{avg_overall:.0f}</div>
             <div class="summary-label">Avg Overall Score</div>
+            <div style="font-size: 0.7em; color: #888;">70% match + 30% seg</div>
         </div>
         <div class="summary-card">
             <div class="summary-number">{avg_matching:.0f}%</div>
             <div class="summary-label">Avg Matching Score</div>
+            <div style="font-size: 0.7em; color: #888;">matched / total events</div>
         </div>
         <div class="summary-card">
             <div class="summary-number">{avg_seg:.1%}</div>
             <div class="summary-label">Avg Segmentation</div>
+            <div style="font-size: 0.7em; color: #888;">segregated W / original W</div>
         </div>
     </div>
+    <p style="font-size: 0.8em; color: #666; margin: 10px 0;">
+        <strong>Note:</strong> All phase metrics are averaged across 3 phases (w1, w2, w3).
+        Damaged phases count as 0 (not excluded). Simple average across houses (not time-weighted).
+    </p>
     <div class="summary-alerts">
         <h3>Issues Summary</h3>
         <ul>
@@ -232,8 +239,11 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
     return f"""
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
         <strong>Pre-Quality</strong> = quality score from pre-experiment analysis (coverage+days+data quality) |
-        <strong>Match Rate</strong> = % of events matched |
-        <strong>High-Power Explained</strong> = % of minutes &gt;1300W with segregation
+        <strong>Match Rate</strong> = matched events / total events |
+        <strong>Seg (power)</strong> = segregated watts / original watts |
+        <strong>Seg (minutes)</strong> = matched minutes / total data minutes |
+        <strong>High-Power Explained</strong> = % of minutes &gt;1300W where segregation brought remaining below threshold |
+        <strong>Exp Score</strong> = 70% match + 30% seg (3-phase avg, damaged=0)
     </p>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
         <strong>Devices:</strong> ❄️ Central AC | 🌀 Regular AC | 🔥 Boiler |
@@ -881,10 +891,10 @@ def _generate_matching_section(analysis: Dict[str, Any]) -> str:
     # Calculate stats
     total_on = matching.get('total_on_events', 0) or 0
     total_off = matching.get('total_off_events', 0) or 0
-    matched_on = matching.get('matched_on_count', 0) or 0
-    matched_off = matching.get('matched_off_count', matched_on) or 0  # Usually same as ON
-    unmatched_on = matching.get('unmatched_on_count', total_on - matched_on) or 0
-    unmatched_off = matching.get('unmatched_off_count', total_off - matched_off) or 0
+    matched_on = matching.get('matched_on_events', 0) or 0
+    matched_off = matching.get('matched_off_events', matched_on) or 0
+    unmatched_on = matching.get('unmatched_on_events', total_on - matched_on) or 0
+    unmatched_off = matching.get('unmatched_off_events', total_off - matched_off) or 0
     on_rate = matched_on / total_on if total_on > 0 else 0
     off_rate = matched_off / total_off if total_off > 0 else 0
 
@@ -1649,7 +1659,8 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
     # Add suspicious multi-phase section if any
     if multi_phase_activations:
         multi_rows = []
-        for idx, act in enumerate(multi_phase_activations[:20]):  # Limit to 20
+        multi_copyable_dates = []
+        for idx, act in enumerate(multi_phase_activations):
             duration = act.get('duration_minutes', 0) or 0
             if duration < 0:
                 duration = duration + 1440
@@ -1668,94 +1679,78 @@ def _generate_boiler_detection_html(boiler_detection: Dict[str, Any]) -> str:
                 <td>{act.get('num_phases_active', 1)}</td>
             </tr>
             """)
+            multi_copyable_dates.append(f"{act.get('date', '')} {act.get('on_time', '')}-{act.get('off_time', act.get('on_time', ''))}")
+
+        multi_copyable_text = ', '.join(multi_copyable_dates)
 
         likely_device = suspicious_multi.get('likely_device', 'unknown')
         device_label = "Likely EV Charging or Central Device" if likely_device == 'EV_charging_or_central_device' else "Unknown Device"
 
+        # Compute summary stats for metrics row
+        multi_avg_duration = sum(act.get('duration_minutes', 0) or 0 for act in multi_phase_activations) / len(multi_phase_activations) if multi_phase_activations else 0
+        multi_avg_magnitude = sum(act.get('magnitude', 0) or 0 for act in multi_phase_activations) / len(multi_phase_activations) if multi_phase_activations else 0
+
         html += f"""
-        <div style="margin-top: 25px; padding: 15px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 8px;">
-            <h5 style="margin: 0 0 10px 0; color: #721c24;">⚡ Suspicious Multi-Phase Events ({len(multi_phase_activations)} events)</h5>
-            <p style="font-size: 0.9em; color: #721c24; margin-bottom: 10px;">
-                These events have boiler-like characteristics (long duration, high power) but have
-                simultaneous activity on multiple phases. This suggests they may be <strong>{device_label}</strong>
-                rather than a water heater.
-            </p>
-            <div style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
-                3-phase events: {suspicious_multi.get('three_phase_count', 0)} |
-                2-phase events: {suspicious_multi.get('two_phase_count', 0)}
+        <h4>Suspicious Multi-Phase Events <span class="badge badge-orange">{device_label}</span></h4>
+        <div class="metrics-row" style="border-top: none; padding-top: 0; margin-bottom: 15px;">
+            <div class="metric">
+                <span class="metric-label">Total Events:</span>
+                <span class="metric-value">{len(multi_phase_activations)}</span>
             </div>
-            <div style="max-height: 300px; overflow-y: auto;">
-            <table class="data-table small">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Date</th>
-                        <th>ON Time</th>
-                        <th>Duration</th>
-                        <th>Power</th>
-                        <th>Phase</th>
-                        <th>Other Active</th>
-                        <th># Phases</th>
-                    </tr>
-                </thead>
-                <tbody>{''.join(multi_rows)}</tbody>
-            </table>
+            <div class="metric">
+                <span class="metric-label">3-Phase:</span>
+                <span class="metric-value">{suspicious_multi.get('three_phase_count', 0)}</span>
             </div>
-            {'<p style="font-size: 0.8em; color: #666; margin-top: 5px;">Showing first 20 of ' + str(len(multi_phase_activations)) + ' events</p>' if len(multi_phase_activations) > 20 else ''}
+            <div class="metric">
+                <span class="metric-label">2-Phase:</span>
+                <span class="metric-value">{suspicious_multi.get('two_phase_count', 0)}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Avg Duration:</span>
+                <span class="metric-value">{multi_avg_duration:.0f} min</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Avg Power:</span>
+                <span class="metric-value">{multi_avg_magnitude:.0f}W</span>
+            </div>
+        </div>
+        <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
+            Long-duration high-power events with simultaneous activity on multiple phases.
+            These are likely a complex device (EV charger, industrial equipment) rather than a simple appliance.
+        </p>
+        <p style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
+            Showing all {len(multi_phase_activations)} events
+        </p>
+        <div style="max-height: 400px; overflow-y: auto;">
+        <table class="data-table small">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Date</th>
+                    <th>ON Time</th>
+                    <th>Duration</th>
+                    <th>Power</th>
+                    <th>Phase</th>
+                    <th>Other Active</th>
+                    <th># Phases</th>
+                </tr>
+            </thead>
+            <tbody>{''.join(multi_rows)}</tbody>
+        </table>
+        </div>
+        <div style="margin-top: 10px;">
+            <button onclick="document.getElementById('multi-phase-copy-text').style.display = document.getElementById('multi-phase-copy-text').style.display === 'none' ? 'block' : 'none'" style="padding: 6px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                Show Copyable Dates
+            </button>
+        </div>
+        <div id="multi-phase-copy-text" style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px;">
+            <p style="font-size: 0.8em; color: #666; margin-bottom: 5px;">Copy this text to use for generating plots:</p>
+            <textarea readonly style="width: 100%; height: 60px; font-family: monospace; font-size: 0.85em; padding: 5px; border: 1px solid #ced4da; border-radius: 3px;">{multi_copyable_text}</textarea>
         </div>
         """
 
-    # Add reclassified AC section if any
-    if reclassified_activations:
-        reclass_rows = []
-        for idx, act in enumerate(reclassified_activations[:30]):
-            duration = act.get('duration_minutes', 0) or 0
-            if duration < 0:
-                duration = duration + 1440
-            magnitude = act.get('magnitude', 0) or 0
-            reason = act.get('reclassified_reason', '')
-
-            reclass_rows.append(f"""
-            <tr>
-                <td>{idx+1}</td>
-                <td>{act.get('date', '')}</td>
-                <td>{act.get('on_time', '')}</td>
-                <td>{act.get('off_time', '')}</td>
-                <td>{duration:.0f} min</td>
-                <td>{magnitude}W</td>
-                <td>{act.get('phase', '')}</td>
-                <td style="font-size: 0.8em;">{reason}</td>
-            </tr>
-            """)
-
-        html += f"""
-        <div style="margin-top: 25px; padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 8px;">
-            <h5 style="margin: 0 0 10px 0; color: #155724;">Reclassified as AC ({len(reclassified_activations)} events)</h5>
-            <p style="font-size: 0.9em; color: #155724; margin-bottom: 10px;">
-                These events initially matched boiler criteria (long duration, high power, isolated) but were
-                reclassified as <strong>AC</strong> because compressor cycling patterns (short ON/OFF cycles)
-                were found nearby on the same phase.
-            </p>
-            <div style="max-height: 300px; overflow-y: auto;">
-            <table class="data-table small">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Date</th>
-                        <th>ON Time</th>
-                        <th>OFF Time</th>
-                        <th>Duration</th>
-                        <th>Power</th>
-                        <th>Phase</th>
-                        <th>Reason</th>
-                    </tr>
-                </thead>
-                <tbody>{''.join(reclass_rows)}</tbody>
-            </table>
-            </div>
-            {'<p style="font-size: 0.8em; color: #666; margin-top: 5px;">Showing first 30 of ' + str(len(reclassified_activations)) + ' events</p>' if len(reclassified_activations) > 30 else ''}
-        </div>
-        """
+    # Reclassified AC events are already merged into regular_ac list
+    # in experiment_report.py, so no need to show them separately here.
 
     return html
 

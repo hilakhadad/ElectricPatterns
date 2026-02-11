@@ -34,7 +34,8 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str) -> Option
 
 
 def calculate_matching_metrics(experiment_dir: Path, house_id: str,
-                                run_number: int = 0) -> Dict[str, Any]:
+                                run_number: int = 0,
+                                preloaded: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Calculate matching metrics for a house run.
 
@@ -44,6 +45,8 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         experiment_dir: Path to experiment output directory
         house_id: House identifier
         run_number: Run number to analyze
+        preloaded: Optional dict with pre-loaded DataFrames ('on_off', 'matches',
+                   'unmatched_on', 'unmatched_off') to avoid redundant file I/O
 
     Returns:
         Dictionary with matching metrics
@@ -53,10 +56,13 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         'run_number': run_number,
     }
 
-    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+    if preloaded:
+        on_off_df = preloaded.get('on_off')
+        house_dir = preloaded.get('house_dir')
+    else:
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+        on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
 
-    # Load on_off log
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         metrics['error'] = 'No on_off file found'
         return metrics
@@ -98,15 +104,17 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         )
 
     # Load matches file for tag analysis
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
+    if preloaded:
+        matches_df = preloaded.get('matches')
+    else:
+        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is not None:
         metrics['total_matches'] = len(matches_df)
 
         # Tag breakdown
         if 'tag' in matches_df.columns:
             tag_counts = matches_df['tag'].value_counts().to_dict()
-            metrics['tag_breakdown'] = tag_counts  # Used by HTML report
-            metrics['matches_by_tag'] = tag_counts  # Legacy key
+            metrics['tag_breakdown'] = tag_counts
 
             for tag in ['NON-M', 'NOISY', 'PARTIAL']:
                 metrics[f'matches_{tag.lower().replace("-", "_")}'] = tag_counts.get(tag, 0)
@@ -114,8 +122,7 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         # Phase breakdown
         if 'phase' in matches_df.columns:
             phase_counts = matches_df['phase'].value_counts().to_dict()
-            metrics['phase_breakdown'] = phase_counts  # Used by HTML report
-            metrics['matches_by_phase'] = phase_counts  # Legacy key
+            metrics['phase_breakdown'] = phase_counts
 
         # Duration statistics
         durations = None
@@ -194,8 +201,12 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
                 }
 
     # Unmatched analysis
-    unmatched_on_df = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
-    unmatched_off_df = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
+    if preloaded:
+        unmatched_on_df = preloaded.get('unmatched_on')
+        unmatched_off_df = preloaded.get('unmatched_off')
+    else:
+        unmatched_on_df = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
+        unmatched_off_df = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
 
     if unmatched_on_df is not None:
         metrics['unmatched_on_total_power'] = unmatched_on_df['magnitude'].abs().sum() if 'magnitude' in unmatched_on_df.columns else 0

@@ -114,15 +114,13 @@ def _save_house_report_incremental(analysis: Dict[str, Any], output_dir: Path) -
     """
     Save house report immediately after analysis completes.
 
-    Saves: JSON data, text report, and HTML report.
+    Saves JSON data only. HTML reports are generated at the end (after all houses complete)
+    to avoid None formatting issues during incremental saving.
 
     Returns:
-        True if all saves succeeded, False if any failed
+        True if save succeeded, False if it failed
     """
-    from reports.experiment_report import generate_experiment_report
-
     house_id = analysis.get('house_id', 'unknown')
-    all_success = True
 
     # Save JSON analysis data
     json_path = output_dir / f"house_{house_id}_analysis.json"
@@ -131,24 +129,10 @@ def _save_house_report_incremental(analysis: Dict[str, Any], output_dir: Path) -
         serializable = {k: v for k, v in analysis.items() if not k.startswith('_')}
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(serializable, f, indent=2, default=str)
+        return True
     except Exception as e:
         print(f"    !! Failed to save JSON for house {house_id}: {e}", flush=True)
-        all_success = False
-
-    # Save text report
-    txt_path = output_dir / f"house_{house_id}.txt"
-    try:
-        report_text = generate_experiment_report(analysis)
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            f.write(report_text)
-    except Exception as e:
-        print(f"    !! Failed to save TXT for house {house_id}: {e}", flush=True)
-        all_success = False
-
-    # HTML reports are generated at the end (after all houses complete)
-    # to avoid None formatting issues during incremental saving
-
-    return all_success
+        return False
 
 
 def aggregate_experiment_results(experiment_dir: Path,
@@ -632,7 +616,7 @@ def create_comparison_table(analyses: List[Dict[str, Any]]) -> pd.DataFrame:
             'noisy_matches': matching.get('tag_breakdown', {}).get('NOISY', 0),
             'partial_matches': matching.get('tag_breakdown', {}).get('PARTIAL', 0),
             'segmentation_ratio': seg.get('segmentation_ratio', 0),
-            'healthy_seg_ratio': scores.get('healthy_segmentation_ratio', seg.get('segmentation_ratio', 0)),
+            'healthy_seg_ratio': scores.get('avg_3phase_segmentation_ratio', seg.get('segmentation_ratio', 0)),
             'total_power_kw': seg.get('total_power', 0) / 1000,
             'segmented_power_kw': seg.get('total_segmented_power', 0) / 1000,
             'negative_values': seg.get('negative_value_count', 0),

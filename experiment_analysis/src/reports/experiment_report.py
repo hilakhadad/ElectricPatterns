@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 import pandas as pd
 
-from metrics.matching import calculate_matching_metrics
+from metrics.matching import calculate_matching_metrics, _get_house_dir, _load_monthly_files
 from metrics.segmentation import (
     calculate_segmentation_metrics,
     calculate_threshold_explanation_metrics,
@@ -22,6 +22,44 @@ from metrics.monthly import calculate_monthly_metrics
 
 # Enable verbose logging for debugging
 _VERBOSE = False
+
+
+def _load_house_run_data(experiment_dir: Path, house_id: str, run_number: int = 0) -> Dict[str, Any]:
+    """
+    Load all data files for a house run once.
+
+    Returns a dict with pre-loaded DataFrames that can be passed to metric functions
+    via the 'preloaded' parameter, avoiding redundant file I/O.
+
+    Returns:
+        Dict with keys: 'on_off', 'matches', 'unmatched_on', 'unmatched_off', 'house_dir'
+    """
+    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+
+    data = {'house_dir': house_dir}
+
+    # Load on_off events (used by: matching, events, patterns)
+    data['on_off'] = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
+
+    # Load matches (used by: matching, patterns, AC detection, boiler detection)
+    data['matches'] = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
+
+    # Load unmatched (used by: matching)
+    data['unmatched_on'] = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
+    data['unmatched_off'] = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
+
+    # Parse timestamps once for all consumers
+    if data['on_off'] is not None:
+        for col in ['start', 'end']:
+            if col in data['on_off'].columns:
+                data['on_off'][col] = pd.to_datetime(data['on_off'][col], format='mixed', dayfirst=True, errors='coerce')
+
+    if data['matches'] is not None:
+        for col in ['on_start', 'on_end', 'off_start', 'off_end']:
+            if col in data['matches'].columns:
+                data['matches'][col] = pd.to_datetime(data['matches'][col], format='mixed', dayfirst=True, errors='coerce')
+
+    return data
 
 
 def load_experiment_data(experiment_dir: Path, house_id: str,
@@ -137,38 +175,45 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
 
     analysis['status'] = 'complete'
 
-    # Analyze first and last iterations in detail
-    # First iteration (run_0)
+    # Load all data for run_0 once (avoids redundant file I/O)
+    log("Loading run_0 data...")
+    t0 = time.time()
+    preloaded = _load_house_run_data(experiment_dir, house_id, 0)
+    log(f"Data loaded ({time.time()-t0:.2f}s)")
+
+    # Analyze first iteration (run_0)
     log("Analyzing first iteration...")
     t0 = time.time()
 
     log("  - matching metrics...")
-    matching = calculate_matching_metrics(experiment_dir, house_id, 0)
+    matching = calculate_matching_metrics(experiment_dir, house_id, 0, preloaded=preloaded)
 
     log("  - segmentation metrics...")
     segmentation = calculate_segmentation_metrics(experiment_dir, house_id, 0)
 
     log("  - event metrics...")
-    events = calculate_event_metrics(experiment_dir, house_id, 0)
+    events = calculate_event_metrics(experiment_dir, house_id, 0, preloaded=preloaded)
+
+    # Compute damaged phases ONCE (used by AC detection, flags, and scores)
+    damaged_info = _detect_damaged_phases_from_segmentation(segmentation)
 
     # Pattern metrics are expensive - skip in fast mode
     if not fast_mode:
         log("  - pattern metrics...")
-        patterns = calculate_pattern_metrics(experiment_dir, house_id, 0)
+        patterns = calculate_pattern_metrics(experiment_dir, house_id, 0, preloaded=preloaded)
 
         # Detect AC patterns (central and regular)
         log("  - AC detection...")
-        # Get damaged phases from segmentation data
-        damaged_info = _detect_damaged_phases_from_segmentation(segmentation)
         ac_patterns = detect_ac_patterns(
             experiment_dir, house_id, 0,
-            damaged_phases=damaged_info.get('damaged_phases', [])
+            damaged_phases=damaged_info.get('damaged_phases', []),
+            preloaded=preloaded
         )
         patterns['ac_detection'] = ac_patterns
 
         # Detect boiler patterns (long isolated high-power events)
         log("  - boiler detection...")
-        boiler_patterns = detect_boiler_patterns(experiment_dir, house_id, 0)
+        boiler_patterns = detect_boiler_patterns(experiment_dir, house_id, 0, preloaded=preloaded)
         patterns['boiler_detection'] = boiler_patterns
 
         # Merge reclassified AC events (boiler candidates that turned out to be AC)
@@ -222,11 +267,11 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
     )
     analysis['threshold_explanation_per_iteration'] = threshold_per_iter
 
-    # Generate flags for easy filtering
-    analysis['flags'] = _generate_experiment_flags(analysis)
+    # Generate flags for easy filtering (pass pre-computed damaged_info)
+    analysis['flags'] = _generate_experiment_flags(analysis, damaged_info=damaged_info)
 
-    # Calculate overall scores
-    analysis['scores'] = _calculate_experiment_scores(analysis)
+    # Calculate overall scores (pass pre-computed damaged_info)
+    analysis['scores'] = _calculate_experiment_scores(analysis, damaged_info=damaged_info)
 
     return analysis
 
@@ -337,7 +382,8 @@ def _detect_damaged_phases(analysis: Dict[str, Any], threshold_ratio: float = 0.
     return result
 
 
-def _generate_experiment_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
+def _generate_experiment_flags(analysis: Dict[str, Any],
+                               damaged_info: Dict[str, Any] = None) -> Dict[str, bool]:
     """Generate boolean flags for experiment issues."""
     flags = {}
 
@@ -393,9 +439,10 @@ def _generate_experiment_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     # Many remainder events
     flags['many_remainders'] = matching.get('remainder_events', 0) > 20
 
-    # Damaged phases detection
-    damaged_info = _detect_damaged_phases(analysis)
-    flags['has_damaged_phases'] = damaged_info['has_damaged_phases']
+    # Damaged phases detection (use pre-computed if available)
+    if damaged_info is None:
+        damaged_info = _detect_damaged_phases(analysis)
+    flags['has_damaged_phases'] = len(damaged_info.get('damaged_phases', [])) > 0
 
     # Recurring patterns detection (positive flag)
     patterns = first.get('patterns', {})
@@ -414,21 +461,29 @@ def _generate_experiment_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     return flags
 
 
-def _calculate_experiment_scores(analysis: Dict[str, Any]) -> Dict[str, float]:
-    """Calculate experiment quality scores, excluding damaged phases."""
+def _calculate_experiment_scores(analysis: Dict[str, Any],
+                                 damaged_info: Dict[str, Any] = None) -> Dict[str, float]:
+    """
+    Calculate experiment quality scores.
+
+    Phase averaging: all metrics are averaged across ALL 3 phases.
+    Damaged phases count as 0 (not excluded), so a house with 1 healthy phase
+    scoring 75% gets (0 + 0 + 75) / 3 = 25%, reflecting that only 1/3 of
+    the electrical system is being analyzed.
+    """
     scores = {}
 
     iterations = analysis.get('iterations', {})
     first = analysis.get('first_iteration', {})
     flags = analysis.get('flags', {})
 
-    # Detect damaged phases
-    damaged_info = _detect_damaged_phases(analysis)
-    scores['damaged_phases'] = damaged_info['damaged_phases']
-    scores['healthy_phases'] = damaged_info['healthy_phases']
+    # Detect damaged phases (use pre-computed if available)
+    if damaged_info is None:
+        damaged_info = _detect_damaged_phases(analysis)
+    scores['damaged_phases'] = damaged_info.get('damaged_phases', [])
+    scores['healthy_phases'] = damaged_info.get('healthy_phases', ['w1', 'w2', 'w3'])
 
     # Matching score (0-100)
-    matching_score = 100
     first_rate = iterations.get('first_iter_matching_rate', 0)
     matching_score = first_rate * 100
 
@@ -439,32 +494,23 @@ def _calculate_experiment_scores(analysis: Dict[str, Any]) -> Dict[str, float]:
 
     scores['matching_score'] = matching_score
 
-    # Segmentation score (0-100) - calculate from healthy phases only
+    # Segmentation score (0-100)
+    # Average across ALL 3 phases (damaged phases = 0)
     seg = first.get('segmentation', {})
-    healthy_phases = damaged_info['healthy_phases']
+    all_phases = ['w1', 'w2', 'w3']
+    damaged_phases = set(damaged_info.get('damaged_phases', []))
 
-    if healthy_phases:
-        # Calculate segmentation ratio only from healthy phases
-        total_healthy_power = 0
-        total_healthy_segmented = 0
-
-        for phase in healthy_phases:
-            phase_power = seg.get(f'{phase}_total_power', 0)
-            phase_segmented = seg.get(f'{phase}_segmented_power', 0)
-            total_healthy_power += phase_power
-            total_healthy_segmented += phase_segmented
-
-        if total_healthy_power > 0:
-            healthy_seg_ratio = total_healthy_segmented / total_healthy_power
+    phase_seg_ratios = []
+    for phase in all_phases:
+        if phase in damaged_phases:
+            phase_seg_ratios.append(0.0)  # Damaged phase counts as 0
         else:
-            healthy_seg_ratio = seg.get('segmentation_ratio', 0)
+            phase_seg_ratios.append(seg.get(f'{phase}_segmentation_ratio', 0) or 0)
 
-        scores['healthy_segmentation_ratio'] = healthy_seg_ratio
-        segmentation_score = healthy_seg_ratio * 100
-    else:
-        # All phases damaged - use overall ratio
-        seg_ratio = seg.get('segmentation_ratio', 0)
-        segmentation_score = seg_ratio * 100
+    # 3-phase average (damaged = 0, not excluded)
+    avg_seg_ratio = sum(phase_seg_ratios) / 3
+    scores['avg_3phase_segmentation_ratio'] = avg_seg_ratio
+    segmentation_score = avg_seg_ratio * 100
 
     # Penalty for negative values
     if flags.get('has_negative_values'):
@@ -473,8 +519,7 @@ def _calculate_experiment_scores(analysis: Dict[str, Any]) -> Dict[str, float]:
 
     scores['segmentation_score'] = max(0, segmentation_score)
 
-    # Overall score - matching is weighted more heavily (70%) than segmentation (30%)
-    # because matching rate is a more direct measure of algorithm performance
+    # Overall score - matching weighted 70%, segmentation 30%
     scores['overall_score'] = (
         scores['matching_score'] * 0.7 +
         scores['segmentation_score'] * 0.3

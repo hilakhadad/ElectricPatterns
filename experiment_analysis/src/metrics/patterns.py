@@ -35,7 +35,8 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str):
 
 
 def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
-                              run_number: int = 0) -> Dict[str, Any]:
+                              run_number: int = 0,
+                              preloaded: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Calculate event pattern metrics for a house.
 
@@ -45,6 +46,7 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
         experiment_dir: Path to experiment output directory
         house_id: House identifier
         run_number: Iteration number (default 0)
+        preloaded: Optional dict with pre-loaded DataFrames ('on_off', 'matches')
 
     Returns:
         Dictionary with pattern metrics
@@ -54,27 +56,28 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
         'run_number': run_number,
     }
 
-    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+    if preloaded:
+        on_off_df = preloaded.get('on_off')
+        matches_df = preloaded.get('matches')
+    else:
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+        if not house_dir.exists():
+            return metrics
+        on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
+        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
-    if not house_dir.exists():
-        return metrics
-
-    # Load on_off events
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         return metrics
 
-    # Parse timestamps
+    # Parse timestamps (skip if already datetime)
     for col in ['start', 'end']:
-        if col in on_off_df.columns:
-            on_off_df[col] = pd.to_datetime(on_off_df[col], format='%d/%m/%Y %H:%M', errors='coerce')
+        if col in on_off_df.columns and not pd.api.types.is_datetime64_any_dtype(on_off_df[col]):
+            on_off_df[col] = pd.to_datetime(on_off_df[col], format='mixed', dayfirst=True, errors='coerce')
 
-    # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is not None:
         for col in ['on_start', 'on_end', 'off_start', 'off_end']:
-            if col in matches_df.columns:
-                matches_df[col] = pd.to_datetime(matches_df[col], format='%d/%m/%Y %H:%M', errors='coerce')
+            if col in matches_df.columns and not pd.api.types.is_datetime64_any_dtype(matches_df[col]):
+                matches_df[col] = pd.to_datetime(matches_df[col], format='mixed', dayfirst=True, errors='coerce')
 
     # Calculate daily statistics
     metrics['daily_stats'] = _calculate_daily_stats(on_off_df, matches_df)
@@ -1040,34 +1043,42 @@ def _summarize_session(session: Dict) -> Dict:
 
 
 def _is_valid_ac_session(session: Dict, raw_activations: List[Dict],
-                          min_cycles: int = 2,
-                          min_session_duration: int = 30,
+                          min_first_duration: int = 15,
+                          min_following_cycles: int = 3,
                           max_magnitude_std_pct: float = 0.20) -> bool:
     """
-    Validate if a session looks like real AC usage (not just any high-power device).
+    Validate if a session looks like real AC compressor cycling.
+
+    AC pattern: a long initial compressor run (>=15 min) followed by
+    at least 3 more ON/OFF cycles (compressor cycling). The session
+    spans from the start of the first event to the end of the last.
 
     Args:
         session: Session summary dict with cycle_count, duration_minutes, etc.
         raw_activations: List of individual activations in this session
-        min_cycles: Minimum compressor cycles required (default 2)
-        min_session_duration: Minimum total session duration in minutes (default 30)
+        min_first_duration: Minimum duration of the first activation in minutes (default 15)
+        min_following_cycles: Minimum number of cycles after the first (default 3)
         max_magnitude_std_pct: Maximum magnitude std as percentage of mean (default 20%)
 
     Returns:
         True if session looks like AC, False otherwise
     """
-    # Check minimum cycles
     cycle_count = session.get('cycle_count', 1)
-    if cycle_count < min_cycles:
+
+    # Need 1 long first + N following cycles
+    if cycle_count < (1 + min_following_cycles):
         return False
 
-    # Check minimum session duration
-    duration = session.get('duration_minutes', 0)
-    if duration < min_session_duration:
+    # First activation must be >= min_first_duration (initial compressor run)
+    if raw_activations:
+        first_duration = raw_activations[0].get('duration_minutes', 0) or 0
+        if first_duration < min_first_duration:
+            return False
+    else:
         return False
 
-    # Check magnitude consistency (std < 20% of mean)
-    if raw_activations and len(raw_activations) >= 2:
+    # Check magnitude consistency across all cycles (std < 20% of mean)
+    if len(raw_activations) >= 2:
         magnitudes = [a.get('magnitude', 0) for a in raw_activations]
         if magnitudes:
             mean_mag = np.mean(magnitudes)
@@ -1081,7 +1092,8 @@ def _is_valid_ac_session(session: Dict, raw_activations: List[Dict],
 def detect_ac_patterns(experiment_dir: Path, house_id: str,
                        run_number: int = 0,
                        time_tolerance_minutes: int = 10,
-                       damaged_phases: List[str] = None) -> Dict[str, Any]:
+                       damaged_phases: List[str] = None,
+                       preloaded: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Detect AC patterns - both central AC (multi-phase) and regular AC (single phase).
 
@@ -1094,6 +1106,7 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
         run_number: Run number to analyze
         time_tolerance_minutes: Max time difference between phases to be considered synchronized
         damaged_phases: List of damaged phase names (e.g., ['w3'])
+        preloaded: Optional dict with pre-loaded DataFrames ('matches')
 
     Returns:
         Dictionary with central_ac and regular_ac activation lists
@@ -1112,19 +1125,23 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
         'has_regular_ac': False,
     }
 
-    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
-    if not house_dir.exists():
-        return result
+    if preloaded:
+        matches_df = preloaded.get('matches')
+        if matches_df is not None:
+            matches_df = matches_df.copy()
+    else:
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+        if not house_dir.exists():
+            return result
+        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
-    # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is None or len(matches_df) == 0:
         return result
 
-    # Parse timestamps
+    # Parse timestamps (skip if already datetime)
     for col in ['on_start', 'on_end', 'off_start', 'off_end']:
-        if col in matches_df.columns:
-            matches_df[col] = pd.to_datetime(matches_df[col], format='%d/%m/%Y %H:%M', errors='coerce')
+        if col in matches_df.columns and not pd.api.types.is_datetime64_any_dtype(matches_df[col]):
+            matches_df[col] = pd.to_datetime(matches_df[col], format='mixed', dayfirst=True, errors='coerce')
 
     # Determine which phases to check
     all_phases = ['w1', 'w2', 'w3']
@@ -1277,14 +1294,16 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
     result['has_central_ac'] = len(central_sessions) >= 3  # Need at least 3 sessions
 
     # Find regular AC on ALL phases (not just w1), not part of central AC
-    # AC detection criteria:
-    # - Individual cycle: 800W+, duration 3-30 minutes
-    # - Session: 2+ cycles, 30+ min total, consistent magnitude (std < 20%)
+    # AC detection: two pools of candidates combined into sessions:
+    # - "Initial run" candidates: 800W+, >= 15 min (no upper limit)
+    # - "Cycling" candidates: 800W+, 3-30 min
+    # Sessions are validated by _is_valid_ac_session (first >= 15 min, then 3+ more)
     regular_ac_by_phase = {}
 
     # AC cycle duration bounds (minutes)
     MIN_CYCLE_DURATION = 3
     MAX_CYCLE_DURATION = 30
+    MIN_INITIAL_DURATION = 15  # First event in session must be >= this
 
     for phase in active_phases:
         if phase not in phase_matches:
@@ -1292,12 +1311,15 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
 
         phase_df = phase_matches[phase].copy()
 
-        # Vectorized filtering instead of iterrows
+        # Two pools: cycling events (3-30 min) + initial run candidates (>= 15 min)
+        # Combined with OR to allow long initial compressor runs
+        not_used = ~phase_df['on_event_id'].isin(used_match_ids)
+        high_power = phase_df['on_magnitude'].abs() >= 800
+        is_cycle = (phase_df['duration'] >= MIN_CYCLE_DURATION) & (phase_df['duration'] <= MAX_CYCLE_DURATION)
+        is_initial = phase_df['duration'] >= MIN_INITIAL_DURATION
+
         filtered = phase_df[
-            (~phase_df['on_event_id'].isin(used_match_ids)) &
-            (phase_df['on_magnitude'].abs() >= 800) &
-            (phase_df['duration'] >= MIN_CYCLE_DURATION) &
-            (phase_df['duration'] <= MAX_CYCLE_DURATION)
+            not_used & high_power & (is_cycle | is_initial)
         ].copy()
 
         if filtered.empty:
@@ -1545,7 +1567,8 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
                            run_number: int = 0,
                            min_duration_minutes: int = 25,
                            min_magnitude: int = 1500,
-                           isolation_window_minutes: int = 30) -> Dict[str, Any]:
+                           isolation_window_minutes: int = 30,
+                           preloaded: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Detect water heater (boiler) patterns.
 
@@ -1561,6 +1584,7 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
         min_duration_minutes: Minimum match duration to consider (default 25 min)
         min_magnitude: Minimum magnitude in watts (default 1500W)
         isolation_window_minutes: Window to check for nearby events (default 30 min)
+        preloaded: Optional dict with pre-loaded DataFrames ('matches')
 
     Returns:
         Dictionary with boiler detection results
@@ -1575,19 +1599,23 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
         'has_boiler': False,
     }
 
-    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
-    if not house_dir.exists():
-        return result
+    if preloaded:
+        matches_df = preloaded.get('matches')
+        if matches_df is not None:
+            matches_df = matches_df.copy()
+    else:
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+        if not house_dir.exists():
+            return result
+        matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
-    # Load matches
-    matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
     if matches_df is None or len(matches_df) == 0:
         return result
 
-    # Parse timestamps
+    # Parse timestamps (skip if already datetime)
     for col in ['on_start', 'on_end', 'off_start', 'off_end']:
-        if col in matches_df.columns:
-            matches_df[col] = pd.to_datetime(matches_df[col], format='%d/%m/%Y %H:%M', errors='coerce')
+        if col in matches_df.columns and not pd.api.types.is_datetime64_any_dtype(matches_df[col]):
+            matches_df[col] = pd.to_datetime(matches_df[col], format='mixed', dayfirst=True, errors='coerce')
 
     # Step 1: Find all long-duration, high-power matches (potential boilers)
     if 'duration' not in matches_df.columns or 'on_magnitude' not in matches_df.columns:

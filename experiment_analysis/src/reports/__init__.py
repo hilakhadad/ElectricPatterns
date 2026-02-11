@@ -5,7 +5,6 @@ Contains functions to generate per-house and aggregated experiment reports.
 """
 from reports.experiment_report import (
     analyze_experiment_house,
-    generate_experiment_report,
     load_experiment_data
 )
 from reports.aggregate_report import (
@@ -19,7 +18,6 @@ from reports.aggregate_report import (
 
 __all__ = [
     'analyze_experiment_house',
-    'generate_experiment_report',
     'load_experiment_data',
     'aggregate_experiment_results',
     'generate_summary_report',

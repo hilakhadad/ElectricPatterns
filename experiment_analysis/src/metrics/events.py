@@ -34,7 +34,8 @@ def _load_monthly_files(house_dir: Path, subfolder: str, pattern: str):
 
 
 def calculate_event_metrics(experiment_dir: Path, house_id: str,
-                            run_number: int = 0) -> Dict[str, Any]:
+                            run_number: int = 0,
+                            preloaded: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Calculate event-level metrics for a house run.
 
@@ -44,6 +45,7 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
         experiment_dir: Path to experiment output directory
         house_id: House identifier
         run_number: Run number to analyze
+        preloaded: Optional dict with pre-loaded DataFrames ('on_off') to avoid redundant file I/O
 
     Returns:
         Dictionary with event metrics
@@ -53,10 +55,12 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
         'run_number': run_number,
     }
 
-    house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+    if preloaded:
+        on_off_df = preloaded.get('on_off')
+    else:
+        house_dir = _get_house_dir(experiment_dir, house_id, run_number)
+        on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
 
-    # Load on_off log
-    on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
         metrics['error'] = 'No on_off file found'
         return metrics

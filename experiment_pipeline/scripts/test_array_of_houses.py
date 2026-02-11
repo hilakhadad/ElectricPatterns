@@ -83,7 +83,7 @@ CPU_COUNT = multiprocessing.cpu_count()
 MAX_WORKERS = min(4, CPU_COUNT)  # Try 2, 3, or 4 and see which is fastest
 
 # Skip visualization step (faster processing)
-SKIP_VISUALIZATION = True
+SKIP_VISUALIZATION = False
 
 # ============================================================================
 
