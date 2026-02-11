@@ -42,7 +42,7 @@ def detect_gradual_events(
     event_type: str = 'on',
     window_minutes: int = 3,
     partial_factor: float = 0.8,
-    max_factor: float = 1.3,
+    max_factor: float = 3.0,
     max_duration_minutes: int = 3,
     progressive_search: bool = False,
     phase: str = None
@@ -92,14 +92,16 @@ def detect_gradual_events(
     if len(df) < 2:
         return pd.DataFrame(columns=['start', 'end', 'magnitude'])
 
-    partial_threshold = threshold * partial_factor  # e.g., 1200W for 1500W
-    max_threshold = threshold * max_factor  # e.g., 1950W for 1500W
+    partial_threshold = threshold * partial_factor  # e.g., 1300W for TH=1300, factor=1.0
+    max_threshold = threshold * max_factor  # e.g., 3900W for TH=1300, factor=3.0
 
     timestamps = df['timestamp'].values
     diffs = df[diff_col].values
 
-    # Pre-filter to "significant" changes (>= 50% of threshold)
-    min_significant = threshold * 0.5
+    # Pre-filter to "significant" changes (>= 25% of threshold)
+    # Lower than before (was 50%) to catch ramps where individual steps are small
+    # e.g., 400W + 1000W = 1400W — the 400W step needs to be a candidate
+    min_significant = threshold * 0.25
 
     if event_type == 'on':
         candidate_mask = (diffs >= min_significant)
@@ -231,6 +233,12 @@ def _try_window(
     significant_indices = adjacent_indices[significant_mask]
 
     if len(significant_indices) == 0:
+        return None
+
+    # Gradual events must involve at least 2 significant steps.
+    # A single step is handled by the sharp detector (if >= threshold)
+    # or is just a sub-threshold fluctuation (if < threshold).
+    if len(significant_indices) < 2:
         return None
 
     duration_minutes = len(significant_indices)

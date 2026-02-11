@@ -21,7 +21,6 @@ errors/
 user_request_plots/
 output/
 INPUT/
-tests/
 *.log
 
 # Experiment pipeline data
@@ -44,10 +43,17 @@ experiment_pipeline/SESSION_SUMMARY.md
 experiment_pipeline/scripts/_temp_*.py
 
 # Daily journal sync (personal utility)
-daily_journal_sync/
+.pytest_cache/
 
 # Claude Code settings
 .claude/
+CLAUDE.md
+HOW_TO_USE.md
+agents/
+
+# Analysis scripts (generated, not part of pipeline)
+analyze_*.py
+nul
 
 # Data files
 harvesting_data/*.csv
