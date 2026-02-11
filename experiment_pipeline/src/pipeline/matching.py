@@ -151,6 +151,10 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
 
         unmatched_on = still_unmatched_on
 
+        # Log ON events that failed Stage 1+2 (going to Stage 3)
+        if unmatched_on:
+            logger.info(f"  {len(unmatched_on)} ON events unmatched after Stage 1+2, trying Stage 3")
+
         # Stage 3: Partial matching
         final_unmatched_on = []
         remainder_on_events = []
@@ -182,6 +186,11 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
                         remainder_off_events.append(remainder)
             else:
                 final_unmatched_on.append(on_event)
+
+        # Log all ON events that remain unmatched after all 3 stages
+        for on_event in final_unmatched_on:
+            logger.info(f"UNMATCHED {on_event['event_id']}({abs(on_event['magnitude']):.0f}W, "
+                        f"phase={on_event['phase']}, start={on_event['start']})")
 
         # Add remainder events to unmatched lists
         unmatched_on = final_unmatched_on + remainder_on_events

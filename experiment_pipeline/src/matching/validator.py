@@ -213,33 +213,65 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
 
     # Check event segment stability - reject if too spiky (not a clean device event)
     if len(event_seg) >= 3 and on_magnitude > 0:
-        # CV check: overall variability relative to ON magnitude
-        event_cv = np.std(event_seg) / on_magnitude
-        if event_cv > MAX_EVENT_CV:
-            logger.info(f"REJECTED {on_id}-{off_id}: unstable_event_segment (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
-            return False, 0
+        # Use nan-aware functions: NaN diffs (from data gaps) propagate through cumsum,
+        # corrupting event_seg. np.nanstd/np.nanmin skip NaN values.
+        non_nan_seg = event_seg[~np.isnan(event_seg)]
 
-        # Min power check: if event power drops below threshold, the match crosses different events
-        # A device that is ON should maintain at least MIN_EVENT_STABILITY_RATIO of its magnitude
-        min_event_power = np.min(event_seg)
-        min_ratio = min_event_power / on_magnitude
-        if min_ratio < MIN_EVENT_STABILITY_RATIO:
-            logger.info(f"REJECTED {on_id}-{off_id}: event_power_drop (min={min_event_power:.0f}W, "
-                        f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
-            return False, 0
+        if len(non_nan_seg) >= 3:
+            # CV check: overall variability relative to ON magnitude
+            event_cv = np.nanstd(event_seg) / on_magnitude
+            if event_cv > MAX_EVENT_CV:
+                logger.info(f"REJECTED {on_id}-{off_id}: unstable_event_segment (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
+                return False, 0
 
-    # Check remaining power - must not be negative
+            # Min power check: if event power drops below threshold, the match crosses different events
+            # A device that is ON should maintain at least MIN_EVENT_STABILITY_RATIO of its magnitude
+            min_event_power = np.nanmin(event_seg)
+            min_ratio = min_event_power / on_magnitude
+            if min_ratio < MIN_EVENT_STABILITY_RATIO:
+                logger.info(f"REJECTED {on_id}-{off_id}: event_power_drop (min={min_event_power:.0f}W, "
+                            f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
+                return False, 0
+
+    # Absolute power check: use raw total power values (immune to NaN-corrupted cumsum).
+    # When data has gaps (NaN), cumsum becomes NaN and the checks above are bypassed.
+    # This check uses the actual measured power to detect device OFF periods.
+    if len(event_power) >= 3 and on_magnitude > 0:
+        non_nan_power = event_power[~np.isnan(event_power)]
+        if len(non_nan_power) >= 3:
+            # Get power just before the ON event (baseline without device)
+            pre_on_idx = max(0, on_start_idx - 1)
+            pre_on_power = power_arr[pre_on_idx]
+            if np.isnan(pre_on_power):
+                # Search backward for a non-NaN value
+                for i in range(pre_on_idx, max(pre_on_idx - 10, -1), -1):
+                    if not np.isnan(power_arr[i]):
+                        pre_on_power = power_arr[i]
+                        break
+                else:
+                    pre_on_power = 0
+
+            min_total = np.nanmin(event_power)
+            # Total power should stay above baseline + 50% of device magnitude
+            min_expected = pre_on_power + on_magnitude * MIN_EVENT_STABILITY_RATIO
+            if min_total < min_expected:
+                logger.info(f"REJECTED {on_id}-{off_id}: absolute_power_drop "
+                            f"(min_total={min_total:.0f}W, baseline={pre_on_power:.0f}W, "
+                            f"expected>={min_expected:.0f}W)")
+                return False, 0
+
+    # Check remaining power - must not be negative (use nanmin to handle NaN)
     min_remain = min(
-        np.min(on_remain) if len(on_remain) > 0 else 0,
-        np.min(event_remain) if len(event_remain) > 0 else 0,
-        np.min(off_remain) if len(off_remain) > 0 else 0
+        np.nanmin(on_remain) if len(on_remain) > 0 and not np.all(np.isnan(on_remain)) else 0,
+        np.nanmin(event_remain) if len(event_remain) > 0 and not np.all(np.isnan(event_remain)) else 0,
+        np.nanmin(off_remain) if len(off_remain) > 0 and not np.all(np.isnan(off_remain)) else 0,
     )
 
-    # Check event power itself - must not be negative
+    # Check event power itself - must not be negative (use nanmin to handle NaN)
     min_seg = min(
-        np.min(on_seg) if len(on_seg) > 0 else 0,
-        np.min(event_seg) if len(event_seg) > 0 else 0,
-        np.min(off_seg) if len(off_seg) > 0 else 0
+        np.nanmin(on_seg) if len(on_seg) > 0 and not np.all(np.isnan(on_seg)) else 0,
+        np.nanmin(event_seg) if len(event_seg) > 0 and not np.all(np.isnan(event_seg)) else 0,
+        np.nanmin(off_seg) if len(off_seg) > 0 and not np.all(np.isnan(off_seg)) else 0,
     )
 
     # Calculate required correction (if any)
@@ -361,31 +393,56 @@ def is_valid_partial_removal(data: pd.DataFrame, on_event: dict, off_event, matc
 
     # Check event segment stability - reject if too spiky
     if len(event_seg) >= 3 and match_magnitude > 0:
-        event_cv = np.std(event_seg) / match_magnitude
-        if event_cv > MAX_EVENT_CV:
-            logger.info(f"REJECTED {on_id}-{off_id}: partial_unstable_event (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
-            return False, 0
+        non_nan_seg = event_seg[~np.isnan(event_seg)]
 
-        # Min power check: if event power drops below threshold, match crosses different events
-        min_event_power = np.min(event_seg)
-        min_ratio = min_event_power / match_magnitude
-        if min_ratio < MIN_EVENT_STABILITY_RATIO:
-            logger.info(f"REJECTED {on_id}-{off_id}: partial_event_power_drop (min={min_event_power:.0f}W, "
-                        f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
-            return False, 0
+        if len(non_nan_seg) >= 3:
+            event_cv = np.nanstd(event_seg) / match_magnitude
+            if event_cv > MAX_EVENT_CV:
+                logger.info(f"REJECTED {on_id}-{off_id}: partial_unstable_event (CV={event_cv:.2f}, max={MAX_EVENT_CV})")
+                return False, 0
 
-    # Check remaining power - must not be negative
+            # Min power check: if event power drops below threshold, match crosses different events
+            min_event_power = np.nanmin(event_seg)
+            min_ratio = min_event_power / match_magnitude
+            if min_ratio < MIN_EVENT_STABILITY_RATIO:
+                logger.info(f"REJECTED {on_id}-{off_id}: partial_event_power_drop (min={min_event_power:.0f}W, "
+                            f"ratio={min_ratio:.2f}, threshold={MIN_EVENT_STABILITY_RATIO})")
+                return False, 0
+
+    # Absolute power check: use raw total power values (immune to NaN-corrupted cumsum)
+    if len(event_power) >= 3 and match_magnitude > 0:
+        non_nan_power = event_power[~np.isnan(event_power)]
+        if len(non_nan_power) >= 3:
+            pre_on_idx = max(0, on_start_idx - 1)
+            pre_on_power = power_arr[pre_on_idx]
+            if np.isnan(pre_on_power):
+                for i in range(pre_on_idx, max(pre_on_idx - 10, -1), -1):
+                    if not np.isnan(power_arr[i]):
+                        pre_on_power = power_arr[i]
+                        break
+                else:
+                    pre_on_power = 0
+
+            min_total = np.nanmin(event_power)
+            min_expected = pre_on_power + match_magnitude * MIN_EVENT_STABILITY_RATIO
+            if min_total < min_expected:
+                logger.info(f"REJECTED {on_id}-{off_id}: partial_absolute_power_drop "
+                            f"(min_total={min_total:.0f}W, baseline={pre_on_power:.0f}W, "
+                            f"expected>={min_expected:.0f}W)")
+                return False, 0
+
+    # Check remaining power - must not be negative (use nanmin to handle NaN)
     min_remain = min(
-        np.min(on_remain) if len(on_remain) > 0 else 0,
-        np.min(event_remain) if len(event_remain) > 0 else 0,
-        np.min(off_remain) if len(off_remain) > 0 else 0
+        np.nanmin(on_remain) if len(on_remain) > 0 and not np.all(np.isnan(on_remain)) else 0,
+        np.nanmin(event_remain) if len(event_remain) > 0 and not np.all(np.isnan(event_remain)) else 0,
+        np.nanmin(off_remain) if len(off_remain) > 0 and not np.all(np.isnan(off_remain)) else 0,
     )
 
-    # Check event power itself - must not be negative
+    # Check event power itself - must not be negative (use nanmin to handle NaN)
     min_seg = min(
-        np.min(on_seg) if len(on_seg) > 0 else 0,
-        np.min(event_seg) if len(event_seg) > 0 else 0,
-        np.min(off_seg) if len(off_seg) > 0 else 0
+        np.nanmin(on_seg) if len(on_seg) > 0 and not np.all(np.isnan(on_seg)) else 0,
+        np.nanmin(event_seg) if len(event_seg) > 0 and not np.all(np.isnan(event_seg)) else 0,
+        np.nanmin(off_seg) if len(off_seg) > 0 and not np.all(np.isnan(off_seg)) else 0,
     )
 
     # Calculate required correction (if any)

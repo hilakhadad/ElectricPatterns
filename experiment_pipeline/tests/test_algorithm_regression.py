@@ -934,3 +934,83 @@ class TestGradualDetection:
         assert len(result) == 1, (
             f"Gradual OFF ramp -800-800=-1600W must be detected. Got {len(result)} events."
         )
+
+
+# ============================================================================
+# Bug #18: NaN data gaps bypass validator stability checks
+#
+# When power data has NaN gaps (common with real smart meters), the diff
+# column becomes NaN at gap boundaries. np.cumsum propagates NaN, making
+# event_seg all-NaN after the first gap. Then:
+#   np.min(NaN_array) = NaN
+#   NaN < 0.5 → False  (NaN comparisons are always False)
+# So the stability check is silently bypassed.
+#
+# Real case: House 264, phase w2. Device ON for 1 min, power drops to
+# baseline (OFF), NaN gap hides the drop, device ON again 15 min later.
+# Matcher pairs first ON with last OFF → 49-minute "event" that should be
+# 3-4 separate short activations.
+#
+# Fix: (1) use np.nanmin/np.nanstd instead of np.min/np.std
+#      (2) add absolute power check using raw total power values (not cumsum)
+# ============================================================================
+
+def _make_nan_gap_data(values, nan_indices, phase='w1'):
+    """Create power data with NaN gaps at specified indices (simulates meter gaps)."""
+    data = make_power_data(values, phase)
+    for idx in nan_indices:
+        data.loc[data.index[idx], phase] = np.nan
+        data.loc[data.index[idx], f'{phase}_diff'] = np.nan
+    return data
+
+
+class TestNaNGapBypassRejection:
+    """Bug #18: NaN gaps in data must not bypass validator stability checks."""
+
+    #  Simulates House 264 pattern: device cycles ON/OFF but NaN hides the OFF.
+    #  min 0:   200W  (background)
+    #  min 1:   200W
+    #  min 2:  2600W  (ON: +2400W, device turns on)
+    #  min 3:   NaN   (data gap!)
+    #  min 4:   200W  (device clearly OFF - back to baseline)
+    #  min 5:   200W
+    #  min 6:   NaN   (data gap!)
+    #  min 7:  2600W  (device turns ON again - but no OFF was detected!)
+    #  min 8:  2600W
+    #  min 9:   NaN   (data gap!)
+    #  min 10:  200W  (device OFF again)
+    #  min 11:  200W
+    #  min 12: 2600W  (device ON again)
+    #  min 13:  200W  (OFF: -2400W, finally detected)
+    #  min 14:  200W
+    VALUES = [200, 200, 2600, 2600, 200, 200, 200, 2600, 2600, 2600, 200, 200, 2600, 200, 200]
+    NAN_INDICES = [3, 6, 9]  # NaN at indices that hide the power drops
+
+    def test_validator_rejects_nan_gap_match(self, test_logger):
+        """Match spanning NaN gaps with intermediate OFF must be rejected.
+
+        Old code: cumsum becomes NaN after first gap → min check bypassed.
+        Fix: absolute power check uses raw values → detects 200W < threshold.
+        """
+        data = _make_nan_gap_data(self.VALUES, self.NAN_INDICES)
+        on_ev = make_on_event(2, 2, magnitude=2400)
+        off_ev = make_off_event(13, 13, magnitude=2400)
+
+        is_valid, _ = is_valid_event_removal(data, on_ev, off_ev, test_logger)
+        assert not is_valid, (
+            "Should reject: device turns OFF between ON and OFF (power drops to 200W baseline), "
+            "but NaN gaps hide the OFF events from diff-based detection. "
+            "Old code: cumsum=NaN → NaN<0.5 is False → check bypassed."
+        )
+
+    def test_clean_match_still_accepted(self, test_logger):
+        """Same duration match WITHOUT NaN gaps and WITH stable power must still be accepted."""
+        values = [200, 200, 2600, 2600, 2600, 2600, 2600, 2600, 2600, 2600, 2600, 2600, 2600, 200, 200]
+        data = make_power_data(values)
+        on_ev = make_on_event(2, 2, magnitude=2400)
+        off_ev = make_off_event(13, 13, magnitude=2400)
+
+        is_valid, _ = is_valid_event_removal(data, on_ev, off_ev, test_logger)
+        assert is_valid, (
+            "Clean match with stable power and no NaN gaps must still be accepted."
+        )

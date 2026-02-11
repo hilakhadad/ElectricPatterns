@@ -159,5 +159,5 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
                 # Include baseline and threshold for context
                 logger.info(f"REJECTED {on_id}-{off_id}: unstable_power (max_dev={max_deviation:.0f}W, min_dev={min_deviation:.0f}W, threshold={max_magnitude_diff}W, baseline={baseline_power:.0f}W)")
 
-    logger.debug(f"No match found for {on_id}")
+    logger.info(f"[Stage 1] No match for {on_id}({on_magnitude:.0f}W)")
     return None, None, 0
