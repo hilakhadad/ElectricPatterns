@@ -957,7 +957,7 @@ def _build_html_document(title: str, summary: str, table: str,
             html += '<strong>' + n + '</strong> houses | ';
             html += '<strong>' + totalMatches + '</strong> total matches | ';
             html += '<strong>' + totalMatchedMin.toLocaleString() + '</strong> matched minutes | ';
-            html += 'Devices: \u2744\uFE0F ' + nCentralAC + ' Central AC, \uD83C\uDF00 ' + nRegularAC + ' Regular AC, \uD83D\uDD25 ' + nBoiler + ' Boiler';
+            html += 'Devices: ❄️ ' + nCentralAC + ' Central AC, 🌀 ' + nRegularAC + ' Regular AC, 🔥 ' + nBoiler + ' Boiler';
             html += '</div>';
 
             container.innerHTML = html;
@@ -1051,7 +1051,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
             var devDiv = document.getElementById('device-detection-chart');
             if (devDiv) {{
-                var devLabels = ['Central AC \u2744\uFE0F', 'Regular AC \uD83C\uDF00', 'Boiler \uD83D\uDD25', 'Recurring Patterns \uD83D\uDD04'];
+                var devLabels = ['Central AC ❄️', 'Regular AC 🌀', 'Boiler 🔥', 'Recurring Patterns 🔄'];
                 var devValues = [nCentralAC, nRegularAC, nBoiler, nRecurring];
                 var devPcts = devValues.map(function(v) {{ return filtered.length > 0 ? (v / filtered.length * 100).toFixed(1) + '%' : '0%'; }});
                 var devColors = ['#3498db', '#2ecc71', '#e67e22', '#9b59b6'];
