@@ -48,13 +48,24 @@ def plot_interactive(
         subplot_titles=[f"Phase {phase}" for phase in phases]
     )
 
+    # Compute global X range from data + event timestamps
+    x_min, x_max = df['timestamp'].min(), df['timestamp'].max()
+    if events is not None:
+        for col in ['on_start', 'off_start', 'start', 'end']:
+            if col in events.columns:
+                valid = events[col].dropna()
+                if len(valid) > 0:
+                    x_min = min(x_min, valid.min())
+                    x_max = max(x_max, valid.max())
+    x_range = [x_min, x_max]
+
     _add_data_traces(fig, df, phases)
     _add_legend_entries(fig, len(phases))
 
     if events is not None:
         _add_event_markers(fig, events, phases)
 
-    _configure_layout(fig)
+    _configure_layout(fig, x_range=x_range)
 
     title = create_title(df['timestamp'], phases, "interactive", house_id)
     filename = get_save_path(f'{title}.html', filepath)
@@ -193,8 +204,8 @@ def _get_event_color(event: pd.Series) -> str:
     return COLORS['unmatched_off']
 
 
-def _configure_layout(fig: go.Figure) -> None:
-    """Configure figure layout."""
+def _configure_layout(fig: go.Figure, x_range=None) -> None:
+    """Configure figure layout with identical X-axis range across all subplots."""
     row_titles = ["Original Data", "After Segregation", "Segregation Data", "Event Markers"]
     for row_idx, title in enumerate(row_titles, start=1):
         fig.update_yaxes(title_text=title, row=row_idx, col=1)
@@ -204,3 +215,7 @@ def _configure_layout(fig: go.Figure) -> None:
         hovermode="x unified",
         showlegend=True
     )
+
+    # Force identical X-axis range across all columns (phases)
+    if x_range is not None:
+        fig.update_xaxes(range=x_range)
