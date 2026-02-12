@@ -9,12 +9,39 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 
+def _find_run_dir(experiment_dir: Path, run_number: int) -> Optional[Path]:
+    """
+    Find the run directory, supporting both standard and dynamic threshold naming.
+
+    Supports:
+    - Standard: run_0/, run_1/, ...
+    - Dynamic threshold: run_0_th2000/, run_1_th1500/, ...
+
+    Returns:
+        Path to the run directory, or None if not found.
+    """
+    # Try standard naming first
+    standard = experiment_dir / f"run_{run_number}"
+    if standard.exists():
+        return standard
+
+    # Try dynamic threshold naming (run_N_thXXXX)
+    for d in sorted(experiment_dir.glob(f"run_{run_number}_th*")):
+        if d.is_dir():
+            return d
+
+    return None
+
+
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
-    """Get the house directory, supporting both old and new structures."""
-    # Try new structure first: experiment_dir/run_N/house_X/
-    new_dir = experiment_dir / f"run_{run_number}" / f"house_{house_id}"
-    if new_dir.exists():
-        return new_dir
+    """Get the house directory, supporting both old, new, and dynamic threshold structures."""
+    # Try to find the run directory (supports run_N and run_N_thXXXX)
+    run_dir = _find_run_dir(experiment_dir, run_number)
+    if run_dir is not None:
+        house_dir = run_dir / f"house_{house_id}"
+        if house_dir.exists():
+            return house_dir
+
     # Fall back to old structure: experiment_dir/house_X/run_N/house_X/
     return experiment_dir / f"house_{house_id}" / f"run_{run_number}" / f"house_{house_id}"
 

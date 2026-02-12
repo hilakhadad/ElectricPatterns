@@ -4,8 +4,8 @@ Experiment configuration management.
 Each experiment has a unique identifier (exp000, exp001, etc.) and a configuration
 dictionary that defines detection parameters.
 """
-from dataclasses import dataclass
-from typing import Dict, Any
+from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional
 import json
 from datetime import datetime
 
@@ -31,6 +31,7 @@ class ExperimentConfig:
     tail_noise_tolerance: int = 30
     tail_min_gain: int = 100
     tail_min_residual_fraction: float = 0.05
+    threshold_schedule: Optional[List[int]] = None  # Dynamic threshold: list of thresholds per iteration
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -53,6 +54,7 @@ class ExperimentConfig:
             'tail_noise_tolerance': self.tail_noise_tolerance,
             'tail_min_gain': self.tail_min_gain,
             'tail_min_residual_fraction': self.tail_min_residual_fraction,
+            'threshold_schedule': self.threshold_schedule,
         }
 
     def to_json(self, file_path: str):
@@ -177,6 +179,21 @@ EXPERIMENTS = {
         progressive_window_search=True,
         use_near_threshold_detection=True,
         use_tail_extension=True,
+    ),
+
+    'exp010_dynamic_threshold': ExperimentConfig(
+        exp_id='exp010',
+        description='Dynamic threshold: 2000->1500->1100->800W per iteration, targeting boilers->strong AC->medium AC->small AC',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
     ),
 }
 

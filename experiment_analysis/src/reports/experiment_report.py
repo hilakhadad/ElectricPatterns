@@ -78,9 +78,13 @@ def load_experiment_data(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with DataFrames for each file type
     """
-    # Structure: experiment_dir/run_N/house_X/ (new) or experiment_dir/house_X/run_N/house_X/ (old)
-    # Try new structure first
-    house_dir = experiment_dir / f"run_{run_number}" / f"house_{house_id}"
+    # Structure: experiment_dir/run_N/house_X/ (new), run_N_thXXXX/house_X/ (dynamic), or old
+    from metrics.iterations import _find_run_dir
+    run_dir = _find_run_dir(experiment_dir, run_number)
+    if run_dir is not None:
+        house_dir = run_dir / f"house_{house_id}"
+    else:
+        house_dir = experiment_dir / f"run_{run_number}" / f"house_{house_id}"
     if not house_dir.exists():
         # Fall back to old structure
         house_dir = experiment_dir / f"house_{house_id}" / f"run_{run_number}" / f"house_{house_id}"
@@ -244,6 +248,9 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
     }
     log(f"First iteration done ({time.time()-t0:.2f}s)")
 
+    # Classification metrics (dynamic threshold experiments only)
+    _add_classification_if_available(analysis, experiment_dir, house_id, log)
+
     # NOTE: last_iteration and progression calculations removed - not displayed in HTML
     # This saves ~50% of analysis time per house
 
@@ -274,6 +281,36 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
     analysis['scores'] = _calculate_experiment_scores(analysis, damaged_info=damaged_info)
 
     return analysis
+
+
+def _add_classification_if_available(analysis: Dict[str, Any], experiment_dir: Path,
+                                      house_id: str, log) -> None:
+    """Add device classification metrics if classification data exists (dynamic threshold experiments)."""
+    import json
+
+    # Check if any run directory has classification data
+    has_classification = False
+    for d in experiment_dir.glob("run_*_th*/house_*/classification"):
+        if d.is_dir() and any(d.glob("classification_*.pkl")):
+            has_classification = True
+            break
+
+    if not has_classification:
+        return
+
+    try:
+        log("  - classification metrics (dynamic threshold)...")
+        from metrics.classification import calculate_classification_metrics
+        classification = calculate_classification_metrics(experiment_dir, house_id)
+        analysis['classification'] = classification
+
+        # Load activation list if it exists
+        activation_path = experiment_dir / f"activation_list_{house_id}.json"
+        if activation_path.exists():
+            with open(activation_path, 'r') as f:
+                analysis['activation_list'] = json.load(f)
+    except Exception as e:
+        log(f"  - classification metrics failed: {e}")
 
 
 def _detect_damaged_phases_from_segmentation(seg: Dict[str, Any], threshold_ratio: float = 0.01) -> Dict[str, Any]:

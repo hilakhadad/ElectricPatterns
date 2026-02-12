@@ -300,13 +300,14 @@ def _detect_houses(experiment_dir: Path) -> List[str]:
     """Detect house IDs from experiment directory structure."""
     house_ids = set()
 
-    # Try new structure first: experiment_dir/run_0/house_X/
-    run_0_dir = experiment_dir / "run_0"
-    if run_0_dir.exists():
-        for item in run_0_dir.iterdir():
-            if item.is_dir() and item.name.startswith("house_"):
-                house_id = item.name.replace("house_", "")
-                house_ids.add(house_id)
+    # Try new structure: experiment_dir/run_0/house_X/
+    # Also supports dynamic threshold: experiment_dir/run_0_th2000/house_X/
+    for run_dir in experiment_dir.glob("run_0*"):
+        if run_dir.is_dir():
+            for item in run_dir.iterdir():
+                if item.is_dir() and item.name.startswith("house_"):
+                    house_id = item.name.replace("house_", "")
+                    house_ids.add(house_id)
 
     # Also check old structure: experiment_dir/house_X/run_0/...
     for item in experiment_dir.iterdir():
