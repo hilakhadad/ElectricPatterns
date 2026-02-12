@@ -23,6 +23,7 @@ from visualization.charts import (
     create_power_heatmap_chart,
     create_power_histogram,
     create_score_breakdown_chart,
+    create_quality_flags_chart,
     create_mini_hourly_chart,
     create_year_hourly_chart,
     create_year_heatmap,
@@ -149,6 +150,12 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'has_dead_phase': 'Dead Phase (<1%)',
         'has_faulty_nan_phase': 'Faulty Phase (NaN≥20%)',
         'many_nan_values': 'NaN > 2%',
+        'low_sharp_entry': 'Low Sharp Entry Rate',
+        'low_device_signature': 'Low Device Signature',
+        'low_power_profile': 'Low Power Profile',
+        'low_variability': 'Low Variability',
+        'low_data_volume': 'Low Data Volume',
+        'low_data_integrity': 'Low Data Integrity',
     }
 
     rows = []
@@ -215,7 +222,8 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
     <div class="table-legend" style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-size: 0.9em;">
         <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100) &mdash; Optimized for Algorithm Performance</h4>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;">
-            <div><span style="color:#e74c3c;">&#9632;</span> <strong>Event Detectability (35 pts):</strong> Density of power jumps &ge; 1300W per phase. More ON/OFF events the algorithm can detect = higher score.</div>
+            <div><span style="color:#e74c3c;">&#9632;</span> <strong>Sharp Entry Rate (20 pts):</strong> Fraction of threshold crossings from single-minute sharp jumps. Houses where power reaches 1300W via stacking score low.</div>
+            <div><span style="color:#e67e22;">&#9632;</span> <strong>Device Signature (15 pts):</strong> Boiler-like sustained high power (8 pts) + AC-like compressor cycles (7 pts). Predicts segregation success.</div>
             <div><span style="color:#f39c12;">&#9632;</span> <strong>Power Profile (20 pts):</strong> Penalizes houses stuck in 500-1000W (below detection threshold). Rewards clear low-power baseline where events stand out.</div>
             <div><span style="color:#9b59b6;">&#9632;</span> <strong>Variability (20 pts):</strong> Coefficient of variation (CV) of total power. Higher CV = more device switching activity = better for the algorithm.</div>
             <div><span style="color:#3498db;">&#9632;</span> <strong>Data Volume (15 pts):</strong> Days of data + monthly coverage balance. More data = more patterns to detect.</div>
@@ -397,6 +405,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     heatmap_chart = create_power_heatmap_chart(analysis)
     histogram_chart = create_power_histogram(analysis)
     score_breakdown_chart = create_score_breakdown_chart(analysis)
+    quality_flags_chart = create_quality_flags_chart(analysis)
 
     # Generate year tabs
     year_tabs_html = '<button class="tab-btn active" onclick="showTab(\'all\')">All Data</button>'
@@ -681,8 +690,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="metric-label">Duplicate TS</div>
                     </div>
                     <div class="metric">
-                        <div class="metric-value">{quality.get('total_threshold_jumps', 0):,}</div>
-                        <div class="metric-label">Jumps &ge; 1300W</div>
+                        <div class="metric-value">{quality.get('sharp_entry_rate', 0):.0%}</div>
+                        <div class="metric-label">Sharp Entry Rate</div>
                     </div>
                 </div>
             </div>
@@ -731,12 +740,16 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         {score_breakdown_chart}
                         <div style="font-size: 0.82em; color: #555; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; margin-top: 4px; line-height: 1.5;">
                             <strong>Score components explained:</strong><br>
-                            <span style="color:#e74c3c;">&#9632;</span> <strong>Event Detectability</strong> &mdash; How many power jumps &ge; 1300W exist per phase (more events = better for algorithm)<br>
+                            <span style="color:#e74c3c;">&#9632;</span> <strong>Sharp Entry Rate</strong> &mdash; % of threshold crossings from single-minute sharp jumps (higher = easier for algorithm)<br>
+                            <span style="color:#e67e22;">&#9632;</span> <strong>Device Signature</strong> &mdash; Boiler patterns (sustained high power) + AC patterns (compressor cycles)<br>
                             <span style="color:#f39c12;">&#9632;</span> <strong>Power Profile</strong> &mdash; Penalizes stuck 500-1000W range; rewards clear low-power baseline<br>
                             <span style="color:#9b59b6;">&#9632;</span> <strong>Variability</strong> &mdash; CV of total power (higher = more device activity = better)<br>
                             <span style="color:#3498db;">&#9632;</span> <strong>Data Volume</strong> &mdash; Days of data + monthly coverage balance<br>
                             <span style="color:#2ecc71;">&#9632;</span> <strong>Data Integrity</strong> &mdash; NaN %, gap frequency, negative values
                         </div>
+                    </div>
+                    <div class="chart-card chart-full-width">
+                        {quality_flags_chart}
                     </div>
                     <div class="chart-card chart-full-width">
                         {heatmap_chart}
