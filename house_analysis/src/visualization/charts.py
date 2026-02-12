@@ -362,6 +362,12 @@ def create_issues_heatmap(analyses: List[Dict[str, Any]]) -> str:
         'very_high_power': 'Max Power > 20kW',
         'unusual_night_ratio': 'Night/Day > 3',
         'has_dead_phase': 'Dead Phase (<1%)',
+        'low_sharp_entry': 'Low Sharp Entry Rate',
+        'low_device_signature': 'Low Device Signature',
+        'low_power_profile': 'Low Power Profile',
+        'low_variability': 'Low Variability',
+        'low_data_volume': 'Low Data Volume',
+        'low_data_integrity': 'Low Data Integrity',
     }
     display_flags = [flag_display_names.get(f, f.replace('_', ' ').title()) for f in all_flags]
 
@@ -796,8 +802,9 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     """
     quality = analysis.get('data_quality', {})
 
-    # Get score components (optimized scoring system)
-    event_detect = quality.get('event_detectability_score', 0)
+    # Get score components (6-component scoring system)
+    sharp_entry = quality.get('sharp_entry_score', 0)
+    device_sig = quality.get('device_signature_score', 0)
     power_profile = quality.get('power_profile_score', quality.get('balance_score', 0))
     variability = quality.get('variability_score', quality.get('noise_score', 0))
     data_volume = quality.get('data_volume_score', quality.get('completeness_score', 0))
@@ -805,20 +812,28 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     final_score = quality.get('quality_score', 0)
 
     categories = [
-        'Event<br>Detectability<br>(max 35)',
+        'Sharp Entry<br>Rate<br>(max 20)',
+        'Device<br>Signature<br>(max 15)',
         'Power<br>Profile<br>(max 20)',
         'Variability<br>(max 20)',
         'Data<br>Volume<br>(max 15)',
         'Data<br>Integrity<br>(max 10)',
         'Final<br>Score',
     ]
-    values = [event_detect, power_profile, variability, data_volume, integrity, final_score]
-    colors = ['#e74c3c', '#f39c12', '#9b59b6', '#3498db', '#2ecc71', '#1abc9c']
+    values = [sharp_entry, device_sig, power_profile, variability, data_volume, integrity, final_score]
+    colors = ['#e74c3c', '#e67e22', '#f39c12', '#9b59b6', '#3498db', '#2ecc71', '#1abc9c']
+
+    sharp_rate = quality.get('sharp_entry_rate', 0)
+    sustained = quality.get('sustained_high_power_density', 0)
+    compressor = quality.get('compressor_cycle_density', 0)
 
     hover_texts = [
-        f'Event Detectability: {event_detect:.1f}/35<br>'
-        f'Density of power jumps >= 1300W per phase.<br>'
-        f'More detectable ON/OFF events = higher score.',
+        f'Sharp Entry Rate: {sharp_entry:.1f}/20<br>'
+        f'Rate: {sharp_rate:.2%} of threshold crossings are sharp jumps.<br>'
+        f'Higher = more detectable ON/OFF events for the algorithm.',
+        f'Device Signature: {device_sig:.1f}/15<br>'
+        f'Sustained high power (boiler): {sustained:.1f}/10K min<br>'
+        f'Compressor cycles (AC): {compressor:.1f}/10K min',
         f'Power Profile: {power_profile:.1f}/20<br>'
         f'Penalizes stuck 500-1000W range (below detection threshold).<br>'
         f'Rewards clear low-power baseline for sharp event contrast.',
@@ -867,6 +882,89 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
         height=380,
         showlegend=False,
         yaxis=dict(range=[0, max(values) + 10])
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_quality_flags_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create a chart showing quality flag status for each scoring component.
+    Green cells = sufficient, red cells = flagged (insufficient).
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    quality = analysis.get('data_quality', {})
+    quality_flags = quality.get('quality_flags', [])
+
+    # Define components with their scores, max values, and flag keys
+    components = [
+        ('Sharp Entry Rate', quality.get('sharp_entry_score', 0), 20, 'low_sharp_entry'),
+        ('Device Signature', quality.get('device_signature_score', 0), 15, 'low_device_signature'),
+        ('Power Profile', quality.get('power_profile_score', 0), 20, 'low_power_profile'),
+        ('Variability', quality.get('variability_score', 0), 20, 'low_variability'),
+        ('Data Volume', quality.get('data_volume_score', 0), 15, 'low_data_volume'),
+        ('Data Integrity', quality.get('integrity_score', 0), 10, 'low_data_integrity'),
+    ]
+
+    names = [c[0] for c in components]
+    scores = [c[1] for c in components]
+    maxes = [c[2] for c in components]
+    flagged = [c[3] in quality_flags for c in components]
+
+    # Percentage of max for each component
+    pcts = [s / m * 100 if m > 0 else 0 for s, m in zip(scores, maxes)]
+
+    # Colors: red for flagged, green for sufficient
+    bar_colors = ['#e74c3c' if f else '#27ae60' for f in flagged]
+    border_colors = ['#c0392b' if f else '#1e8449' for f in flagged]
+
+    # Category labels with score/max
+    labels = [f'{n}<br>{s:.0f}/{m}' for n, s, m in zip(names, scores, maxes)]
+
+    hover_texts = []
+    for name, score, mx, is_flagged in zip(names, scores, maxes, flagged):
+        status = 'Insufficient' if is_flagged else 'Sufficient'
+        hover_texts.append(
+            f'{name}: {score:.1f}/{mx} ({score/mx*100:.0f}%)<br>'
+            f'Status: <b>{status}</b>'
+        )
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=pcts,
+        marker_color=bar_colors,
+        marker_line_color=border_colors,
+        marker_line_width=2,
+        text=[f'{"LOW" if f else "OK"}' for f in flagged],
+        textposition='outside',
+        textfont=dict(
+            color=['#e74c3c' if f else '#27ae60' for f in flagged],
+            size=13,
+        ),
+        hovertext=hover_texts,
+        hoverinfo='text',
+    ))
+
+    # Add threshold line at 50%
+    fig.add_hline(
+        y=50, line_dash='dash', line_color='#888',
+        annotation_text='Threshold',
+        annotation_position='bottom right',
+    )
+
+    fig.update_layout(
+        title='Quality Component Status',
+        yaxis_title='% of Maximum Score',
+        height=350,
+        showlegend=False,
+        yaxis=dict(range=[0, 115]),
     )
 
     return fig.to_html(full_html=False, include_plotlyjs=False)
