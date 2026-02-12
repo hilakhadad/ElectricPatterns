@@ -239,9 +239,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     # Ensure bounds
     metrics['quality_score'] = max(0, min(100, quality_score))
 
-    # Override: faulty phases → no numeric score
+    # Mark faulty phases via label (keep numeric score for sorting/comparison)
     if metrics['has_faulty_nan_phase']:
-        metrics['quality_score'] = None
         metrics['quality_label'] = 'faulty'
     else:
         metrics['quality_label'] = None

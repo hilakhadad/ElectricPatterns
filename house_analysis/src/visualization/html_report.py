@@ -147,6 +147,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'many_flat_segments': '>70% Flat Readings',
         'unusual_night_ratio': 'Night/Day > 3',
         'has_dead_phase': 'Dead Phase (<1%)',
+        'has_faulty_nan_phase': 'Faulty Phase (NaN≥20%)',
         'many_nan_values': 'NaN > 2%',
     }
 
@@ -180,8 +181,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         # Quality badge with special "Faulty" category
         score = quality.get('quality_score', 0)
         has_dead_phase = flags.get('has_dead_phase', False)
+        has_faulty_nan = flags.get('has_faulty_nan_phase', False)
 
-        if has_dead_phase:
+        if has_dead_phase or has_faulty_nan:
             badge = '<span class="badge badge-purple">Faulty</span>'
         elif score >= 90:
             badge = '<span class="badge badge-green">Excellent</span>'
@@ -289,7 +291,7 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
 def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate quality tiers breakdown HTML."""
     tiers = {
-        'Faulty (Dead Phase)': [],
+        'Faulty': [],
         'Excellent (90+)': [],
         'Good (75-89)': [],
         'Fair (50-74)': [],
@@ -301,10 +303,11 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
         score = a.get('data_quality', {}).get('quality_score', 0)
         flags = a.get('flags', {})
         has_dead_phase = flags.get('has_dead_phase', False)
+        has_faulty_nan = flags.get('has_faulty_nan_phase', False)
 
         # Faulty takes priority over other tiers
-        if has_dead_phase:
-            tiers['Faulty (Dead Phase)'].append(house_id)
+        if has_dead_phase or has_faulty_nan:
+            tiers['Faulty'].append(house_id)
         elif score >= 90:
             tiers['Excellent (90+)'].append(house_id)
         elif score >= 75:
@@ -315,7 +318,7 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
             tiers['Poor (<50)'].append(house_id)
 
     html_parts = []
-    colors = {'Faulty (Dead Phase)': 'purple', 'Excellent (90+)': 'green', 'Good (75-89)': 'blue',
+    colors = {'Faulty': 'purple', 'Excellent (90+)': 'green', 'Good (75-89)': 'blue',
               'Fair (50-74)': 'orange', 'Poor (<50)': 'red'}
 
     for tier, houses in tiers.items():
@@ -361,7 +364,11 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
     # Quality badge
     score = quality.get('quality_score', 0)
-    if score >= 90:
+    has_faulty = flags.get('has_dead_phase', False) or flags.get('has_faulty_nan_phase', False)
+    if has_faulty:
+        badge_class = 'badge-purple'
+        badge_text = 'Faulty'
+    elif score >= 90:
         badge_class = 'badge-green'
         badge_text = 'Excellent'
     elif score >= 75:
@@ -556,6 +563,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         .badge-blue {{ background: #cce5ff; color: #004085; }}
         .badge-orange {{ background: #fff3cd; color: #856404; }}
         .badge-red {{ background: #f8d7da; color: #721c24; }}
+        .badge-purple {{ background: #e2d5f1; color: #6f42c1; }}
         .flags {{ color: #e74c3c; }}
         .back-link {{ margin-bottom: 15px; }}
         .back-link a {{ color: #667eea; text-decoration: none; }}

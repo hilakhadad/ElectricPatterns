@@ -105,7 +105,11 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
 
     log(f"  Coverage: {coverage.get('coverage_ratio', 0):.1%}")
     log(f"  Days: {coverage.get('days_span', 0)}")
-    log(f"  Quality score: {quality.get('quality_score', 0):.0f}/100")
+    quality_label = quality.get('quality_label')
+    if quality_label == 'faulty':
+        log(f"  Quality: Faulty (score: {quality.get('quality_score', 0):.0f}/100)")
+    else:
+        log(f"  Quality score: {quality.get('quality_score', 0):.0f}/100")
 
     active_flags = [k for k, v in flags.items() if v]
     if active_flags:
