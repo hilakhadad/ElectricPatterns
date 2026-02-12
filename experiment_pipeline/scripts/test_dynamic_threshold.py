@@ -38,43 +38,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 
 
-def find_previous_dynamic_run(
-    output_path: str,
-    house_id: str,
-    run_number: int,
-    threshold_schedule: list,
-) -> Path:
-    """
-    Find summarized data from the previous dynamic threshold run.
-
-    Unlike find_previous_run_summarized() which looks for run_N/,
-    this looks for run_{N-1}_th{prev_threshold}/.
-
-    Args:
-        output_path: Base experiment output directory
-        house_id: House ID
-        run_number: Current run number (looks for run_number - 1)
-        threshold_schedule: List of thresholds per iteration
-
-    Returns:
-        Path to the summarized directory
-
-    Raises:
-        FileNotFoundError: If no summarized data found
-    """
-    prev_run = run_number - 1
-    prev_threshold = threshold_schedule[prev_run]
-
-    path = Path(output_path) / f"run_{prev_run}_th{prev_threshold}" / f"house_{house_id}" / "summarized"
-
-    if path.is_dir() and any(path.glob(f"summarized_{house_id}_*.pkl")):
-        return path
-
-    raise FileNotFoundError(
-        f"No summarized data from run_{prev_run}_th{prev_threshold} for house {house_id}"
-    )
-
-
 def run_dynamic_pipeline_for_house(
     house_id: str,
     experiment_name: str,
@@ -88,6 +51,10 @@ def run_dynamic_pipeline_for_house(
 
     Each iteration uses a different threshold from the experiment's
     threshold_schedule. After matching, matches are classified as device types.
+
+    Uses standard run_0/, run_1/ naming during execution (compatible with
+    pipeline path system), then renames to run_0_th2000/, run_1_th1500/, etc.
+    after all iterations complete.
 
     Args:
         house_id: House ID to process
@@ -107,7 +74,7 @@ def run_dynamic_pipeline_for_house(
     import core.paths
     importlib.reload(core.paths)
 
-    # Override paths for this experiment
+    # Override paths for this experiment (same as test_single_house.py)
     core.paths.OUTPUT_BASE_PATH = output_path
     core.paths.OUTPUT_ROOT = output_path
     core.paths.INPUT_DIRECTORY = output_path
@@ -141,7 +108,7 @@ def run_dynamic_pipeline_for_house(
     process_evaluation = pipeline.evaluation.process_evaluation
     process_visualization = pipeline.visualization.process_visualization
 
-    from core import get_experiment, save_experiment_metadata, find_house_data_path
+    from core import get_experiment, save_experiment_metadata, find_house_data_path, find_previous_run_summarized
     from classification.device_classifier import classify_iteration_matches, generate_activation_list
 
     # Load experiment config
@@ -187,24 +154,23 @@ def run_dynamic_pipeline_for_house(
     logger.info(f"Output path: {output_path}")
 
     iterations_completed = 0
+    # Track which run_number used which threshold (for renaming later)
+    completed_runs = []
 
     for run_number, threshold in enumerate(threshold_schedule):
         logger.info(f"\n{'#'*60}")
         logger.info(f"ITERATION {run_number}: THRESHOLD = {threshold}W")
         logger.info(f"{'#'*60}")
 
-        # Determine run directory with threshold in name
-        run_dir_name = f"run_{run_number}_th{threshold}"
-        run_dir = Path(output_path) / run_dir_name
+        # Standard run directory (pipeline expects this format)
+        run_dir = Path(output_path) / f"run_{run_number}"
 
-        # Determine input source
+        # Check input: run 0 reads raw data, run N reads remaining from run N-1
         try:
             if run_number == 0:
                 input_data_path = find_house_data_path(input_path, house_id)
             else:
-                input_data_path = find_previous_dynamic_run(
-                    output_path, house_id, run_number, threshold_schedule
-                )
+                input_data_path = find_previous_run_summarized(output_path, house_id, run_number)
             logger.info(f"Found input: {input_data_path}")
         except FileNotFoundError as e:
             if run_number == 0:
@@ -217,44 +183,27 @@ def run_dynamic_pipeline_for_house(
             import time
             step_times = {}
 
-            # Override OUTPUT_BASE_PATH so pipeline steps write to run_N_thXXXX
-            core.paths.OUTPUT_BASE_PATH = str(run_dir)
-            core.paths.INPUT_DIRECTORY = str(run_dir)
-
-            # Reload pipeline modules to pick up updated paths
-            importlib.reload(pipeline.detection)
-            importlib.reload(pipeline.matching)
-            importlib.reload(pipeline.segmentation)
-            importlib.reload(pipeline.evaluation)
-            importlib.reload(pipeline.visualization)
-
-            process_detection = pipeline.detection.process_detection
-            process_matching = pipeline.matching.process_matching
-            process_segmentation = pipeline.segmentation.process_segmentation
-            process_evaluation = pipeline.evaluation.process_evaluation
-            process_visualization = pipeline.visualization.process_visualization
-
             # Count input files for progress display
             if input_data_path.is_dir():
                 num_files = len(list(input_data_path.glob("*.csv"))) or len(list(input_data_path.glob("*.pkl")))
             else:
                 num_files = 1
 
-            # Define pipeline steps
+            # Define pipeline steps (same as test_single_house.py, with dynamic threshold)
             steps = [
                 ('Detection', lambda th=threshold: process_detection(
-                    house_id=house_id, run_number=0, threshold=th, config=exp_config)),
+                    house_id=house_id, run_number=run_number, threshold=th, config=exp_config)),
                 ('Matching', lambda th=threshold: process_matching(
-                    house_id=house_id, run_number=0, threshold=th)),
+                    house_id=house_id, run_number=run_number, threshold=th)),
                 ('Segmentation', lambda: process_segmentation(
-                    house_id=house_id, run_number=0, skip_large_file=True)),
+                    house_id=house_id, run_number=run_number, skip_large_file=True)),
                 ('Evaluation', lambda th=threshold: process_evaluation(
-                    house_id=house_id, run_number=0, threshold=th)),
+                    house_id=house_id, run_number=run_number, threshold=th)),
             ]
 
             if not skip_visualization:
                 steps.append(('Visualization', lambda th=threshold: process_visualization(
-                    house_id=house_id, run_number=0, threshold=th)))
+                    house_id=house_id, run_number=run_number, threshold=th)))
 
             output_dir = str(run_dir / f"house_{house_id}")
             os.makedirs(output_dir, exist_ok=True)
@@ -288,6 +237,7 @@ def run_dynamic_pipeline_for_house(
             logger.info(f"  Iteration {run_number} total: {total_time:.1f}s")
 
             iterations_completed += 1
+            completed_runs.append((run_number, threshold))
 
             # Check if current run produced summarized output
             current_summarized = run_dir / f"house_{house_id}" / "summarized"
@@ -302,6 +252,14 @@ def run_dynamic_pipeline_for_house(
             import traceback
             logger.error(traceback.format_exc())
             return {'success': False, 'iterations': iterations_completed, 'error': str(e)}
+
+    # Rename run directories: run_0 -> run_0_th2000, run_1 -> run_1_th1500, etc.
+    for run_num, th in completed_runs:
+        src = Path(output_path) / f"run_{run_num}"
+        dst = Path(output_path) / f"run_{run_num}_th{th}"
+        if src.exists() and not dst.exists():
+            src.rename(dst)
+            logger.info(f"Renamed {src.name} -> {dst.name}")
 
     # Generate activation list after all iterations
     try:
