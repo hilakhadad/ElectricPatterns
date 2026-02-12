@@ -50,8 +50,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
 
     matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
     if not matches_files:
-        logger.error(f"No matches files found in {matches_dir}")
-        return
+        logger.info(f"No matches files found - creating passthrough summaries")
 
     # Get list of data monthly files (handles both HouseholdData and summarized naming)
     data_path = Path(data_path)
@@ -88,6 +87,11 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
         # Load matches for this month
         events = pd.read_pickle(matches_file)
         if events.empty:
+            # No events matched: remaining = original (nothing to extract)
+            data = load_power_data(data_files[data_file_key])
+            data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+            if not data.empty:
+                _create_passthrough_summary(data, phases, summary_file, logger, month, year)
             continue
 
         # Load power data for this month
@@ -140,4 +144,34 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
         summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
         summary_df.to_pickle(summary_file)
 
+    # Create passthrough summaries for data months without matches files
+    # (remaining = input, nothing was extracted)
+    for data_key, data_file_path in data_files.items():
+        parts = data_key.split('_')
+        if len(parts) >= 3:
+            try:
+                month, year = int(parts[-2]), int(parts[-1])
+            except ValueError:
+                continue
+        else:
+            continue
+
+        summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
+        if summary_file.exists():
+            continue
+
+        data = load_power_data(data_file_path)
+        data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+        if not data.empty:
+            _create_passthrough_summary(data, phases, summary_file, logger, month, year)
+
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")
+
+
+def _create_passthrough_summary(data, phases, summary_file, logger, month, year):
+    """Create summarized file where remaining = original (no events to extract)."""
+    for phase in phases:
+        data[f'remaining_power_{phase}'] = data[phase]
+    summary_df = summarize_segmentation(data, phases)
+    summary_df.to_pickle(summary_file)
+    logger.info(f"Created passthrough summary for {month:02d}/{year} (no events to extract)")

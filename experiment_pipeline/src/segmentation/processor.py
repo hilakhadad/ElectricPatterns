@@ -33,7 +33,7 @@ def process_phase_segmentation(
 
     # Use existing diff column if present, otherwise create it
     if diff_col not in data.columns:
-        data[diff_col] = data[phase].diff()
+        data[diff_col] = data[phase].diff().fillna(0)
     data[remaining_col] = data[phase].values  # .values avoids SettingWithCopyWarning
 
     new_columns = {}
