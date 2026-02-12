@@ -52,9 +52,9 @@ def run_dynamic_pipeline_for_house(
     Each iteration uses a different threshold from the experiment's
     threshold_schedule. After matching, matches are classified as device types.
 
-    Uses standard run_0/, run_1/ naming during execution (compatible with
-    pipeline path system), then renames to run_0_th2000/, run_1_th1500/, etc.
-    after all iterations complete.
+    Uses standard run_0/, run_1/ naming (compatible with pipeline path system
+    and parallel batch execution). Threshold-to-run mapping is stored in
+    experiment_metadata.json.
 
     Args:
         house_id: House ID to process
@@ -154,8 +154,6 @@ def run_dynamic_pipeline_for_house(
     logger.info(f"Output path: {output_path}")
 
     iterations_completed = 0
-    # Track which run_number used which threshold (for renaming later)
-    completed_runs = []
 
     for run_number, threshold in enumerate(threshold_schedule):
         logger.info(f"\n{'#'*60}")
@@ -237,7 +235,6 @@ def run_dynamic_pipeline_for_house(
             logger.info(f"  Iteration {run_number} total: {total_time:.1f}s")
 
             iterations_completed += 1
-            completed_runs.append((run_number, threshold))
 
             # Check if current run produced summarized output
             current_summarized = run_dir / f"house_{house_id}" / "summarized"
@@ -252,14 +249,6 @@ def run_dynamic_pipeline_for_house(
             import traceback
             logger.error(traceback.format_exc())
             return {'success': False, 'iterations': iterations_completed, 'error': str(e)}
-
-    # Rename run directories: run_0 -> run_0_th2000, run_1 -> run_1_th1500, etc.
-    for run_num, th in completed_runs:
-        src = Path(output_path) / f"run_{run_num}"
-        dst = Path(output_path) / f"run_{run_num}_th{th}"
-        if src.exists() and not dst.exists():
-            src.rename(dst)
-            logger.info(f"Renamed {src.name} -> {dst.name}")
 
     # Generate activation list after all iterations
     try:
