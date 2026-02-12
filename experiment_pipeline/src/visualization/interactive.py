@@ -59,13 +59,16 @@ def plot_interactive(
                     x_max = max(x_max, valid.max())
     x_range = [x_min, x_max]
 
+    # Compute global Y range across all phases and all data columns
+    y_range = _calculate_y_range(df, phases, events)
+
     _add_data_traces(fig, df, phases)
     _add_legend_entries(fig, len(phases))
 
     if events is not None:
         _add_event_markers(fig, events, phases)
 
-    _configure_layout(fig, x_range=x_range)
+    _configure_layout(fig, x_range=x_range, y_range=y_range)
 
     title = create_title(df['timestamp'], phases, "interactive", house_id)
     filename = get_save_path(f'{title}.html', filepath)
@@ -113,6 +116,36 @@ def _add_legend_entries(fig: go.Figure, num_phases: int) -> None:
         xaxis99=dict(visible=False, overlaying='x'),
         yaxis99=dict(visible=False, overlaying='y')
     )
+
+
+def _calculate_y_range(df: pd.DataFrame, phases: List[str],
+                       events: Optional[pd.DataFrame] = None) -> list:
+    """Calculate global Y-axis range across all phases and data columns."""
+    import numpy as np
+    y_min, y_max = float('inf'), float('-inf')
+
+    for phase in phases:
+        for prefix in ['original_', 'remaining_', 'short_duration_', 'medium_duration_', 'long_duration_']:
+            col = f'{prefix}{phase}'
+            if col in df.columns:
+                col_data = df[col].dropna()
+                if len(col_data) > 0:
+                    y_min = min(y_min, col_data.min())
+                    y_max = max(y_max, col_data.max())
+
+    # Include event magnitudes
+    if events is not None:
+        for col in ['on_magnitude', 'off_magnitude', 'magnitude']:
+            if col in events.columns:
+                valid = events[col].dropna()
+                if len(valid) > 0:
+                    y_min = min(y_min, valid.min())
+                    y_max = max(y_max, valid.max())
+
+    if y_min == float('inf'):
+        return [0, 1]
+
+    return [y_min, y_max]
 
 
 def _add_data_traces(fig: go.Figure, df: pd.DataFrame, phases: List[str]) -> None:
@@ -204,8 +237,8 @@ def _get_event_color(event: pd.Series) -> str:
     return COLORS['unmatched_off']
 
 
-def _configure_layout(fig: go.Figure, x_range=None) -> None:
-    """Configure figure layout with identical X-axis range across all subplots."""
+def _configure_layout(fig: go.Figure, x_range=None, y_range=None) -> None:
+    """Configure figure layout with identical X and Y axis ranges across all subplots."""
     row_titles = ["Original Data", "After Segregation", "Segregation Data", "Event Markers"]
     for row_idx, title in enumerate(row_titles, start=1):
         fig.update_yaxes(title_text=title, row=row_idx, col=1)
@@ -219,3 +252,7 @@ def _configure_layout(fig: go.Figure, x_range=None) -> None:
     # Force identical X-axis range across all columns (phases)
     if x_range is not None:
         fig.update_xaxes(range=x_range)
+
+    # Force identical Y-axis range across all subplots
+    if y_range is not None:
+        fig.update_yaxes(range=y_range)
