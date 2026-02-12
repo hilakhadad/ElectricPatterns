@@ -213,13 +213,13 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
 
     return f"""
     <div class="table-legend" style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-size: 0.9em;">
-        <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100)</h4>
-        <div style="display: flex; flex-wrap: wrap; gap: 20px;">
-            <div><strong>Completeness (30 pts):</strong> % of expected data present</div>
-            <div><strong>Gap Quality (20 pts):</strong> Deductions for large gaps, high gap %, and scattered NaN values</div>
-            <div><strong>Phase Balance (15 pts):</strong> Balanced phases (ratio 1-2 = 15pts, 2-3 = 10pts, etc.)</div>
-            <div><strong>Monthly Balance (20 pts):</strong> Even coverage across all months</div>
-            <div><strong>Low Noise (15 pts):</strong> Reasonable variability (not too flat/noisy)</div>
+        <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100) &mdash; Optimized for Algorithm Performance</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;">
+            <div><span style="color:#e74c3c;">&#9632;</span> <strong>Event Detectability (35 pts):</strong> Density of power jumps &ge; 1300W per phase. More ON/OFF events the algorithm can detect = higher score.</div>
+            <div><span style="color:#f39c12;">&#9632;</span> <strong>Power Profile (20 pts):</strong> Penalizes houses stuck in 500-1000W (below detection threshold). Rewards clear low-power baseline where events stand out.</div>
+            <div><span style="color:#9b59b6;">&#9632;</span> <strong>Variability (20 pts):</strong> Coefficient of variation (CV) of total power. Higher CV = more device switching activity = better for the algorithm.</div>
+            <div><span style="color:#3498db;">&#9632;</span> <strong>Data Volume (15 pts):</strong> Days of data + monthly coverage balance. More data = more patterns to detect.</div>
+            <div><span style="color:#2ecc71;">&#9632;</span> <strong>Data Integrity (10 pts):</strong> NaN %, gap frequency, negative values. Basic data quality checks.</div>
         </div>
     </div>
     <div class="column-legend" style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
@@ -680,6 +680,10 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="metric-value">{coverage.get('duplicate_timestamps_count', 0):,}</div>
                         <div class="metric-label">Duplicate TS</div>
                     </div>
+                    <div class="metric">
+                        <div class="metric-value">{quality.get('total_threshold_jumps', 0):,}</div>
+                        <div class="metric-label">Jumps &ge; 1300W</div>
+                    </div>
                 </div>
             </div>
 
@@ -725,6 +729,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     </div>
                     <div class="chart-card">
                         {score_breakdown_chart}
+                        <div style="font-size: 0.82em; color: #555; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; margin-top: 4px; line-height: 1.5;">
+                            <strong>Score components explained:</strong><br>
+                            <span style="color:#e74c3c;">&#9632;</span> <strong>Event Detectability</strong> &mdash; How many power jumps &ge; 1300W exist per phase (more events = better for algorithm)<br>
+                            <span style="color:#f39c12;">&#9632;</span> <strong>Power Profile</strong> &mdash; Penalizes stuck 500-1000W range; rewards clear low-power baseline<br>
+                            <span style="color:#9b59b6;">&#9632;</span> <strong>Variability</strong> &mdash; CV of total power (higher = more device activity = better)<br>
+                            <span style="color:#3498db;">&#9632;</span> <strong>Data Volume</strong> &mdash; Days of data + monthly coverage balance<br>
+                            <span style="color:#2ecc71;">&#9632;</span> <strong>Data Integrity</strong> &mdash; NaN %, gap frequency, negative values
+                        </div>
                     </div>
                     <div class="chart-card chart-full-width">
                         {heatmap_chart}

@@ -116,67 +116,143 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['has_faulty_nan_phase'] = len(faulty_nan_phases) > 0
 
     # ===== QUALITY SCORING SYSTEM (0-100) =====
-    # Based on: Completeness, Gap Quality, Phase Balance, Monthly Balance, Noise Level
+    # Optimized based on correlation analysis with actual algorithm performance.
+    # Categories weighted by predictive power (Spearman rho with algo_overall_score):
+    #   1. Event Detectability (35 pts) - strongest predictor (rho 0.30-0.53)
+    #   2. Power Profile (20 pts) - mid-range avoidance (rho -0.43)
+    #   3. Variability (20 pts) - CV predicts success (rho +0.41)
+    #   4. Data Volume (15 pts) - days_span + monthly balance (rho +0.25)
+    #   5. Data Integrity (10 pts) - NaN, negatives, critical gaps
+
+    DETECTION_THRESHOLD = 1300  # algorithm's detection threshold in watts
 
     quality_score = 0
 
-    # ===== 1. DATA COMPLETENESS (up to 30 points) =====
-    coverage = metrics.get('coverage_ratio', 1.0)
-    completeness_score = coverage * 30
-    quality_score += completeness_score
-    metrics['completeness_score'] = completeness_score
+    # ===== 1. EVENT DETECTABILITY (up to 35 points) =====
+    # How many detectable events (jumps >= threshold) exist per phase.
+    # This is the single best predictor of algorithm success (rho up to +0.53).
+    event_detectability_score = 0
 
-    # ===== 2. GAP QUALITY (up to 20 points) =====
-    gap_score = 20
-
-    # Penalty for max gap > 60 min (up to 10 pts)
-    max_gap = max_gap_minutes if max_gap_minutes is not None else 0
-    if max_gap > 60:
-        gap_score -= min((max_gap - 60) / 138, 10)
-
-    # Penalty for high gap percentage (up to 10 pts)
-    gap_pct = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
-    if gap_pct > 2:
-        gap_score -= min((gap_pct - 2) / 1.8, 10)
-
-    # Penalty for NaN values within existing rows (up to 10 pts)
-    nan_pct = avg_nan_pct if avg_nan_pct is not None else 0
-    if nan_pct > 1:
-        gap_score -= min((nan_pct - 1) / 1.9, 10)
-
-    gap_score = max(0, gap_score)
-    quality_score += gap_score
-    metrics['gap_score'] = gap_score
-
-    # ===== 3. PHASE BALANCE (up to 15 points) =====
-    phase_means = []
+    phase_event_densities = []
+    phase_jumps_total = 0
     for col in phase_cols:
-        if col in data.columns:
-            phase_mean = data[col].mean()
-            if phase_mean > 0:  # Only include active phases
-                phase_means.append(phase_mean)
+        if col not in data.columns:
+            continue
+        phase_data = data[col].dropna()
+        if len(phase_data) < 2:
+            continue
+        diffs = phase_data.diff().dropna()
+        # Count jumps >= threshold (both ON and OFF)
+        jumps = int((diffs.abs() >= DETECTION_THRESHOLD).sum())
+        phase_jumps_total += jumps
+        # Event density: jumps per 10,000 minutes of data
+        density = jumps / (len(phase_data) / 10000) if len(phase_data) > 0 else 0
+        phase_event_densities.append(density)
 
-    if len(phase_means) >= 2 and min(phase_means) > 0:
-        balance_ratio = max(phase_means) / min(phase_means)
-
-        # Score based on ratio
-        if balance_ratio <= 2:
-            balance_score = 15  # Excellent
-        elif balance_ratio <= 3:
-            balance_score = 10  # Good
-        elif balance_ratio <= 5:
-            balance_score = 5   # Acceptable
+    if phase_event_densities:
+        avg_density = np.mean(phase_event_densities)
+        # Calibrated on 171 houses: p10=5, p25=20, p50=50, p75=95, p90=160
+        # Score: 0 density = 0 pts, density >= 120 = full 35 pts
+        if avg_density < 5:
+            event_detectability_score = avg_density / 5 * 5  # 0-5 pts
+        elif avg_density < 20:
+            event_detectability_score = 5 + (avg_density - 5) / 15 * 8  # 5-13 pts
+        elif avg_density < 50:
+            event_detectability_score = 13 + (avg_density - 20) / 30 * 9  # 13-22 pts
+        elif avg_density < 120:
+            event_detectability_score = 22 + (avg_density - 50) / 70 * 13  # 22-35 pts
         else:
-            balance_score = 0   # Poor
+            event_detectability_score = 35
+
+    quality_score += event_detectability_score
+    metrics['event_detectability_score'] = round(event_detectability_score, 1)
+    metrics['total_threshold_jumps'] = phase_jumps_total
+
+    # ===== 2. POWER PROFILE (up to 20 points) =====
+    # Penalize houses stuck in 500-1000W range (rho=-0.43 with overall_score).
+    # Reward houses with clear low-power baseline (< 500W) allowing sharp events.
+    power_profile_score = 20
+
+    phase_mid_shares = []
+    phase_low_shares = []
+    for col in phase_cols:
+        if col not in data.columns:
+            continue
+        phase_data = data[col].dropna()
+        if len(phase_data) == 0:
+            continue
+        total = len(phase_data)
+        mid_share = ((phase_data >= 500) & (phase_data < 1000)).sum() / total
+        low_share = (phase_data < 100).sum() / total
+        phase_mid_shares.append(mid_share)
+        phase_low_shares.append(low_share)
+
+    if phase_mid_shares:
+        avg_mid_share = np.mean(phase_mid_shares)
+        avg_low_share = np.mean(phase_low_shares)
+
+        # Penalty for high mid-range share (500-1000W)
+        # Calibrated: avg_mid_share p25=0.10, p50=0.16, p75=0.22
+        if avg_mid_share > 0.10:
+            power_profile_score -= min(15, (avg_mid_share - 0.10) / 0.25 * 15)
+
+        # Penalty for very little quiet time (< 500W)
+        if avg_low_share < 0.15:
+            power_profile_score -= min(5, (0.15 - avg_low_share) / 0.15 * 5)
+
+    power_profile_score = max(0, power_profile_score)
+    quality_score += power_profile_score
+    metrics['power_profile_score'] = round(power_profile_score, 1)
+
+    # ===== 3. VARIABILITY (up to 20 points) =====
+    # Higher CV = more device activity = better algorithm performance (rho=+0.41).
+    # This is the OPPOSITE of the old noise_score which penalized variability.
+    variability_score = 0
+
+    total_power = None
+    active_cols = [c for c in phase_cols if c in data.columns]
+    if active_cols:
+        total_power = data[active_cols].sum(axis=1)
+        total_mean = total_power.mean()
+        total_std = total_power.std()
+        total_cv = total_std / total_mean if total_mean > 0 else 0
+
+        # Calibrated on 171 houses: CV p10=0.98, p25=1.13, p50=1.40, p75=1.86, p90=2.65
+        # Higher CV = more device switching = better for algorithm
+        if total_cv < 0.8:
+            variability_score = total_cv / 0.8 * 4  # 0-4 pts
+        elif total_cv < 1.1:
+            variability_score = 4 + (total_cv - 0.8) / 0.3 * 4  # 4-8 pts
+        elif total_cv < 1.4:
+            variability_score = 8 + (total_cv - 1.1) / 0.3 * 4  # 8-12 pts
+        elif total_cv < 2.0:
+            variability_score = 12 + (total_cv - 1.4) / 0.6 * 5  # 12-17 pts
+        elif total_cv < 3.0:
+            variability_score = 17 + (total_cv - 2.0) / 1.0 * 3  # 17-20 pts
+        else:
+            variability_score = 20
+
+    quality_score += variability_score
+    metrics['variability_score'] = round(variability_score, 1)
+
+    # ===== 4. DATA VOLUME (up to 15 points) =====
+    # More days of data = better (rho=+0.25), plus monthly balance (rho=+0.14).
+    data_volume_score = 0
+
+    # Days span: 0-30 days = 0-3 pts, 30-180 = 3-7 pts, 180-365 = 7-10 pts, 365+ = 10 pts
+    days = days_span if days_span is not None else 0
+    if days >= 365:
+        days_score = 10
+    elif days >= 180:
+        days_score = 7 + (days - 180) / 185 * 3
+    elif days >= 30:
+        days_score = 3 + (days - 30) / 150 * 4
     else:
-        balance_score = 15  # Default for single phase or can't calculate
+        days_score = days / 30 * 3
+    data_volume_score += days_score
 
-    quality_score += balance_score
-    metrics['balance_score'] = balance_score
-
-    # ===== 4. MONTHLY COVERAGE BALANCE (up to 20 points) =====
-    monthly_balance_score = 20  # Start with max
-
+    # Monthly coverage balance (up to 5 pts)
+    monthly_balance_pts = 5
     if 'timestamp' in data.columns:
         data_temp = data.copy()
         data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
@@ -187,57 +263,54 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         if len(monthly_counts) > 1:
             monthly_coverage = []
             for period, count in monthly_counts.items():
-                expected = period.days_in_month * 24 * 60  # minutes in month
+                expected = period.days_in_month * 24 * 60
                 monthly_coverage.append(min(count / expected, 1.0))
 
             monthly_std = np.std(monthly_coverage)
-            monthly_balance_score = max(0, 20 * (1 - monthly_std * 2))
+            monthly_balance_pts = max(0, 5 * (1 - monthly_std * 2))
 
-    quality_score += monthly_balance_score
-    metrics['monthly_balance_score'] = monthly_balance_score
+    data_volume_score += monthly_balance_pts
+    data_volume_score = min(15, data_volume_score)
 
-    # ===== 5. LOW NOISE / STABILITY (up to 15 points) =====
-    noise_score = 15  # Start with max
+    quality_score += data_volume_score
+    metrics['data_volume_score'] = round(data_volume_score, 1)
+    metrics['monthly_balance_score'] = round(monthly_balance_pts, 1)
 
-    hourly_cvs = []
-    if 'timestamp' in data.columns:
-        data_temp = data.copy()
-        data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
-        data_temp['hour'] = data_temp['timestamp'].dt.hour
+    # ===== 5. DATA INTEGRITY (up to 10 points) =====
+    # Basic data quality: NaN, negative values, critical gaps.
+    # Low weight because gaps/coverage barely correlate with performance (rho<0.05).
+    integrity_score = 10
 
-        for col in phase_cols:
-            if col not in data.columns:
-                continue
+    # Penalty for NaN (up to 4 pts)
+    nan_pct = avg_nan_pct if avg_nan_pct is not None else 0
+    if nan_pct > 1:
+        integrity_score -= min(4, (nan_pct - 1) / 4 * 4)
 
-            # Calculate hourly mean and std
-            hourly_stats = data_temp.groupby('hour')[col].agg(['mean', 'std'])
-            hourly_mean = hourly_stats['mean'].mean()
-            hourly_std = hourly_stats['std'].mean()
+    # Penalty for many gaps > 2min (up to 3 pts)
+    gap_pct = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
+    if gap_pct > 5:
+        integrity_score -= min(3, (gap_pct - 5) / 10 * 3)
 
-            if hourly_mean > 0:
-                cv = hourly_std / hourly_mean
-                hourly_cvs.append(cv)
+    # Penalty for negative values (up to 3 pts)
+    total_negatives = sum(
+        metrics.get(f'{col}_negative_count', 0)
+        for col in phase_cols
+    )
+    if total_negatives > 100:
+        integrity_score -= min(3, (total_negatives - 100) / 500 * 3)
 
-    if hourly_cvs:
-        avg_cv = np.mean(hourly_cvs)
+    integrity_score = max(0, integrity_score)
+    quality_score += integrity_score
+    metrics['integrity_score'] = round(integrity_score, 1)
 
-        # Score based on CV (coefficient of variation)
-        if 0.3 <= avg_cv <= 0.8:
-            noise_score = 15
-        elif avg_cv < 0.3:
-            noise_score = 10
-        elif avg_cv <= 1.5:
-            noise_score = 10
-        elif avg_cv <= 2.0:
-            noise_score = 5
-        else:
-            noise_score = 0
-
-    quality_score += noise_score
-    metrics['noise_score'] = noise_score
+    # Keep old component names for backward compatibility in reports
+    metrics['completeness_score'] = round(data_volume_score, 1)
+    metrics['gap_score'] = round(integrity_score, 1)
+    metrics['balance_score'] = round(power_profile_score, 1)
+    metrics['noise_score'] = round(variability_score, 1)
 
     # Ensure bounds
-    metrics['quality_score'] = max(0, min(100, quality_score))
+    metrics['quality_score'] = max(0, min(100, round(quality_score, 1)))
 
     # Mark faulty phases via label (keep numeric score for sorting/comparison)
     if metrics['has_faulty_nan_phase']:

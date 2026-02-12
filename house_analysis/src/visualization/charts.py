@@ -786,7 +786,7 @@ def create_power_histogram(analysis: Dict[str, Any]) -> str:
 
 def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     """
-    Create a waterfall/bar chart showing quality score breakdown.
+    Create a bar chart showing quality score breakdown.
 
     Args:
         analysis: Single house analysis results
@@ -796,24 +796,48 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     """
     quality = analysis.get('data_quality', {})
 
-    # Get score components (new scoring system)
-    completeness_score = quality.get('completeness_score', 0)
-    gap_score = quality.get('gap_score', 0)
-    balance_score = quality.get('balance_score', 0)
-    monthly_balance_score = quality.get('monthly_balance_score', 0)
-    noise_score = quality.get('noise_score', 0)
+    # Get score components (optimized scoring system)
+    event_detect = quality.get('event_detectability_score', 0)
+    power_profile = quality.get('power_profile_score', quality.get('balance_score', 0))
+    variability = quality.get('variability_score', quality.get('noise_score', 0))
+    data_volume = quality.get('data_volume_score', quality.get('completeness_score', 0))
+    integrity = quality.get('integrity_score', quality.get('gap_score', 0))
     final_score = quality.get('quality_score', 0)
 
-    # Create waterfall chart
-    categories = ['Completeness<br>(max 30)', 'Gap Quality<br>(max 20)', 'Phase Balance<br>(max 15)',
-                  'Monthly Balance<br>(max 20)', 'Low Noise<br>(max 15)', 'Final<br>Score']
-    values = [completeness_score, gap_score, balance_score, monthly_balance_score, noise_score, final_score]
-    colors = ['#667eea', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c']
+    categories = [
+        'Event<br>Detectability<br>(max 35)',
+        'Power<br>Profile<br>(max 20)',
+        'Variability<br>(max 20)',
+        'Data<br>Volume<br>(max 15)',
+        'Data<br>Integrity<br>(max 10)',
+        'Final<br>Score',
+    ]
+    values = [event_detect, power_profile, variability, data_volume, integrity, final_score]
+    colors = ['#e74c3c', '#f39c12', '#9b59b6', '#3498db', '#2ecc71', '#1abc9c']
 
-    # Use bar chart with annotations
+    hover_texts = [
+        f'Event Detectability: {event_detect:.1f}/35<br>'
+        f'Density of power jumps >= 1300W per phase.<br>'
+        f'More detectable ON/OFF events = higher score.',
+        f'Power Profile: {power_profile:.1f}/20<br>'
+        f'Penalizes stuck 500-1000W range (below detection threshold).<br>'
+        f'Rewards clear low-power baseline for sharp event contrast.',
+        f'Variability: {variability:.1f}/20<br>'
+        f'Coefficient of Variation (CV) of total power.<br>'
+        f'Higher CV = more device activity = better for algorithm.',
+        f'Data Volume: {data_volume:.1f}/15<br>'
+        f'Days of data available + monthly coverage balance.<br>'
+        f'More data = more patterns to detect.',
+        f'Data Integrity: {integrity:.1f}/10<br>'
+        f'NaN percentage, gap frequency, negative values.<br>'
+        f'Basic data quality checks.',
+        f'Final Score: {final_score:.1f}/100<br>'
+        f'Sum of all components.',
+    ]
+
     fig = go.Figure()
 
-    # Show components as bars
+    # Component bars
     fig.add_trace(go.Bar(
         x=categories[:-1],
         y=values[:-1],
@@ -821,10 +845,11 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
         text=[f'{v:.1f}' for v in values[:-1]],
         textposition='outside',
         name='Components',
-        hovertemplate='%{x}<br>Points: %{y:.1f}<extra></extra>'
+        hovertext=hover_texts[:-1],
+        hoverinfo='text',
     ))
 
-    # Add final score as separate bar with different styling
+    # Final score bar
     fig.add_trace(go.Bar(
         x=[categories[-1]],
         y=[values[-1]],
@@ -832,13 +857,14 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
         text=[f'{final_score:.1f}'],
         textposition='outside',
         name='Final Score',
-        hovertemplate='%{x}<br>Score: %{y:.1f}<extra></extra>'
+        hovertext=[hover_texts[-1]],
+        hoverinfo='text',
     ))
 
     fig.update_layout(
         title='Quality Score Breakdown',
         yaxis_title='Points',
-        height=350,
+        height=380,
         showlegend=False,
         yaxis=dict(range=[0, max(values) + 10])
     )
