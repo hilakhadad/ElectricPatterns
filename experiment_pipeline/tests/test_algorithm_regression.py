@@ -553,7 +553,7 @@ class TestSegmentationProducesOutput:
         events = self._make_matches_df()
         phase = 'w1'
 
-        data, new_columns, _, skipped_ids = process_phase_segmentation(
+        data, new_columns, _, skipped_ids, _ = process_phase_segmentation(
             data, events, phase, test_logger
         )
 
@@ -571,7 +571,7 @@ class TestSegmentationProducesOutput:
         events = self._make_matches_df()
         phase = 'w1'
 
-        _, _, _, skipped_ids = process_phase_segmentation(
+        _, _, _, skipped_ids, _ = process_phase_segmentation(
             data, events, phase, test_logger
         )
 
@@ -586,7 +586,7 @@ class TestSegmentationProducesOutput:
         events = self._make_matches_df()
         phase = 'w1'
 
-        data, _, _, _ = process_phase_segmentation(
+        data, _, _, _, _ = process_phase_segmentation(
             data, events, phase, test_logger
         )
 
@@ -603,7 +603,7 @@ class TestSegmentationProducesOutput:
         events = self._make_matches_df()
         phase = 'w1'
 
-        data, new_columns, _, skipped_ids = process_phase_segmentation(
+        data, new_columns, _, skipped_ids, _ = process_phase_segmentation(
             data, events, phase, test_logger
         )
 

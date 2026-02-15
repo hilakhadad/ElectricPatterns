@@ -7,6 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 import os
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 import core
 from core import setup_logging, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
@@ -14,7 +15,12 @@ from segmentation import process_phase_segmentation, summarize_segmentation, log
 from segmentation.restore import restore_skipped_to_unmatched
 
 
-def process_segmentation(house_id: str, run_number: int, skip_large_file: bool = True) -> None:
+def process_segmentation(
+    house_id: str,
+    run_number: int,
+    skip_large_file: bool = True,
+    capture_device_profiles: bool = False
+) -> Optional[Dict[str, Any]]:
     """
     Process segmentation for a house - processes month by month.
 
@@ -22,9 +28,16 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
         house_id: House identifier
         run_number: Current run number
         skip_large_file: If True, skip writing the large segmented_{id}.csv file
+        capture_device_profiles: If True, capture per-device power profiles (default: False)
+
+    Returns:
+        Dict mapping on_event_id -> {timestamps, values} if capture_device_profiles=True, else None
     """
     logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Segmentation process for house {house_id}, run {run_number}")
+
+    # Initialize device profiles collection
+    all_device_profiles = {} if capture_device_profiles else None
 
     # Paths
     output_dir = f"{core.OUTPUT_BASE_PATH}/run_{run_number}/house_{house_id}"
@@ -106,9 +119,20 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
 
         # Process each phase
         for phase in phases:
-            data, new_cols, _, skipped_ids = process_phase_segmentation(data, events, phase, logger)
+            data, new_cols, _, skipped_ids, profiles = process_phase_segmentation(
+                data, events, phase, logger,
+                capture_device_profiles=capture_device_profiles
+            )
             all_new_columns.update(new_cols)
             all_skipped_ids.extend(skipped_ids)
+
+            # Collect device profiles
+            if capture_device_profiles and profiles:
+                for profile in profiles:
+                    all_device_profiles[profile['on_event_id']] = {
+                        'timestamps': profile['timestamps'],
+                        'values': profile['values']
+                    }
 
         # Update matches file: remove events that were skipped during segmentation
         # Bug #14 fix: restore skipped events to unmatched files so no events are lost
@@ -166,6 +190,7 @@ def process_segmentation(house_id: str, run_number: int, skip_large_file: bool =
             _create_passthrough_summary(data, phases, summary_file, logger, month, year)
 
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")
+    return all_device_profiles
 
 
 def _create_passthrough_summary(data, phases, summary_file, logger, month, year):

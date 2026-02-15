@@ -149,6 +149,53 @@ def _generate_dynamic_evaluation_summary(
         )
 
 
+def _cleanup_intermediate_files(
+    experiment_dir: Path,
+    house_id: str,
+    iterations_completed: int,
+    logger,
+) -> None:
+    """
+    Delete intermediate pkl files after unified JSON is built.
+
+    Deletes:
+    - on_off/, matches/, unmatched_on/, unmatched_off/, classification/ (all runs)
+    - summarized/ for intermediate runs (keep run_0 + last run)
+
+    Keeps:
+    - summarized/ for run_0 (baseline for evaluation) and last run (final remaining)
+    - evaluation CSV files, logs, device_activations JSON
+    """
+    import shutil
+
+    logger.info("Starting cleanup of intermediate files...")
+
+    for run_number in range(iterations_completed):
+        run_dir = experiment_dir / f"run_{run_number}"
+        if not run_dir.exists():
+            continue
+
+        house_dir = run_dir / f"house_{house_id}"
+        if not house_dir.exists():
+            continue
+
+        # Always delete event-level pkl directories
+        for subdir in ['on_off', 'matches', 'unmatched_on', 'unmatched_off', 'classification']:
+            dir_path = house_dir / subdir
+            if dir_path.exists():
+                shutil.rmtree(dir_path)
+                logger.info(f"  Deleted {dir_path.relative_to(experiment_dir)}")
+
+        # Delete intermediate summarized dirs (keep run_0 and last run)
+        if 0 < run_number < iterations_completed - 1:
+            summarized_dir = house_dir / "summarized"
+            if summarized_dir.exists():
+                shutil.rmtree(summarized_dir)
+                logger.info(f"  Deleted intermediate {summarized_dir.relative_to(experiment_dir)}")
+
+    logger.info("Cleanup completed")
+
+
 def run_dynamic_pipeline_for_house(
     house_id: str,
     experiment_name: str,
@@ -156,6 +203,7 @@ def run_dynamic_pipeline_for_house(
     input_path: str = None,
     quiet: bool = False,
     skip_visualization: bool = False,
+    minimal_output: bool = False,
 ) -> dict:
     """
     Run the full pipeline with dynamic thresholds for a single house.
@@ -174,6 +222,7 @@ def run_dynamic_pipeline_for_house(
         input_path: Path to input CSV files
         quiet: If True, suppress console output
         skip_visualization: If True, skip visualization step
+        minimal_output: If True, delete intermediate pkl files after building unified JSON
 
     Returns:
         dict with results: {'success': bool, 'iterations': int, 'error': str or None}
@@ -265,6 +314,7 @@ def run_dynamic_pipeline_for_house(
     logger.info(f"Output path: {output_path}")
 
     iterations_completed = 0
+    all_device_profiles = {}  # Collect profiles across all iterations
 
     for run_number, threshold in enumerate(threshold_schedule):
         logger.info(f"\n{'#'*60}")
@@ -298,26 +348,18 @@ def run_dynamic_pipeline_for_house(
             else:
                 num_files = 1
 
-            # Define pipeline steps (same as test_single_house.py, with dynamic threshold)
+            # Define pipeline steps (except Segmentation, which we call directly to capture profiles)
             steps = [
                 ('Detection', lambda th=threshold: process_detection(
                     house_id=house_id, run_number=run_number, threshold=th, config=exp_config)),
                 ('Matching', lambda th=threshold: process_matching(
                     house_id=house_id, run_number=run_number, threshold=th)),
-                ('Segmentation', lambda: process_segmentation(
-                    house_id=house_id, run_number=run_number, skip_large_file=True)),
-                ('Evaluation', lambda th=threshold: process_evaluation(
-                    house_id=house_id, run_number=run_number, threshold=th)),
             ]
-
-            if not skip_visualization:
-                steps.append(('Visualization', lambda th=threshold: process_visualization(
-                    house_id=house_id, run_number=run_number, threshold=th)))
 
             output_dir = str(run_dir / f"house_{house_id}")
             os.makedirs(output_dir, exist_ok=True)
 
-            # Run pipeline steps with progress bar
+            # Run detection and matching
             pbar = tqdm(
                 steps,
                 desc=f"House {house_id} iter {run_number} TH={threshold}W ({num_files} files)",
@@ -329,6 +371,38 @@ def run_dynamic_pipeline_for_house(
                 step_func()
                 step_times[step_name.lower()] = time.time() - t0
                 logger.info(f"  {step_name} took {step_times[step_name.lower()]:.1f}s")
+
+            # Run segmentation separately to capture device profiles
+            pbar.set_postfix_str('Segmentation')
+            t0 = time.time()
+            run_profiles = process_segmentation(
+                house_id=house_id,
+                run_number=run_number,
+                skip_large_file=True,
+                capture_device_profiles=True
+            )
+            step_times['segmentation'] = time.time() - t0
+            logger.info(f"  Segmentation took {step_times['segmentation']:.1f}s")
+            if run_profiles:
+                all_device_profiles[run_number] = run_profiles
+
+            # Run evaluation and optional visualization
+            eval_viz_steps = [
+                ('Evaluation', lambda th=threshold: process_evaluation(
+                    house_id=house_id, run_number=run_number, threshold=th)),
+            ]
+            if not skip_visualization:
+                eval_viz_steps.append(('Visualization', lambda th=threshold: process_visualization(
+                    house_id=house_id, run_number=run_number, threshold=th)))
+
+            for step_name, step_func in eval_viz_steps:
+                pbar.set_postfix_str(step_name)
+                t0 = time.time()
+                step_func()
+                step_times[step_name.lower()] = time.time() - t0
+                logger.info(f"  {step_name} took {step_times[step_name.lower()]:.1f}s")
+
+            pbar.close()
 
             # Classification step (after matching, before next iteration)
             t0 = time.time()
@@ -389,6 +463,31 @@ def run_dynamic_pipeline_for_house(
         import traceback
         logger.error(traceback.format_exc())
 
+    # Build unified device activations JSON
+    try:
+        from output.activation_builder import build_device_activations_json
+
+        json_path = build_device_activations_json(
+            experiment_dir=Path(output_path),
+            house_id=house_id,
+            threshold_schedule=threshold_schedule,
+            device_profiles=all_device_profiles,
+        )
+        logger.info(f"Device activations JSON saved to {json_path}")
+    except Exception as e:
+        logger.error(f"Error building device activations JSON: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+    # Optional cleanup of intermediate files
+    if minimal_output:
+        try:
+            _cleanup_intermediate_files(Path(output_path), house_id, iterations_completed, logger)
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     logger.info(f"\nDynamic threshold pipeline completed: {iterations_completed} iterations")
     return {'success': True, 'iterations': iterations_completed, 'error': None}
 
@@ -417,6 +516,8 @@ def main():
                         help="Suppress console output")
     parser.add_argument("--skip_visualization", action="store_true",
                         help="Skip visualization step (recommended for batch)")
+    parser.add_argument("--minimal_output", action="store_true",
+                        help="Delete intermediate pkl files after building unified JSON")
 
     args = parser.parse_args()
 
@@ -441,6 +542,7 @@ def main():
         output_path=output_path,
         quiet=args.quiet,
         skip_visualization=args.skip_visualization,
+        minimal_output=args.minimal_output,
     )
 
     if result['success']:

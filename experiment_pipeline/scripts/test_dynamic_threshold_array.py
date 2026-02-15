@@ -54,7 +54,7 @@ SKIP_VISUALIZATION = False
 
 def process_single_house(args):
     """Worker function for parallel processing."""
-    house_id, experiment_name, house_output, input_path, skip_visualization = args
+    house_id, experiment_name, house_output, input_path, skip_visualization, minimal_output = args
 
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from test_dynamic_threshold import run_dynamic_pipeline_for_house
@@ -66,6 +66,7 @@ def process_single_house(args):
         input_path=input_path,
         quiet=True,
         skip_visualization=skip_visualization,
+        minimal_output=minimal_output,
     )
 
     return {
@@ -84,9 +85,12 @@ def main():
     )
     parser.add_argument("--skip_visualization", action="store_true",
                         help="Skip visualization step (recommended for batch)")
+    parser.add_argument("--minimal_output", action="store_true",
+                        help="Delete intermediate pkl files after building unified JSON")
     args = parser.parse_args()
 
     skip_viz = args.skip_visualization or SKIP_VISUALIZATION
+    minimal_output = args.minimal_output
 
     start_time = time.time()
 
@@ -115,7 +119,7 @@ def main():
     # Prepare tasks
     input_path = str(_INPUT_PATH)
     tasks = [
-        (house_id, EXPERIMENT_NAME, shared_output_dir, input_path, skip_viz)
+        (house_id, EXPERIMENT_NAME, shared_output_dir, input_path, skip_viz, minimal_output)
         for house_id in HOUSE_IDS
     ]
 

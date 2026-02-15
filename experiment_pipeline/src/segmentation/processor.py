@@ -5,15 +5,16 @@ Extracts device power consumption from total power based on matched events.
 """
 import numpy as np
 import pandas as pd
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 def process_phase_segmentation(
     data: pd.DataFrame,
     events: pd.DataFrame,
     phase: str,
-    logger
-) -> Tuple[pd.DataFrame, dict, List, List]:
+    logger,
+    capture_device_profiles: bool = False
+) -> Tuple[pd.DataFrame, dict, List, List, Optional[List[dict]]]:
     """
     Process segmentation for a single phase.
 
@@ -22,9 +23,15 @@ def process_phase_segmentation(
         events: DataFrame with matched events (on_start, on_end, off_start, off_end, etc.)
         phase: Phase name (w1, w2, w3)
         logger: Logger instance
+        capture_device_profiles: If True, capture per-device power profiles (default: False)
 
     Returns:
-        Tuple of (updated_data, new_columns_dict, errors_list, skipped_event_ids)
+        Tuple of (updated_data, new_columns_dict, errors_list, skipped_event_ids, device_profiles)
+        device_profiles is a list of dicts with keys:
+            - on_event_id: str
+            - timestamps: List[Timestamp]
+            - values: List[float] (per-minute device power)
+        Only populated when capture_device_profiles=True; None otherwise.
     """
     unique_durations = np.sort(events[events['phase'] == phase]['duration'].unique())
 
@@ -39,6 +46,7 @@ def process_phase_segmentation(
     new_columns = {}
     errors_log = []
     skipped_event_ids = []
+    device_profiles = [] if capture_device_profiles else None
 
     for duration in unique_durations:
         duration = int(duration)
@@ -51,6 +59,15 @@ def process_phase_segmentation(
 
         # Use to_dict('records') instead of iterrows - 10-100x faster
         for event in phase_events.to_dict('records'):
+            # Capture device profile by snapshotting remaining before/after processing
+            if capture_device_profiles:
+                time_mask = (
+                    (data['timestamp'] >= event['on_start']) &
+                    (data['timestamp'] <= event.get('off_end', event.get('on_end')))
+                )
+                before_remaining = data.loc[time_mask, remaining_col].copy()
+                before_timestamps = data.loc[time_mask, 'timestamp'].copy()
+
             errors, was_skipped = _process_single_event(
                 data, event, phase, duration,
                 diff_col, remaining_col, event_power_values, logger
@@ -58,6 +75,16 @@ def process_phase_segmentation(
             errors_log.extend(errors)
             if was_skipped:
                 skipped_event_ids.append(event.get('on_event_id'))
+            elif capture_device_profiles:
+                # Calculate device power as difference between before/after remaining
+                after_remaining = data.loc[time_mask, remaining_col]
+                device_values = (before_remaining - after_remaining).clip(lower=0)
+
+                device_profiles.append({
+                    'on_event_id': event.get('on_event_id'),
+                    'timestamps': before_timestamps.tolist(),
+                    'values': device_values.tolist(),
+                })
 
         logger.info(f"Finished recording events with {duration} min duration for phase {phase}.")
         new_columns[event_power_col] = event_power_values
@@ -65,7 +92,7 @@ def process_phase_segmentation(
     # Don't drop diff column - it might be needed for other phases or validation
     # data.drop(columns=diff_col, inplace=True)
 
-    return data, new_columns, errors_log, skipped_event_ids
+    return data, new_columns, errors_log, skipped_event_ids, device_profiles
 
 
 def _process_single_event(
