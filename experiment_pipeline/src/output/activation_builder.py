@@ -89,6 +89,9 @@ def build_device_activations_json(
         except FileNotFoundError:
             logger.warning(f"No unmatched_off files for run {run_number}")
 
+    # Deduplicate activations (same event detected in multiple iterations)
+    activations = _deduplicate_activations(activations, logger)
+
     # Sort by start time (on_start for matched/unmatched_on, off_start for unmatched_off)
     activations.sort(key=lambda a: a.get('on_start') or a.get('off_start') or '9999-99-99')
 
@@ -253,6 +256,125 @@ def _json_serializer(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     return str(obj)
+
+
+def _deduplicate_activations(activations: List[dict], logger) -> List[dict]:
+    """
+    Remove duplicate events detected across multiple iterations.
+
+    An event is considered duplicate if it has:
+    - Same phase
+    - Same start time (within 2 minutes tolerance)
+    - Same magnitude (within 50W tolerance)
+
+    Deduplication rules:
+    1. If matched in ANY iteration → keep only the matched version from highest iteration
+    2. If unmatched in ALL iterations → keep only from highest iteration (lowest threshold)
+
+    Args:
+        activations: List of activation dicts
+        logger: Logger instance
+
+    Returns:
+        Deduplicated list of activations
+    """
+    if not activations:
+        return activations
+
+    # Group events by approximate (phase, timestamp, magnitude)
+    # Use tolerance for timestamp (2 min) and magnitude (50W)
+    TIME_TOLERANCE_MINUTES = 2
+    MAGNITUDE_TOLERANCE = 50
+
+    groups = {}
+
+    for act in activations:
+        # Determine primary timestamp and magnitude for grouping
+        if act['on_start'] is not None:
+            primary_time = pd.Timestamp(act['on_start'])
+            primary_mag = abs(act['on_magnitude']) if act['on_magnitude'] is not None else 0
+        else:
+            primary_time = pd.Timestamp(act['off_start']) if act['off_start'] else None
+            primary_mag = abs(act['off_magnitude']) if act['off_magnitude'] is not None else 0
+
+        if primary_time is None:
+            # Can't group without timestamp - keep as is
+            groups[id(act)] = [act]
+            continue
+
+        phase = act['phase']
+
+        # Find matching group (same phase, similar time and magnitude)
+        matched_group = None
+        for group_key, group_acts in groups.items():
+            if not isinstance(group_key, tuple):
+                continue
+
+            ref_act = group_acts[0]
+
+            # Get reference timestamp and magnitude
+            if ref_act['on_start'] is not None:
+                ref_time = pd.Timestamp(ref_act['on_start'])
+                ref_mag = abs(ref_act['on_magnitude']) if ref_act['on_magnitude'] is not None else 0
+            else:
+                ref_time = pd.Timestamp(ref_act['off_start']) if ref_act['off_start'] else None
+                ref_mag = abs(ref_act['off_magnitude']) if ref_act['off_magnitude'] is not None else 0
+
+            if ref_time is None or ref_act['phase'] != phase:
+                continue
+
+            # Check if similar
+            time_diff = abs((primary_time - ref_time).total_seconds() / 60)  # minutes
+            mag_diff = abs(primary_mag - ref_mag)
+
+            if time_diff <= TIME_TOLERANCE_MINUTES and mag_diff <= MAGNITUDE_TOLERANCE:
+                matched_group = group_key
+                break
+
+        # Add to matched group or create new group
+        if matched_group:
+            groups[matched_group].append(act)
+        else:
+            # Create new group with unique key
+            group_key = (phase, primary_time, primary_mag)
+            groups[group_key] = [act]
+
+    # Deduplicate each group
+    deduplicated = []
+    duplicate_count = 0
+
+    for group_key, group_acts in groups.items():
+        if len(group_acts) == 1:
+            deduplicated.append(group_acts[0])
+        else:
+            # Multiple events in group - need to deduplicate
+            duplicate_count += len(group_acts) - 1
+
+            # Separate matched and unmatched
+            matched = [a for a in group_acts if a['match_type'] == 'matched']
+            unmatched = [a for a in group_acts if a['match_type'] != 'matched']
+
+            if matched:
+                # Keep matched from highest iteration (most accurate threshold)
+                best = max(matched, key=lambda x: x['iteration'])
+                deduplicated.append(best)
+                logger.debug(
+                    f"Dedup: kept matched from iteration {best['iteration']} "
+                    f"(phase={best['phase']}, start={best.get('on_start') or best.get('off_start')})"
+                )
+            elif unmatched:
+                # All unmatched - keep from highest iteration (lowest threshold, best chance to find match)
+                best = max(unmatched, key=lambda x: x['iteration'])
+                deduplicated.append(best)
+                logger.debug(
+                    f"Dedup: kept unmatched from iteration {best['iteration']} "
+                    f"(phase={best['phase']}, start={best.get('on_start') or best.get('off_start')})"
+                )
+
+    if duplicate_count > 0:
+        logger.info(f"Removed {duplicate_count} duplicate activations (kept {len(deduplicated)} unique)")
+
+    return deduplicated
 
 
 def _load_classification_files(
