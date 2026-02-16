@@ -13,10 +13,11 @@ Usage:
     python run_dynamic_report.py                              # Latest exp010 experiment
     python run_dynamic_report.py --experiment <path>          # Specific experiment directory
     python run_dynamic_report.py --houses 305,1234            # Specific houses only
+    python run_dynamic_report.py --pre-analysis <path>        # Specify house_analysis output
 
 Examples:
     python run_dynamic_report.py --experiment ../experiment_pipeline/OUTPUT/experiments/exp010_dynamic_threshold_20260215
-    python run_dynamic_report.py --experiment ../experiment_pipeline/OUTPUT/experiments/exp010_dynamic_threshold_20260215 --houses 305
+    python run_dynamic_report.py --houses 305
 """
 import sys
 import os
@@ -40,6 +41,7 @@ from visualization.dynamic_html_report import (
     generate_dynamic_house_report,
     generate_dynamic_aggregate_report,
 )
+from reports.aggregate_report import load_pre_analysis_scores
 
 # Output base: experiment_analysis/OUTPUT/
 _ANALYSIS_OUTPUT_DIR = script_dir.parent / "OUTPUT"
@@ -63,6 +65,23 @@ def find_latest_dynamic_experiment() -> Path:
         return None
 
     return max(exp010_dirs, key=lambda d: d.stat().st_mtime)
+
+
+def find_latest_house_analysis() -> Path:
+    """Auto-detect latest house_analysis output directory."""
+    project_root = script_dir.parent.parent
+    house_analysis_output = project_root / "house_analysis" / "OUTPUT"
+
+    if not house_analysis_output.exists():
+        return None
+
+    run_dirs = sorted(
+        [d for d in house_analysis_output.iterdir()
+         if d.is_dir() and d.name.startswith("run_")],
+        key=lambda x: x.stat().st_mtime,
+        reverse=True,
+    )
+    return run_dirs[0] if run_dirs else None
 
 
 def discover_houses(experiment_dir: Path) -> list:
@@ -96,6 +115,11 @@ def main():
         "--houses", type=str, default=None,
         help="Comma-separated house IDs (default: all houses)"
     )
+    parser.add_argument(
+        "--pre-analysis", type=str, default=None,
+        dest="pre_analysis",
+        help="Path to house_analysis output (default: auto-detect)"
+    )
     args = parser.parse_args()
 
     # Find experiment directory
@@ -121,7 +145,24 @@ def main():
         print("ERROR: No houses found in experiment directory.")
         sys.exit(1)
 
-    print(f"Houses to analyze: {', '.join(house_ids)}")
+    print(f"Houses to analyze: {', '.join(house_ids)}", flush=True)
+
+    # Load pre-analysis quality scores
+    pre_analysis_scores = {}
+    if args.pre_analysis:
+        pre_analysis_path = Path(args.pre_analysis).resolve()
+    else:
+        pre_analysis_path = find_latest_house_analysis()
+        if pre_analysis_path:
+            print(f"Auto-detected house_analysis output: {pre_analysis_path.name}", flush=True)
+
+    if pre_analysis_path and pre_analysis_path.exists():
+        pre_analysis_scores = load_pre_analysis_scores(pre_analysis_path)
+    elif pre_analysis_path:
+        print(f"Warning: Pre-analysis path not found: {pre_analysis_path}", flush=True)
+
+    if pre_analysis_scores:
+        print(f"Pre-analysis scores loaded: {len(pre_analysis_scores)} houses", flush=True)
     print(flush=True)
 
     # Output directory: experiment_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
@@ -153,7 +194,8 @@ def main():
                 print(f"  [{successful+failed+1}/{len(house_ids)}] house {house_id}...", end=" ", flush=True)
 
             generate_dynamic_house_report(
-                str(experiment_dir), house_id, out_path
+                str(experiment_dir), house_id, out_path,
+                pre_quality=pre_analysis_scores.get(house_id),
             )
 
             successful += 1
@@ -185,7 +227,9 @@ def main():
             print("Generating aggregate report...", flush=True)
             agg_start = time.time()
             generate_dynamic_aggregate_report(
-                str(experiment_dir), house_ids, agg_path
+                str(experiment_dir), house_ids, agg_path,
+                pre_analysis_scores=pre_analysis_scores,
+                house_reports_subdir="house_reports",
             )
             print(f"Aggregate report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

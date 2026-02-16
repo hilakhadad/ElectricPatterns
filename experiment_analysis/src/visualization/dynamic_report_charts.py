@@ -1,7 +1,7 @@
 """
 Chart generation for dynamic threshold experiment reports.
 
-Creates 6 visualization sections, each returning an HTML string
+Creates visualization sections, each returning an HTML string
 with embedded Plotly charts or pure HTML/CSS.
 
 Color scheme (no red):
@@ -11,7 +11,8 @@ Color scheme (no red):
   Yellow = #ffc107 (medium efficiency)
 """
 import json
-from typing import Dict, Any, List
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 # Color constants
 GREEN = '#28a745'
@@ -50,24 +51,24 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
 
     return f'''
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 25px;">
-        <div style="background: {LIGHT_GREEN}; border-left: 5px solid {GREEN}; border-radius: 10px; padding: 25px; text-align: center;">
+        <div style="background: {LIGHT_GREEN}; border-left: 5px solid {GREEN}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Power attributed to detected ON/OFF device activations across all phases and iterations">
             <div style="font-size: 2.8em; font-weight: bold; color: {GREEN};">{explained_pct:.1f}%</div>
             <div style="font-size: 1.1em; color: #155724; font-weight: 600; margin-top: 5px;">Explained</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{explained_kwh} kWh</div>
         </div>
-        <div style="background: {LIGHT_GRAY}; border-left: 5px solid {GRAY}; border-radius: 10px; padding: 25px; text-align: center;">
+        <div style="background: {LIGHT_GRAY}; border-left: 5px solid {GRAY}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Baseline power (5th percentile) - always-on devices like fridge, standby, router, etc.">
             <div style="font-size: 2.8em; font-weight: bold; color: {GRAY};">{background_pct:.1f}%</div>
             <div style="font-size: 1.1em; color: #495057; font-weight: 600; margin-top: 5px;">Background</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{background_kwh} kWh</div>
         </div>
-        <div style="background: {LIGHT_ORANGE}; border-left: 5px solid {ORANGE}; border-radius: 10px; padding: 25px; text-align: center;">
+        <div style="background: {LIGHT_ORANGE}; border-left: 5px solid {ORANGE}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Remaining power above background - potential undetected devices or events below threshold">
             <div style="font-size: 2.8em; font-weight: bold; color: {ORANGE};">{improvable_pct:.1f}%</div>
             <div style="font-size: 1.1em; color: #856404; font-weight: 600; margin-top: 5px;">Improvable</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{improvable_kwh} kWh</div>
         </div>
     </div>
     <div style="text-align: center; margin-bottom: 15px;">
-        <span style="font-size: 1.1em; color: #444;">
+        <span style="font-size: 1.1em; color: #444;" title="Explained / (Total - Background) - how well the algorithm detects non-background devices" style="cursor: help;">
             Detection Efficiency:
             <span style="font-weight: bold; color: {eff_color}; font-size: 1.3em;">{efficiency:.1f}%</span>
         </span>
@@ -415,11 +416,11 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
         <thead>
             <tr style="background: #2d3748; color: white;">
-                <th style="padding: 12px 15px; text-align: left;">Device Type</th>
-                <th style="padding: 12px 15px; text-align: center;">Count</th>
-                <th style="padding: 12px 15px; text-align: center;">Avg Power</th>
-                <th style="padding: 12px 15px; text-align: center;">Avg Duration</th>
-                <th style="padding: 12px 15px; text-align: left;">% of Explained Energy</th>
+                <th style="padding: 12px 15px; text-align: left;" title="Classified device type based on power, duration, and phase patterns">Device Type</th>
+                <th style="padding: 12px 15px; text-align: center;" title="Number of matched ON/OFF activation pairs">Count</th>
+                <th style="padding: 12px 15px; text-align: center;" title="Average ON magnitude across all activations of this type">Avg Power</th>
+                <th style="padding: 12px 15px; text-align: center;" title="Average total duration from ON start to OFF end">Avg Duration</th>
+                <th style="padding: 12px 15px; text-align: left;" title="This device type's energy share of all explained energy (magnitude x duration)">% of Explained Energy</th>
             </tr>
         </thead>
         <tbody>
@@ -430,3 +431,155 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
         Total: {total_matched} matched activations, {total_unmatched} unmatched events
     </div>
     '''
+
+
+def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
+    """
+    Create detailed device activations tables with dates and time ranges.
+
+    Groups matched activations by device_type, showing individual events
+    with date, start time, end time, duration, and power.
+    Includes a copyable dates section per device type.
+
+    Args:
+        activations: List of activation dicts from device_activations JSON
+
+    Returns:
+        HTML string with collapsible tables per device type
+    """
+    if not activations:
+        return '<p style="color: #888;">No device activations data available.</p>'
+
+    matched = [a for a in activations if a.get('match_type') == 'matched']
+    if not matched:
+        return '<p style="color: #888;">No matched device activations found.</p>'
+
+    # Group by device_type
+    device_groups = {}
+    for act in matched:
+        dtype = act.get('device_type') or 'unclassified'
+        if dtype not in device_groups:
+            device_groups[dtype] = []
+        device_groups[dtype].append(act)
+
+    display_names = {
+        'boiler': 'Water Heater (Boiler)',
+        'central_ac': 'Central AC (Multi-phase)',
+        'regular_ac': 'Regular AC (Single-phase)',
+        'unclassified': 'Unclassified Devices',
+    }
+
+    display_order = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
+
+    sections_html = ''
+    section_idx = 0
+
+    for dtype in display_order:
+        events = device_groups.get(dtype)
+        if not events:
+            continue
+
+        # Sort by on_start
+        events.sort(key=lambda a: a.get('on_start') or '')
+
+        name = display_names.get(dtype, dtype)
+        count = len(events)
+        section_id = f'device-detail-{section_idx}'
+        section_idx += 1
+
+        # Build rows and copyable dates
+        rows = ''
+        copyable_dates = []
+
+        for i, act in enumerate(events, 1):
+            on_start_raw = act.get('on_start')
+            off_end_raw = act.get('off_end') or act.get('off_start')
+
+            # Parse timestamps
+            date_str = ''
+            on_time_str = ''
+            off_time_str = ''
+
+            if on_start_raw:
+                try:
+                    on_dt = datetime.fromisoformat(str(on_start_raw))
+                    date_str = on_dt.strftime('%Y-%m-%d')
+                    on_time_str = on_dt.strftime('%H:%M')
+                except (ValueError, TypeError):
+                    date_str = str(on_start_raw)[:10]
+                    on_time_str = str(on_start_raw)[11:16] if len(str(on_start_raw)) > 16 else ''
+
+            if off_end_raw:
+                try:
+                    off_dt = datetime.fromisoformat(str(off_end_raw))
+                    off_time_str = off_dt.strftime('%H:%M')
+                except (ValueError, TypeError):
+                    off_time_str = str(off_end_raw)[11:16] if len(str(off_end_raw)) > 16 else ''
+
+            duration = act.get('duration', 0) or 0
+            if duration >= 60:
+                dur_str = f'{duration / 60:.1f} hr'
+            else:
+                dur_str = f'{duration:.0f} min'
+
+            magnitude = abs(act.get('on_magnitude', 0) or 0)
+            phase = act.get('phase', '')
+            tag = act.get('tag', '')
+            threshold = act.get('threshold', '')
+
+            if date_str and on_time_str:
+                copyable_dates.append(f"{date_str} {on_time_str}-{off_time_str}")
+
+            rows += f'''
+            <tr>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center; color: #888;">{i}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{date_str}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{on_time_str}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{off_time_str}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{dur_str}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: right;">{magnitude:,.0f}W</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{phase}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 0.85em; color: #888;">{tag}</td>
+            </tr>'''
+
+        copyable_text = ', '.join(copyable_dates)
+
+        sections_html += f'''
+        <div style="margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; cursor: pointer;"
+                 onclick="var tbl=document.getElementById('{section_id}'); tbl.style.display = tbl.style.display==='none' ? 'block' : 'none'; var arrow=this.querySelector('.toggle-arrow'); arrow.textContent = tbl.style.display==='none' ? '\\u25B6' : '\\u25BC';">
+                <span class="toggle-arrow" style="font-size: 0.9em;">&#x25BC;</span>
+                <h3 style="margin: 0; color: #2d3748;">{name}</h3>
+                <span style="background: #667eea; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.85em;">{count}</span>
+            </div>
+            <div id="{section_id}">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 8px 12px; text-align: center; width: 40px;">#</th>
+                            <th style="padding: 8px 12px; text-align: left;" title="Date of activation">Date</th>
+                            <th style="padding: 8px 12px; text-align: center;" title="Time when device turned ON">Start</th>
+                            <th style="padding: 8px 12px; text-align: center;" title="Time when device turned OFF">End</th>
+                            <th style="padding: 8px 12px; text-align: center;" title="Total duration from ON to OFF">Duration</th>
+                            <th style="padding: 8px 12px; text-align: right;" title="ON event magnitude (watts)">Power</th>
+                            <th style="padding: 8px 12px; text-align: center;" title="Phase (w1, w2, w3)">Phase</th>
+                            <th style="padding: 8px 12px; text-align: left;" title="Match quality tag: magnitude accuracy + duration category">Tag</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows}
+                    </tbody>
+                </table>
+                <div style="margin-top: 8px;">
+                    <button onclick="var ta=document.getElementById('{section_id}-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
+                            style="padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.85em;">
+                        Copy Dates ({count})
+                    </button>
+                    <textarea id="{section_id}-dates" readonly
+                              style="display: none; width: 100%; margin-top: 5px; padding: 8px; font-size: 0.85em; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; resize: vertical; min-height: 60px;"
+                              onclick="this.select();">{copyable_text}</textarea>
+                </div>
+            </div>
+        </div>'''
+
+    return sections_html
