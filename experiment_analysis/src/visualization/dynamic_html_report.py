@@ -4,7 +4,7 @@ HTML report generator for dynamic threshold experiments.
 Generates stand-alone HTML reports per house and aggregate reports.
 Follows the same patterns as html_report.py (inline CSS, Plotly CDN).
 
-Color scheme: Green (explained), Gray (background), Orange (improvable).
+Color scheme: Green (explained), Gray (background), Orange (unmatched).
 No red - avoids false impression of failure.
 """
 import os
@@ -344,7 +344,7 @@ def _build_house_html(
             <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
                 Israeli households use a 3-phase electrical system (w1, w2, w3).
                 Each phase carries part of the total power. The chart below shows how each phase's
-                power is distributed between Explained, Background, and Improvable.
+                power is distributed between Explained, Background, and Unmatched.
             </p>
             {breakdown_html}
             {phase_detail}
@@ -434,7 +434,7 @@ def _build_phase_detail_table(phases: Dict[str, Dict]) -> str:
                 <th style="padding: 10px 15px; text-align: right;" title="Total original power consumption">Total</th>
                 <th style="padding: 10px 15px; text-align: right; color: #28a745;" title="Power attributed to detected device activations">Explained</th>
                 <th style="padding: 10px 15px; text-align: right; color: #6c757d;" title="Baseline power (5th percentile) - always-on devices like fridge, standby">Background</th>
-                <th style="padding: 10px 15px; text-align: right; color: #fd7e14;" title="Remaining power above background - potential undetected devices">Improvable</th>
+                <th style="padding: 10px 15px; text-align: right; color: #fd7e14;" title="Power above background not matched to any device — includes sub-threshold events, complex-pattern appliances, and noise">Unmatched</th>
                 <th style="padding: 10px 15px; text-align: right;" title="Explained / (Total - Background) - how well we detect non-background devices">Efficiency</th>
             </tr>
         </thead>
@@ -678,9 +678,9 @@ def _build_aggregate_html(
                     <div class="summary-number" style="color: #6c757d;">{avg_background:.1f}%</div>
                     <div class="summary-label">Avg Background</div>
                 </div>
-                <div class="summary-card" title="Average remaining power above background that could potentially be detected with algorithm improvements">
+                <div class="summary-card" title="Average power above background not matched to any device — includes sub-threshold events, complex-pattern appliances, and noise">
                     <div class="summary-number" style="color: #fd7e14;">{avg_improvable:.1f}%</div>
-                    <div class="summary-label">Avg Improvable</div>
+                    <div class="summary-label">Avg Unmatched</div>
                 </div>
                 <div class="summary-card" title="Explained / (Total - Background) - measures how well the algorithm detects non-background device activations">
                     <div class="summary-number" style="color: #667eea;">{avg_eff:.1f}%</div>
@@ -708,7 +708,7 @@ def _build_aggregate_html(
                         <th onclick="sortTable(2, 'num')" style="text-align: right;" title="Total original power consumption across all phases">Total <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(3, 'num')" style="text-align: right;" title="% of total power attributed to detected ON/OFF device activations">Explained <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(4, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of power above background not yet explained - potential for improvement">Improvable <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of power above background not matched — includes sub-threshold events, complex-pattern appliances, and noise">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(6, 'num')" style="text-align: right;" title="Explained / (Total - Background) - detection rate excluding always-on baseline">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                     </tr>
                 </thead>

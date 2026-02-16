@@ -7,7 +7,7 @@ with embedded Plotly charts or pure HTML/CSS.
 Color scheme (no red):
   Green  = #28a745 (explained / success)
   Gray   = #6c757d (background / baseload)
-  Orange = #fd7e14 (improvable / attention)
+  Orange = #fd7e14 (unmatched / attention)
   Yellow = #ffc107 (medium efficiency)
 """
 import json
@@ -94,22 +94,28 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     not_explained_pct = 100 - explained_pct
     targetable_pct = 100 - background_pct
 
+    min_threshold = metrics.get('threshold_schedule', [800])[-1]
+
     return f'''
     <p style="color: #555; margin-bottom: 20px; line-height: 1.7; font-size: 0.95em;">
-        The total electricity consumption of this household is broken down into three parts:
-        power that was <strong>explained</strong> (attributed to specific device activations),
-        <strong>background</strong> (constant baseload from always-on appliances),
-        and <strong>improvable</strong> (remaining unexplained power above the baseline).
-        Together they sum to 100% of the total consumption ({total_kwh} kWh).
+        The total electricity consumption of this household ({total_kwh} kWh) is broken down into three parts:
+        <strong>Explained</strong> &mdash; power attributed to specific device activations that the algorithm detected
+        (e.g. boilers, air conditioners);
+        <strong>Background</strong> &mdash; constant baseload from always-on appliances;
+        and <strong>Unmatched</strong> &mdash; the remaining power above the baseline that was not matched to any device.
+        Together these three parts always sum to 100%.
     </p>
 
     <div style="background: {eff_bg}; border: 3px solid {eff_border}; border-radius: 14px; padding: 25px 30px; text-align: center; margin-bottom: 25px;">
         <div style="font-size: 3.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
         <div style="font-size: 1.2em; font-weight: 700; color: #333; margin-top: 5px;">Detection Efficiency</div>
-        <div style="font-size: 0.9em; color: #555; margin-top: 8px; max-width: 700px; margin-left: auto; margin-right: auto; line-height: 1.6;">
-            Out of all power that <em>could</em> be attributed to devices ({targetable_pct:.1f}% of total, excluding background),
-            the algorithm successfully identified <strong>{efficiency:.1f}%</strong>.
-            The remaining <strong>{100 - efficiency:.1f}%</strong> of targetable power was not matched to any device.
+        <div style="font-size: 0.9em; color: #555; margin-top: 8px; max-width: 750px; margin-left: auto; margin-right: auto; line-height: 1.6;">
+            Of the total power that is <em>not</em> background ({targetable_pct:.1f}% of total),
+            the algorithm successfully attributed <strong>{efficiency:.1f}%</strong> to specific device events.
+            The remaining <strong>{100 - efficiency:.1f}%</strong> was not matched &mdash;
+            this includes both devices that could potentially be detected with lower thresholds,
+            and complex-pattern appliances (ovens, washing machines, dishwashers) whose variable
+            power profiles are not targeted by the current algorithm.
         </div>
     </div>
 
@@ -119,8 +125,9 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             <div style="font-size: 1em; color: {exp_label_color}; font-weight: 600; margin-top: 5px;">Explained</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{explained_kwh} kWh</div>
             <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Power successfully matched to detected device ON/OFF events
-                (boilers, ACs, etc.). The other <strong>{not_explained_pct:.1f}%</strong>
+                Power successfully matched to detected ON&rarr;OFF device events
+                (boilers, air conditioners, and other high-power appliances with clear
+                on/off signatures). The other <strong>{not_explained_pct:.1f}%</strong>
                 is either background or unmatched.
             </div>
         </div>
@@ -129,19 +136,22 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             <div style="font-size: 1em; color: {bg_label_color}; font-weight: 600; margin-top: 5px;">Background</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{background_kwh} kWh</div>
             <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Constant baseload: always-on appliances (fridge, router, standby).
+                Constant baseload: always-on appliances (fridge, router, standby devices).
                 Estimated as the 5th percentile of power (~{avg_bg_watts}W avg per phase).
-                This power is <strong>not targetable</strong> for device detection.
+                This power is <strong>not targetable</strong> for event-based detection.
             </div>
         </div>
         <div style="background: {imp_bg}; border-left: 5px solid {imp_border}; border-radius: 10px; padding: 20px; text-align: center;">
             <div style="font-size: 2.2em; font-weight: bold; color: {imp_color};">{improvable_pct:.1f}%</div>
-            <div style="font-size: 1em; color: {imp_label_color}; font-weight: 600; margin-top: 5px;">Improvable</div>
+            <div style="font-size: 1em; color: {imp_label_color}; font-weight: 600; margin-top: 5px;">Unmatched</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{improvable_kwh} kWh</div>
             <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Power above background that was <strong>not</strong> matched to any device.
-                May contain undetected devices, events below the {metrics.get('threshold_schedule', [800])[-1]}W
-                threshold, or irregular consumption patterns.
+                Power above background not matched to any device. This includes:
+                events below the {min_threshold}W detection threshold,
+                complex-pattern appliances (ovens, washing machines, dishwashers)
+                whose variable power profiles are not targeted by the algorithm,
+                and irregular or noisy consumption.
+                <strong>Not all of this is necessarily "improvable".</strong>
             </div>
         </div>
     </div>
@@ -150,7 +160,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         <strong>Equation:</strong>
         <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
         <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
-        <span style="color:{imp_color};">Improvable ({improvable_pct:.1f}%)</span>
+        <span style="color:{imp_color};">Unmatched ({improvable_pct:.1f}%)</span>
         = 100% of Total ({total_kwh} kWh)
         &nbsp;&nbsp;|&nbsp;&nbsp;
         <strong>Efficiency</strong> = Explained / (Total &minus; Background) =
@@ -163,7 +173,7 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     """
     Create stacked horizontal bar chart showing power decomposition per phase.
 
-    Each phase gets one bar: [Explained (green) | Background (gray) | Improvable (orange)]
+    Each phase gets one bar: [Explained (green) | Background (gray) | Unmatched (orange)]
     """
     phases = metrics.get('phases', {})
     chart_id = 'power-breakdown-chart'
@@ -220,7 +230,7 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     trace_improvable = {
         'y': phase_labels,
         'x': improvable_vals,
-        'name': 'Improvable',
+        'name': 'Unmatched',
         'type': 'bar',
         'orientation': 'h',
         'marker': {'color': ORANGE},

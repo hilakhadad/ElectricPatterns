@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 _SCRIPT_DIR = Path(__file__).parent.parent.absolute()
 
-DEFAULT_HOUSE_ID = "305"
+DEFAULT_HOUSE_ID = "264"
 
 
 def main():
