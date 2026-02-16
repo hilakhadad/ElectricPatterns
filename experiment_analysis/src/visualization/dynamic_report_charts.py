@@ -49,32 +49,39 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     else:
         eff_color = ORANGE
 
+    # Efficiency background color (lighter tint)
+    if efficiency >= 70:
+        eff_bg = '#e8f5e9'
+        eff_border = GREEN
+    elif efficiency >= 50:
+        eff_bg = '#fff8e1'
+        eff_border = YELLOW
+    else:
+        eff_bg = '#fff3e0'
+        eff_border = ORANGE
+
     return f'''
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 25px;">
-        <div style="background: {LIGHT_GREEN}; border-left: 5px solid {GREEN}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Power attributed to detected ON/OFF device activations across all phases and iterations">
-            <div style="font-size: 2.8em; font-weight: bold; color: {GREEN};">{explained_pct:.1f}%</div>
-            <div style="font-size: 1.1em; color: #155724; font-weight: 600; margin-top: 5px;">Explained</div>
+    <div style="background: {eff_bg}; border: 3px solid {eff_border}; border-radius: 14px; padding: 25px 30px; text-align: center; margin-bottom: 25px; cursor: help;" title="Explained / (Total - Background) - how well the algorithm detects non-background device activations">
+        <div style="font-size: 3.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
+        <div style="font-size: 1.2em; font-weight: 700; color: #333; margin-top: 5px;">Detection Efficiency</div>
+        <div style="font-size: 0.85em; color: #888; margin-top: 3px;">explained / targetable power, excluding background</div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 15px;">
+        <div style="background: {LIGHT_GREEN}; border-left: 5px solid {GREEN}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Power attributed to detected ON/OFF device activations across all phases and iterations">
+            <div style="font-size: 2.2em; font-weight: bold; color: {GREEN};">{explained_pct:.1f}%</div>
+            <div style="font-size: 1em; color: #155724; font-weight: 600; margin-top: 5px;">Explained</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{explained_kwh} kWh</div>
         </div>
-        <div style="background: {LIGHT_GRAY}; border-left: 5px solid {GRAY}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Baseline power (5th percentile) - always-on devices like fridge, standby, router, etc.">
-            <div style="font-size: 2.8em; font-weight: bold; color: {GRAY};">{background_pct:.1f}%</div>
-            <div style="font-size: 1.1em; color: #495057; font-weight: 600; margin-top: 5px;">Background</div>
+        <div style="background: {LIGHT_GRAY}; border-left: 5px solid {GRAY}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Baseline power (5th percentile) - always-on devices like fridge, standby, router, etc.">
+            <div style="font-size: 2.2em; font-weight: bold; color: {GRAY};">{background_pct:.1f}%</div>
+            <div style="font-size: 1em; color: #495057; font-weight: 600; margin-top: 5px;">Background</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{background_kwh} kWh</div>
         </div>
-        <div style="background: {LIGHT_ORANGE}; border-left: 5px solid {ORANGE}; border-radius: 10px; padding: 25px; text-align: center; cursor: help;" title="Remaining power above background - potential undetected devices or events below threshold">
-            <div style="font-size: 2.8em; font-weight: bold; color: {ORANGE};">{improvable_pct:.1f}%</div>
-            <div style="font-size: 1.1em; color: #856404; font-weight: 600; margin-top: 5px;">Improvable</div>
+        <div style="background: {LIGHT_ORANGE}; border-left: 5px solid {ORANGE}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Remaining power above background - potential undetected devices or events below threshold">
+            <div style="font-size: 2.2em; font-weight: bold; color: {ORANGE};">{improvable_pct:.1f}%</div>
+            <div style="font-size: 1em; color: #856404; font-weight: 600; margin-top: 5px;">Improvable</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{improvable_kwh} kWh</div>
         </div>
-    </div>
-    <div style="text-align: center; margin-bottom: 15px;">
-        <span style="font-size: 1.1em; color: #444;" title="Explained / (Total - Background) - how well the algorithm detects non-background devices" style="cursor: help;">
-            Detection Efficiency:
-            <span style="font-weight: bold; color: {eff_color}; font-size: 1.3em;">{efficiency:.1f}%</span>
-        </span>
-        <span style="font-size: 0.85em; color: #888; margin-left: 10px;">
-            (explained / targetable power, excluding background)
-        </span>
     </div>
     '''
 
