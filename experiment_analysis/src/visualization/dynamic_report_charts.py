@@ -97,74 +97,55 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     min_threshold = metrics.get('threshold_schedule', [800])[-1]
 
     return f'''
-    <p style="color: #555; margin-bottom: 20px; line-height: 1.7; font-size: 0.95em;">
-        The total electricity consumption of this household ({total_kwh} kWh) is broken down into three parts:
-        <strong>Explained</strong> &mdash; power attributed to specific device activations that the algorithm detected
-        (e.g. boilers, air conditioners);
-        <strong>Background</strong> &mdash; constant baseload from always-on appliances;
-        and <strong>Unmatched</strong> &mdash; the remaining power above the baseline that was not matched to any device.
-        Together these three parts always sum to 100%.
+    <p style="color: #555; margin-bottom: 15px; line-height: 1.5; font-size: 0.88em;">
+        Total consumption ({total_kwh} kWh) = <strong>Explained</strong> (detected devices)
+        + <strong>Background</strong> (always-on baseload)
+        + <strong>Unmatched</strong> (remaining above baseline, not matched).
     </p>
 
-    <div style="background: {eff_bg}; border: 3px solid {eff_border}; border-radius: 14px; padding: 25px 30px; text-align: center; margin-bottom: 25px;">
-        <div style="font-size: 3.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
-        <div style="font-size: 1.2em; font-weight: 700; color: #333; margin-top: 5px;">Detection Efficiency</div>
-        <div style="font-size: 0.9em; color: #555; margin-top: 8px; max-width: 750px; margin-left: auto; margin-right: auto; line-height: 1.6;">
-            Of the total power that is <em>not</em> background ({targetable_pct:.1f}% of total),
-            the algorithm successfully attributed <strong>{efficiency:.1f}%</strong> to specific device events.
-            The remaining <strong>{100 - efficiency:.1f}%</strong> was not matched &mdash;
-            this includes both devices that could potentially be detected with lower thresholds,
-            and complex-pattern appliances (ovens, washing machines, dishwashers) whose variable
-            power profiles are not targeted by the current algorithm.
+    <div style="background: {eff_bg}; border: 2px solid {eff_border}; border-radius: 12px; padding: 15px 20px; text-align: center; margin-bottom: 18px;">
+        <div style="font-size: 2.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
+        <div style="font-size: 1em; font-weight: 700; color: #333;">Detection Efficiency</div>
+        <div style="font-size: 0.82em; color: #555; margin-top: 4px; line-height: 1.5;">
+            Of non-background power ({targetable_pct:.1f}%), <strong>{efficiency:.1f}%</strong> matched to devices.
+            Unmatched includes sub-threshold events, complex appliances (ovens, washing machines), and noise.
         </div>
     </div>
 
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 15px;">
-        <div style="background: {exp_bg}; border-left: 5px solid {exp_border}; border-radius: 10px; padding: 20px; text-align: center;">
-            <div style="font-size: 2.2em; font-weight: bold; color: {exp_color};">{explained_pct:.1f}%</div>
-            <div style="font-size: 1em; color: {exp_label_color}; font-weight: 600; margin-top: 5px;">Explained</div>
-            <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{explained_kwh} kWh</div>
-            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Power successfully matched to detected ON&rarr;OFF device events
-                (boilers, air conditioners, and other high-power appliances with clear
-                on/off signatures). The other <strong>{not_explained_pct:.1f}%</strong>
-                is either background or unmatched.
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 12px;">
+        <div style="background: {exp_bg}; border-left: 4px solid {exp_border}; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 1.8em; font-weight: bold; color: {exp_color};">{explained_pct:.1f}%</div>
+            <div style="font-size: 0.9em; color: {exp_label_color}; font-weight: 600;">Explained</div>
+            <div style="font-size: 0.8em; color: #666;">{explained_kwh} kWh</div>
+            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                Matched ON&rarr;OFF events (boilers, ACs, high-power devices).
             </div>
         </div>
-        <div style="background: {bg_bg}; border-left: 5px solid {bg_border}; border-radius: 10px; padding: 20px; text-align: center;">
-            <div style="font-size: 2.2em; font-weight: bold; color: {bg_color};">{background_pct:.1f}%</div>
-            <div style="font-size: 1em; color: {bg_label_color}; font-weight: 600; margin-top: 5px;">Background</div>
-            <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{background_kwh} kWh</div>
-            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Constant baseload: always-on appliances (fridge, router, standby devices).
-                Estimated as the 5th percentile of power (~{avg_bg_watts}W avg per phase).
-                This power is <strong>not targetable</strong> for event-based detection.
+        <div style="background: {bg_bg}; border-left: 4px solid {bg_border}; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 1.8em; font-weight: bold; color: {bg_color};">{background_pct:.1f}%</div>
+            <div style="font-size: 0.9em; color: {bg_label_color}; font-weight: 600;">Background</div>
+            <div style="font-size: 0.8em; color: #666;">{background_kwh} kWh</div>
+            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                Always-on baseload (~{avg_bg_watts}W avg/phase). Not targetable.
             </div>
         </div>
-        <div style="background: {imp_bg}; border-left: 5px solid {imp_border}; border-radius: 10px; padding: 20px; text-align: center;">
-            <div style="font-size: 2.2em; font-weight: bold; color: {imp_color};">{improvable_pct:.1f}%</div>
-            <div style="font-size: 1em; color: {imp_label_color}; font-weight: 600; margin-top: 5px;">Unmatched</div>
-            <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{improvable_kwh} kWh</div>
-            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
-                Power above background not matched to any device. This includes:
-                events below the {min_threshold}W detection threshold,
-                complex-pattern appliances (ovens, washing machines, dishwashers)
-                whose variable power profiles are not targeted by the algorithm,
-                and irregular or noisy consumption.
-                <strong>Not all of this is necessarily "improvable".</strong>
+        <div style="background: {imp_bg}; border-left: 4px solid {imp_border}; border-radius: 8px; padding: 14px; text-align: center;">
+            <div style="font-size: 1.8em; font-weight: bold; color: {imp_color};">{improvable_pct:.1f}%</div>
+            <div style="font-size: 0.9em; color: {imp_label_color}; font-weight: 600;">Unmatched</div>
+            <div style="font-size: 0.8em; color: #666;">{improvable_kwh} kWh</div>
+            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                Sub-threshold events, complex appliances, noise.
             </div>
         </div>
     </div>
 
-    <div style="background: #f8f9fa; border-radius: 8px; padding: 12px 20px; margin-bottom: 10px; text-align: center; font-size: 0.9em; color: #555;">
-        <strong>Equation:</strong>
+    <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; margin-bottom: 8px; text-align: center; font-size: 0.82em; color: #555;">
         <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
         <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
         <span style="color:{imp_color};">Unmatched ({improvable_pct:.1f}%)</span>
-        = 100% of Total ({total_kwh} kWh)
-        &nbsp;&nbsp;|&nbsp;&nbsp;
-        <strong>Efficiency</strong> = Explained / (Total &minus; Background) =
-        {explained_pct:.1f}% / {targetable_pct:.1f}% = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
+        = 100%
+        &nbsp;|&nbsp;
+        <strong>Efficiency</strong> = {explained_pct:.1f}% / {targetable_pct:.1f}% = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
     '''
 
@@ -523,19 +504,47 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     '''
 
 
+def _parse_activation_row(act: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a single activation into display-ready fields."""
+    on_start_raw = act.get('on_start')
+    off_end_raw = act.get('off_end') or act.get('off_start')
+
+    date_str = on_time_str = off_time_str = ''
+
+    if on_start_raw:
+        try:
+            on_dt = datetime.fromisoformat(str(on_start_raw))
+            date_str = on_dt.strftime('%Y-%m-%d')
+            on_time_str = on_dt.strftime('%H:%M')
+        except (ValueError, TypeError):
+            date_str = str(on_start_raw)[:10]
+            on_time_str = str(on_start_raw)[11:16] if len(str(on_start_raw)) > 16 else ''
+
+    if off_end_raw:
+        try:
+            off_dt = datetime.fromisoformat(str(off_end_raw))
+            off_time_str = off_dt.strftime('%H:%M')
+        except (ValueError, TypeError):
+            off_time_str = str(off_end_raw)[11:16] if len(str(off_end_raw)) > 16 else ''
+
+    duration = act.get('duration', 0) or 0
+    dur_str = f'{duration / 60:.1f} hr' if duration >= 60 else f'{duration:.0f} min'
+    magnitude = abs(act.get('on_magnitude', 0) or 0)
+
+    return {
+        'date': date_str, 'start': on_time_str, 'end': off_time_str,
+        'duration': duration, 'dur_str': dur_str,
+        'magnitude': magnitude, 'phase': act.get('phase', ''),
+        'tag': act.get('tag', ''), 'device_type': act.get('device_type') or 'unclassified',
+    }
+
+
 def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
     """
-    Create detailed device activations tables with dates and time ranges.
+    Create detailed device activations tables grouped by device_type.
 
-    Groups matched activations by device_type, showing individual events
-    with date, start time, end time, duration, and power.
-    Includes a copyable dates section per device type.
-
-    Args:
-        activations: List of activation dicts from device_activations JSON
-
-    Returns:
-        HTML string with collapsible tables per device type
+    Filters to high-confidence detections using minimum duration per type.
+    Includes sortable columns, per-type Copy Dates, and a Copy All button.
     """
     if not activations:
         return '<p style="color: #888;">No device activations data available.</p>'
@@ -544,13 +553,31 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
     if not matched:
         return '<p style="color: #888;">No matched device activations found.</p>'
 
-    # Group by device_type
+    # Minimum duration (minutes) for high-confidence classification
+    MIN_DURATION = {
+        'boiler': 15,
+        'central_ac': 5,
+        'regular_ac': 3,
+        'unclassified': 0,
+    }
+
+    # Group by device_type, filtering by min duration
     device_groups = {}
+    all_copyable = []
     for act in matched:
-        dtype = act.get('device_type') or 'unclassified'
+        parsed = _parse_activation_row(act)
+        dtype = parsed['device_type']
+        min_dur = MIN_DURATION.get(dtype, 0)
+        if parsed['duration'] < min_dur:
+            continue
         if dtype not in device_groups:
             device_groups[dtype] = []
-        device_groups[dtype].append(act)
+        device_groups[dtype].append(parsed)
+        if parsed['date'] and parsed['start']:
+            all_copyable.append(f"{parsed['date']} {parsed['start']}-{parsed['end']}")
+
+    if not any(device_groups.values()):
+        return '<p style="color: #888;">No high-confidence device activations found.</p>'
 
     display_names = {
         'boiler': 'Water Heater (Boiler)',
@@ -558,10 +585,23 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         'regular_ac': 'Regular AC (Single-phase)',
         'unclassified': 'Unclassified Devices',
     }
-
     display_order = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
 
-    sections_html = ''
+    # Copy All button
+    total_count = sum(len(v) for v in device_groups.values())
+    all_copyable_text = ', '.join(all_copyable)
+    copy_all_html = f'''
+    <div style="margin-bottom: 15px;">
+        <button onclick="var ta=document.getElementById('all-activations-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
+                style="padding: 5px 14px; border: 1px solid #667eea; border-radius: 4px; background: #667eea; color: white; cursor: pointer; font-size: 0.85em;">
+            Copy All Dates ({total_count})
+        </button>
+        <textarea id="all-activations-dates" readonly
+                  style="display: none; width: 100%; margin-top: 5px; padding: 8px; font-size: 0.85em; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; resize: vertical; min-height: 60px;"
+                  onclick="this.select();">{all_copyable_text}</textarea>
+    </div>'''
+
+    sections_html = copy_all_html
     section_idx = 0
 
     for dtype in display_order:
@@ -569,104 +609,65 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         if not events:
             continue
 
-        # Sort by on_start
-        events.sort(key=lambda a: a.get('on_start') or '')
+        events.sort(key=lambda r: r['date'] + r['start'])
 
         name = display_names.get(dtype, dtype)
         count = len(events)
+        min_dur = MIN_DURATION.get(dtype, 0)
+        filter_note = f' (≥{min_dur} min)' if min_dur > 0 else ''
         section_id = f'device-detail-{section_idx}'
         section_idx += 1
 
-        # Build rows and copyable dates
         rows = ''
         copyable_dates = []
-
-        for i, act in enumerate(events, 1):
-            on_start_raw = act.get('on_start')
-            off_end_raw = act.get('off_end') or act.get('off_start')
-
-            # Parse timestamps
-            date_str = ''
-            on_time_str = ''
-            off_time_str = ''
-
-            if on_start_raw:
-                try:
-                    on_dt = datetime.fromisoformat(str(on_start_raw))
-                    date_str = on_dt.strftime('%Y-%m-%d')
-                    on_time_str = on_dt.strftime('%H:%M')
-                except (ValueError, TypeError):
-                    date_str = str(on_start_raw)[:10]
-                    on_time_str = str(on_start_raw)[11:16] if len(str(on_start_raw)) > 16 else ''
-
-            if off_end_raw:
-                try:
-                    off_dt = datetime.fromisoformat(str(off_end_raw))
-                    off_time_str = off_dt.strftime('%H:%M')
-                except (ValueError, TypeError):
-                    off_time_str = str(off_end_raw)[11:16] if len(str(off_end_raw)) > 16 else ''
-
-            duration = act.get('duration', 0) or 0
-            if duration >= 60:
-                dur_str = f'{duration / 60:.1f} hr'
-            else:
-                dur_str = f'{duration:.0f} min'
-
-            magnitude = abs(act.get('on_magnitude', 0) or 0)
-            phase = act.get('phase', '')
-            tag = act.get('tag', '')
-            threshold = act.get('threshold', '')
-
-            if date_str and on_time_str:
-                copyable_dates.append(f"{date_str} {on_time_str}-{off_time_str}")
-
+        for i, r in enumerate(events, 1):
+            if r['date'] and r['start']:
+                copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
             rows += f'''
             <tr>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center; color: #888;">{i}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee;">{date_str}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{on_time_str}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{off_time_str}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{dur_str}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: right;">{magnitude:,.0f}W</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; text-align: center;">{phase}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 0.85em; color: #888;">{tag}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee;" data-value="{r['date']}">{r['date']}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['start']}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['end']}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['phase']}</td>
             </tr>'''
 
         copyable_text = ', '.join(copyable_dates)
 
         sections_html += f'''
-        <div style="margin-bottom: 20px;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; cursor: pointer;"
+        <div style="margin-bottom: 15px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer;"
                  onclick="var tbl=document.getElementById('{section_id}'); tbl.style.display = tbl.style.display==='none' ? 'block' : 'none'; var arrow=this.querySelector('.toggle-arrow'); arrow.textContent = tbl.style.display==='none' ? '\\u25B6' : '\\u25BC';">
-                <span class="toggle-arrow" style="font-size: 0.9em;">&#x25BC;</span>
-                <h3 style="margin: 0; color: #2d3748;">{name}</h3>
-                <span style="background: #667eea; color: white; padding: 2px 10px; border-radius: 12px; font-size: 0.85em;">{count}</span>
+                <span class="toggle-arrow" style="font-size: 0.85em;">&#x25BC;</span>
+                <strong style="color: #2d3748; font-size: 0.95em;">{name}</strong>
+                <span style="background: #667eea; color: white; padding: 1px 8px; border-radius: 10px; font-size: 0.8em;">{count}{filter_note}</span>
             </div>
             <div id="{section_id}">
-                <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.85em;" id="{section_id}-table">
                     <thead>
                         <tr style="background: #f8f9fa;">
-                            <th style="padding: 8px 12px; text-align: center; width: 40px;">#</th>
-                            <th style="padding: 8px 12px; text-align: left;" title="Date of activation">Date</th>
-                            <th style="padding: 8px 12px; text-align: center;" title="Time when device turned ON">Start</th>
-                            <th style="padding: 8px 12px; text-align: center;" title="Time when device turned OFF">End</th>
-                            <th style="padding: 8px 12px; text-align: center;" title="Total duration from ON to OFF">Duration</th>
-                            <th style="padding: 8px 12px; text-align: right;" title="ON event magnitude (watts)">Power</th>
-                            <th style="padding: 8px 12px; text-align: center;" title="Phase (w1, w2, w3)">Phase</th>
-                            <th style="padding: 8px 12px; text-align: left;" title="Match quality tag: magnitude accuracy + duration category">Tag</th>
+                            <th style="padding: 5px 8px; text-align: center; width: 35px;">#</th>
+                            <th style="padding: 5px 8px; text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="padding: 5px 8px; text-align: center;">Start</th>
+                            <th style="padding: 5px 8px; text-align: center;">End</th>
+                            <th style="padding: 5px 8px; text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="padding: 5px 8px; text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
+                            <th style="padding: 5px 8px; text-align: center;">Phase</th>
                         </tr>
                     </thead>
                     <tbody>
                         {rows}
                     </tbody>
                 </table>
-                <div style="margin-top: 8px;">
+                <div style="margin-top: 5px;">
                     <button onclick="var ta=document.getElementById('{section_id}-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
-                            style="padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.85em;">
+                            style="padding: 3px 10px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.8em;">
                         Copy Dates ({count})
                     </button>
                     <textarea id="{section_id}-dates" readonly
-                              style="display: none; width: 100%; margin-top: 5px; padding: 8px; font-size: 0.85em; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; resize: vertical; min-height: 60px;"
+                              style="display: none; width: 100%; margin-top: 4px; padding: 6px; font-size: 0.8em; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; resize: vertical; min-height: 50px;"
                               onclick="this.select();">{copyable_text}</textarea>
                 </div>
             </div>

@@ -341,10 +341,8 @@ def _build_house_html(
 
         <section>
             <h2>Power Breakdown by Phase</h2>
-            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
-                Israeli households use a 3-phase electrical system (w1, w2, w3).
-                Each phase carries part of the total power. The chart below shows how each phase's
-                power is distributed between Explained, Background, and Unmatched.
+            <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
+                Per-phase (w1, w2, w3) decomposition into Explained, Background, and Unmatched.
             </p>
             {breakdown_html}
             {phase_detail}
@@ -352,20 +350,16 @@ def _build_house_html(
 
         <section>
             <h2>Detection Efficiency by Phase</h2>
-            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
-                Per-phase efficiency gauges: what fraction of targetable power (total minus background)
-                was successfully matched to device events. A low-efficiency phase may have undetected devices
-                or noisy data.
+            <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
+                Fraction of targetable power (total &minus; background) matched to device events per phase.
             </p>
             {efficiency_html}
         </section>
 
         <section>
             <h2>Threshold Contribution</h2>
-            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
-                The algorithm runs multiple iterations with decreasing thresholds ({th_str}).
-                Each iteration detects smaller devices in the remaining (unexplained) power.
-                The waterfall chart shows how much each threshold level contributed to the total explained power.
+            <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
+                Each iteration uses a lower threshold ({th_str}) to detect progressively smaller devices.
             </p>
             {waterfall_html}
         </section>
@@ -373,20 +367,16 @@ def _build_house_html(
         <div class="charts-grid">
             <section>
                 <h2>Remaining Power Analysis</h2>
-                <p style="color: #555; margin-bottom: 10px; font-size: 0.85em; line-height: 1.5;">
-                    Classification of power that was <em>not</em> explained, by minute-level magnitude above the background baseline:
-                    <strong>Noise</strong> (&lt;200W, likely measurement noise or very small loads),
-                    <strong>Small Events</strong> (200-800W, potential undetected devices),
-                    <strong>Large Unmatched</strong> (&gt;800W, significant unmatched consumption).
+                <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
+                    Unexplained power by magnitude: Noise (&lt;200W), Small Events (200-800W), Large Unmatched (&gt;800W).
                 </p>
                 {remaining_html}
             </section>
 
             <section>
                 <h2>Device Summary</h2>
-                <p style="color: #555; margin-bottom: 10px; font-size: 0.85em; line-height: 1.5;">
-                    Detected device types with their average characteristics.
-                    Classification is based on power magnitude, duration, and phase patterns.
+                <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
+                    Classified by power, duration, and phase patterns.
                 </p>
                 {devices_html}
             </section>
@@ -394,10 +384,9 @@ def _build_house_html(
 
         <section>
             <h2>Device Activations Detail</h2>
-            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
-                Every individual device activation detected by the algorithm, grouped by device type.
-                Each row is one ON&rarr;OFF event with its date, time range, duration, and power.
-                Use "Copy Dates" to export timestamps for external visualization tools.
+            <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
+                Individual ON&rarr;OFF activations grouped by device type (high-confidence only).
+                Click column headers to sort. Use "Copy Dates" or "Copy All Dates" for external tools.
             </p>
             {activations_detail_html}
         </section>
@@ -406,6 +395,42 @@ def _build_house_html(
             ElectricPatterns - Dynamic Threshold Experiment Report
         </footer>
     </div>
+
+    <script>
+    // Sort device activations tables by column
+    var deviceSortState = {{}};
+    function sortDeviceTable(tableId, colIdx, type) {{
+        var table = document.getElementById(tableId);
+        if (!table) return;
+        var tbody = table.querySelector('tbody');
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        var key = tableId + '-' + colIdx;
+        var asc = deviceSortState[key] === undefined ? true : !deviceSortState[key];
+        deviceSortState[key] = asc;
+
+        rows.sort(function(a, b) {{
+            var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
+            var vA, vB;
+            if (type === 'num') {{
+                vA = parseFloat(cellA.getAttribute('data-value') || cellA.textContent.replace(/[^0-9.-]/g, '')) || 0;
+                vB = parseFloat(cellB.getAttribute('data-value') || cellB.textContent.replace(/[^0-9.-]/g, '')) || 0;
+            }} else {{
+                vA = (cellA.getAttribute('data-value') || cellA.textContent).trim();
+                vB = (cellB.getAttribute('data-value') || cellB.textContent).trim();
+                if (vA < vB) return asc ? -1 : 1;
+                if (vA > vB) return asc ? 1 : -1;
+                return 0;
+            }}
+            return asc ? (vA - vB) : (vB - vA);
+        }});
+
+        // Re-number rows
+        rows.forEach(function(row, i) {{
+            row.cells[0].textContent = i + 1;
+            tbody.appendChild(row);
+        }});
+    }}
+    </script>
 </body>
 </html>"""
 
