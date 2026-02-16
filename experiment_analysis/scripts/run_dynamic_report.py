@@ -98,7 +98,7 @@ def main():
         print("Use --experiment <path> to specify the experiment output directory.")
         sys.exit(1)
 
-    print(f"Experiment directory: {experiment_dir}")
+    print(f"Experiment directory: {experiment_dir}", flush=True)
 
     # Discover houses
     if args.houses:
@@ -111,13 +111,13 @@ def main():
         sys.exit(1)
 
     print(f"Houses to analyze: {', '.join(house_ids)}")
-    print()
+    print(flush=True)
 
     # Output directory
     output_dir = experiment_dir / "reports"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Generate per-house reports
+    # ── Phase 1: Per-house reports ──────────────────────────────────
     start_time = time.time()
     successful = 0
     failed = 0
@@ -125,48 +125,59 @@ def main():
 
     houses_iter = house_ids
     if HAS_TQDM:
-        houses_iter = tqdm(house_ids, desc="Generating reports", unit="house")
+        houses_iter = tqdm(house_ids, desc="Per-house reports", unit="house")
 
     for house_id in houses_iter:
         try:
-            output_path = str(output_dir / f"dynamic_report_{house_id}.html")
+            out_path = str(output_dir / f"dynamic_report_{house_id}.html")
             if HAS_TQDM:
-                houses_iter.set_postfix_str(f"house {house_id}")
+                houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
-                print(f"  Generating report for house {house_id}...", end=" ")
+                print(f"  [{successful+failed+1}/{len(house_ids)}] house {house_id}...", end=" ", flush=True)
 
             generate_dynamic_house_report(
-                str(experiment_dir), house_id, output_path
+                str(experiment_dir), house_id, out_path
             )
 
-            if not HAS_TQDM:
-                print("OK")
             successful += 1
+            if HAS_TQDM:
+                houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
+            else:
+                print("OK", flush=True)
         except Exception as e:
-            if not HAS_TQDM:
-                print(f"FAILED: {e}")
             failed += 1
             failed_houses.append((house_id, str(e)))
+            if HAS_TQDM:
+                houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
+            else:
+                print(f"FAILED: {e}", flush=True)
 
-    # Generate aggregate report if multiple houses
-    if len(house_ids) > 1:
+    phase1_time = time.time() - start_time
+    print(f"\nPer-house reports: {successful} OK, {failed} failed ({phase1_time:.1f}s)", flush=True)
+
+    if failed_houses:
+        print(f"\nFailed houses ({failed}):")
+        for hid, err in failed_houses:
+            print(f"  house {hid}: {err}")
+        print(flush=True)
+
+    # ── Phase 2: Aggregate report ───────────────────────────────────
+    if len(house_ids) > 1 and successful > 0:
         try:
             agg_path = str(output_dir / "dynamic_report_aggregate.html")
-            print(f"\n  Generating aggregate report...", end=" ")
+            print("Generating aggregate report...", flush=True)
+            agg_start = time.time()
             generate_dynamic_aggregate_report(
                 str(experiment_dir), house_ids, agg_path
             )
-            print("OK")
+            print(f"Aggregate report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:
-            print(f"FAILED: {e}")
+            print(f"Aggregate report: FAILED: {e}", flush=True)
 
+    # ── Summary ─────────────────────────────────────────────────────
     elapsed = time.time() - start_time
-    print()
-    print(f"Done in {elapsed:.1f}s. {successful} reports generated, {failed} failed.")
-    if failed_houses:
-        for hid, err in failed_houses:
-            print(f"  FAILED house {hid}: {err}")
-    print(f"Reports saved to: {output_dir}")
+    print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f}min). {successful} reports generated, {failed} failed.")
+    print(f"Reports saved to: {output_dir}", flush=True)
 
 
 if __name__ == "__main__":
