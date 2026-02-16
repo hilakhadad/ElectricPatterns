@@ -1,6 +1,14 @@
 """
 Generate dynamic threshold HTML reports.
 
+Output structure (follows experiment_analysis conventions):
+    experiment_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
+    ├── dynamic_report_aggregate.html       # Aggregate report
+    └── house_reports/                      # Per-house reports
+        ├── dynamic_report_305.html
+        ├── dynamic_report_1.html
+        └── ...
+
 Usage:
     python run_dynamic_report.py                              # Latest exp010 experiment
     python run_dynamic_report.py --experiment <path>          # Specific experiment directory
@@ -32,6 +40,9 @@ from visualization.dynamic_html_report import (
     generate_dynamic_house_report,
     generate_dynamic_aggregate_report,
 )
+
+# Output base: experiment_analysis/OUTPUT/
+_ANALYSIS_OUTPUT_DIR = script_dir.parent / "OUTPUT"
 
 
 def find_latest_dynamic_experiment() -> Path:
@@ -113,9 +124,15 @@ def main():
     print(f"Houses to analyze: {', '.join(house_ids)}")
     print(flush=True)
 
-    # Output directory
-    output_dir = experiment_dir / "reports"
-    os.makedirs(output_dir, exist_ok=True)
+    # Output directory: experiment_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
+    experiment_name = experiment_dir.name
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = _ANALYSIS_OUTPUT_DIR / f"analysis_{experiment_name}_{timestamp}"
+    house_reports_dir = output_dir / "house_reports"
+    os.makedirs(house_reports_dir, exist_ok=True)
+
+    print(f"Output directory: {output_dir}", flush=True)
+    print(flush=True)
 
     # ── Phase 1: Per-house reports ──────────────────────────────────
     start_time = time.time()
@@ -129,7 +146,7 @@ def main():
 
     for house_id in houses_iter:
         try:
-            out_path = str(output_dir / f"dynamic_report_{house_id}.html")
+            out_path = str(house_reports_dir / f"dynamic_report_{house_id}.html")
             if HAS_TQDM:
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
