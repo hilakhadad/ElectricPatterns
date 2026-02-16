@@ -17,6 +17,12 @@ from pathlib import Path
 from datetime import datetime
 import argparse
 
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
 # Add src to path for imports
 script_dir = Path(__file__).parent
 src_dir = script_dir.parent / "src"
@@ -115,19 +121,32 @@ def main():
     start_time = time.time()
     successful = 0
     failed = 0
+    failed_houses = []
 
-    for house_id in house_ids:
+    houses_iter = house_ids
+    if HAS_TQDM:
+        houses_iter = tqdm(house_ids, desc="Generating reports", unit="house")
+
+    for house_id in houses_iter:
         try:
             output_path = str(output_dir / f"dynamic_report_{house_id}.html")
-            print(f"  Generating report for house {house_id}...", end=" ")
+            if HAS_TQDM:
+                houses_iter.set_postfix_str(f"house {house_id}")
+            else:
+                print(f"  Generating report for house {house_id}...", end=" ")
+
             generate_dynamic_house_report(
                 str(experiment_dir), house_id, output_path
             )
-            print("OK")
+
+            if not HAS_TQDM:
+                print("OK")
             successful += 1
         except Exception as e:
-            print(f"FAILED: {e}")
+            if not HAS_TQDM:
+                print(f"FAILED: {e}")
             failed += 1
+            failed_houses.append((house_id, str(e)))
 
     # Generate aggregate report if multiple houses
     if len(house_ids) > 1:
@@ -144,6 +163,9 @@ def main():
     elapsed = time.time() - start_time
     print()
     print(f"Done in {elapsed:.1f}s. {successful} reports generated, {failed} failed.")
+    if failed_houses:
+        for hid, err in failed_houses:
+            print(f"  FAILED house {hid}: {err}")
     print(f"Reports saved to: {output_dir}")
 
 
