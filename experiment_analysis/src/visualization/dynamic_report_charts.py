@@ -26,12 +26,13 @@ LIGHT_ORANGE = '#fff3cd'
 
 def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     """
-    Create 3 large summary number boxes (pure HTML/CSS).
+    Create summary section with full explanations.
 
-    Shows: X% Explained | Y% Background | Z% Improvable
-    Plus detection efficiency below.
+    Shows Detection Efficiency hero card, 3 decomposition boxes,
+    an equation bar, and a plain-language explanation block.
     """
     totals = metrics.get('totals', {})
+    phases = metrics.get('phases', {})
     explained_pct = totals.get('explained_pct', 0)
     background_pct = totals.get('background_pct', 0)
     improvable_pct = totals.get('improvable_pct', 0)
@@ -40,6 +41,11 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     explained_kwh = totals.get('explained_kwh', 0)
     background_kwh = totals.get('background_kwh', 0)
     improvable_kwh = totals.get('improvable_kwh', 0)
+    total_kwh = totals.get('total_kwh', 0)
+
+    # Average background per minute across phases (watts)
+    bg_per_min = [phases.get(p, {}).get('background_per_minute', 0) for p in ['w1', 'w2', 'w3']]
+    avg_bg_watts = round(sum(bg_per_min) / 3) if bg_per_min else 0
 
     # Efficiency color
     if efficiency >= 70:
@@ -84,28 +90,71 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     else:
         imp_color, imp_border, imp_bg, imp_label_color = ORANGE, ORANGE, LIGHT_ORANGE, '#856404'
 
+    # Complementary percentages
+    not_explained_pct = 100 - explained_pct
+    targetable_pct = 100 - background_pct
+
     return f'''
-    <div style="background: {eff_bg}; border: 3px solid {eff_border}; border-radius: 14px; padding: 25px 30px; text-align: center; margin-bottom: 25px; cursor: help;" title="Explained / (Total - Background) - how well the algorithm detects non-background device activations">
+    <p style="color: #555; margin-bottom: 20px; line-height: 1.7; font-size: 0.95em;">
+        The total electricity consumption of this household is broken down into three parts:
+        power that was <strong>explained</strong> (attributed to specific device activations),
+        <strong>background</strong> (constant baseload from always-on appliances),
+        and <strong>improvable</strong> (remaining unexplained power above the baseline).
+        Together they sum to 100% of the total consumption ({total_kwh} kWh).
+    </p>
+
+    <div style="background: {eff_bg}; border: 3px solid {eff_border}; border-radius: 14px; padding: 25px 30px; text-align: center; margin-bottom: 25px;">
         <div style="font-size: 3.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
         <div style="font-size: 1.2em; font-weight: 700; color: #333; margin-top: 5px;">Detection Efficiency</div>
-        <div style="font-size: 0.85em; color: #888; margin-top: 3px;">explained / targetable power, excluding background</div>
+        <div style="font-size: 0.9em; color: #555; margin-top: 8px; max-width: 700px; margin-left: auto; margin-right: auto; line-height: 1.6;">
+            Out of all power that <em>could</em> be attributed to devices ({targetable_pct:.1f}% of total, excluding background),
+            the algorithm successfully identified <strong>{efficiency:.1f}%</strong>.
+            The remaining <strong>{100 - efficiency:.1f}%</strong> of targetable power was not matched to any device.
+        </div>
     </div>
+
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 15px;">
-        <div style="background: {exp_bg}; border-left: 5px solid {exp_border}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Power attributed to detected ON/OFF device activations across all phases and iterations">
+        <div style="background: {exp_bg}; border-left: 5px solid {exp_border}; border-radius: 10px; padding: 20px; text-align: center;">
             <div style="font-size: 2.2em; font-weight: bold; color: {exp_color};">{explained_pct:.1f}%</div>
             <div style="font-size: 1em; color: {exp_label_color}; font-weight: 600; margin-top: 5px;">Explained</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{explained_kwh} kWh</div>
+            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
+                Power successfully matched to detected device ON/OFF events
+                (boilers, ACs, etc.). The other <strong>{not_explained_pct:.1f}%</strong>
+                is either background or unmatched.
+            </div>
         </div>
-        <div style="background: {bg_bg}; border-left: 5px solid {bg_border}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Baseline power (5th percentile) - always-on devices like fridge, standby, router, etc.">
+        <div style="background: {bg_bg}; border-left: 5px solid {bg_border}; border-radius: 10px; padding: 20px; text-align: center;">
             <div style="font-size: 2.2em; font-weight: bold; color: {bg_color};">{background_pct:.1f}%</div>
             <div style="font-size: 1em; color: {bg_label_color}; font-weight: 600; margin-top: 5px;">Background</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{background_kwh} kWh</div>
+            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
+                Constant baseload: always-on appliances (fridge, router, standby).
+                Estimated as the 5th percentile of power (~{avg_bg_watts}W avg per phase).
+                This power is <strong>not targetable</strong> for device detection.
+            </div>
         </div>
-        <div style="background: {imp_bg}; border-left: 5px solid {imp_border}; border-radius: 10px; padding: 20px; text-align: center; cursor: help;" title="Remaining power above background - potential undetected devices or events below threshold">
+        <div style="background: {imp_bg}; border-left: 5px solid {imp_border}; border-radius: 10px; padding: 20px; text-align: center;">
             <div style="font-size: 2.2em; font-weight: bold; color: {imp_color};">{improvable_pct:.1f}%</div>
             <div style="font-size: 1em; color: {imp_label_color}; font-weight: 600; margin-top: 5px;">Improvable</div>
             <div style="font-size: 0.85em; color: #666; margin-top: 3px;">{improvable_kwh} kWh</div>
+            <div style="font-size: 0.8em; color: #888; margin-top: 8px; line-height: 1.5;">
+                Power above background that was <strong>not</strong> matched to any device.
+                May contain undetected devices, events below the {metrics.get('threshold_schedule', [800])[-1]}W
+                threshold, or irregular consumption patterns.
+            </div>
         </div>
+    </div>
+
+    <div style="background: #f8f9fa; border-radius: 8px; padding: 12px 20px; margin-bottom: 10px; text-align: center; font-size: 0.9em; color: #555;">
+        <strong>Equation:</strong>
+        <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
+        <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
+        <span style="color:{imp_color};">Improvable ({improvable_pct:.1f}%)</span>
+        = 100% of Total ({total_kwh} kWh)
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <strong>Efficiency</strong> = Explained / (Total &minus; Background) =
+        {explained_pct:.1f}% / {targetable_pct:.1f}% = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
     '''
 

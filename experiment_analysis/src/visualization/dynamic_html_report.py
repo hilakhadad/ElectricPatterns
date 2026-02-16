@@ -341,36 +341,63 @@ def _build_house_html(
 
         <section>
             <h2>Power Breakdown by Phase</h2>
+            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
+                Israeli households use a 3-phase electrical system (w1, w2, w3).
+                Each phase carries part of the total power. The chart below shows how each phase's
+                power is distributed between Explained, Background, and Improvable.
+            </p>
             {breakdown_html}
             {phase_detail}
         </section>
 
         <section>
             <h2>Detection Efficiency by Phase</h2>
+            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
+                Per-phase efficiency gauges: what fraction of targetable power (total minus background)
+                was successfully matched to device events. A low-efficiency phase may have undetected devices
+                or noisy data.
+            </p>
             {efficiency_html}
         </section>
 
         <section>
             <h2>Threshold Contribution</h2>
+            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
+                The algorithm runs multiple iterations with decreasing thresholds ({th_str}).
+                Each iteration detects smaller devices in the remaining (unexplained) power.
+                The waterfall chart shows how much each threshold level contributed to the total explained power.
+            </p>
             {waterfall_html}
         </section>
 
         <div class="charts-grid">
             <section>
                 <h2>Remaining Power Analysis</h2>
+                <p style="color: #555; margin-bottom: 10px; font-size: 0.85em; line-height: 1.5;">
+                    Classification of power that was <em>not</em> explained, by minute-level magnitude above the background baseline:
+                    <strong>Noise</strong> (&lt;200W, likely measurement noise or very small loads),
+                    <strong>Small Events</strong> (200-800W, potential undetected devices),
+                    <strong>Large Unmatched</strong> (&gt;800W, significant unmatched consumption).
+                </p>
                 {remaining_html}
             </section>
 
             <section>
                 <h2>Device Summary</h2>
+                <p style="color: #555; margin-bottom: 10px; font-size: 0.85em; line-height: 1.5;">
+                    Detected device types with their average characteristics.
+                    Classification is based on power magnitude, duration, and phase patterns.
+                </p>
                 {devices_html}
             </section>
         </div>
 
         <section>
             <h2>Device Activations Detail</h2>
-            <p style="color: #666; margin-bottom: 15px; font-size: 0.9em;">
-                Individual device detections with dates and time ranges. Click "Copy Dates" to get timestamps for visualization.
+            <p style="color: #555; margin-bottom: 15px; font-size: 0.9em; line-height: 1.6;">
+                Every individual device activation detected by the algorithm, grouped by device type.
+                Each row is one ON&rarr;OFF event with its date, time range, duration, and power.
+                Use "Copy Dates" to export timestamps for external visualization tools.
             </p>
             {activations_detail_html}
         </section>
