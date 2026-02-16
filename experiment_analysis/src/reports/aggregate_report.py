@@ -36,7 +36,10 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
         house_analysis_path: Path to house_analysis JSON file or directory
 
     Returns:
-        Dictionary mapping house_id -> quality_score (float) or 'faulty' (str)
+        Dictionary mapping house_id -> dict with keys:
+            - quality_score: float or 'faulty'
+            - nan_continuity: str (continuous/minor_gaps/discontinuous/fragmented/unknown)
+            - max_nan_pct: float
     """
     scores = {}
     house_analysis_path = Path(house_analysis_path)
@@ -44,6 +47,28 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
     if not house_analysis_path.exists():
         print(f"Warning: Pre-analysis path not found: {house_analysis_path}")
         return scores
+
+    def _extract_house_info(analysis: dict) -> Optional[tuple]:
+        """Extract house_id and info dict from a single analysis."""
+        house_id = str(analysis.get('house_id', ''))
+        if not house_id:
+            return None
+        quality = analysis.get('data_quality', {})
+        quality_label = quality.get('quality_label', None)
+        quality_score = quality.get('quality_score', None)
+
+        if quality_label == 'faulty':
+            qs = 'faulty'
+        elif quality_score is not None:
+            qs = quality_score
+        else:
+            return None
+
+        return house_id, {
+            'quality_score': qs,
+            'nan_continuity': quality.get('nan_continuity_label', 'unknown'),
+            'max_nan_pct': quality.get('max_phase_nan_pct', 0),
+        }
 
     # If it's a directory, look for per_house JSON files
     if house_analysis_path.is_dir():
@@ -61,15 +86,9 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     analysis = json.load(f)
-                house_id = str(analysis.get('house_id', ''))
-                quality = analysis.get('data_quality', {})
-                quality_label = quality.get('quality_label', None)
-                quality_score = quality.get('quality_score', None)
-                if house_id:
-                    if quality_label == 'faulty':
-                        scores[house_id] = 'faulty'
-                    elif quality_score is not None:
-                        scores[house_id] = quality_score
+                result = _extract_house_info(analysis)
+                if result:
+                    scores[result[0]] = result[1]
             except Exception as e:
                 print(f"Warning: Failed to load {json_file}: {e}")
 
@@ -91,15 +110,9 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
             return scores
 
         for analysis in analyses:
-            house_id = str(analysis.get('house_id', ''))
-            quality = analysis.get('data_quality', {})
-            quality_label = quality.get('quality_label', None)
-            quality_score = quality.get('quality_score', None)
-            if house_id:
-                if quality_label == 'faulty':
-                    scores[house_id] = 'faulty'
-                elif quality_score is not None:
-                    scores[house_id] = quality_score
+            result = _extract_house_info(analysis)
+            if result:
+                scores[result[0]] = result[1]
 
         print(f"Loaded pre-analysis quality scores for {len(scores)} houses")
     except Exception as e:
@@ -288,7 +301,12 @@ def aggregate_experiment_results(experiment_dir: Path,
         for analysis in analyses:
             house_id = str(analysis.get('house_id', ''))
             if house_id in pre_analysis_scores:
-                analysis['pre_analysis_quality_score'] = pre_analysis_scores[house_id]
+                house_pre = pre_analysis_scores[house_id]
+                if isinstance(house_pre, dict):
+                    analysis['pre_analysis_quality_score'] = house_pre.get('quality_score')
+                else:
+                    # Backward compatibility: old format was scalar
+                    analysis['pre_analysis_quality_score'] = house_pre
                 matched += 1
         if matched > 0:
             print(f"Injected pre-analysis quality scores for {matched} houses")

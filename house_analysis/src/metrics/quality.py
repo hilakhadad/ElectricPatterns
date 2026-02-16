@@ -209,6 +209,24 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['faulty_nan_phases'] = faulty_nan_phases
     metrics['has_faulty_nan_phase'] = len(faulty_nan_phases) > 0
 
+    # ===== NaN CONTINUITY CLASSIFICATION =====
+    # Classify data continuity based on max NaN percentage across phases.
+    # Used to filter houses with fragmented data from aggregate reports.
+    phase_nan_pcts = [metrics.get(f'{col}_nan_pct', 0) for col in phase_cols if col in data.columns]
+    max_phase_nan_pct = max(phase_nan_pcts) if phase_nan_pcts else 0
+    metrics['max_phase_nan_pct'] = round(max_phase_nan_pct, 2)
+
+    if max_phase_nan_pct < 5:
+        nan_continuity = 'continuous'       # Continuous data
+    elif max_phase_nan_pct < 15:
+        nan_continuity = 'minor_gaps'       # Minor gaps
+    elif max_phase_nan_pct < 40:
+        nan_continuity = 'discontinuous'    # Discontinuous
+    else:
+        nan_continuity = 'fragmented'       # Heavily fragmented
+
+    metrics['nan_continuity_label'] = nan_continuity
+
     # ===== QUALITY SCORING SYSTEM (0-100) =====
     # Optimized based on correlation analysis with actual algorithm performance (161 houses).
     # Categories weighted by predictive power (Spearman rho with algo scores):

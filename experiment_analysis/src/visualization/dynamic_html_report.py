@@ -174,7 +174,16 @@ def generate_dynamic_aggregate_report(
     for house_id in house_ids:
         metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
         if pre_analysis_scores:
-            metrics['pre_quality'] = pre_analysis_scores.get(house_id)
+            house_pre = pre_analysis_scores.get(house_id, {})
+            if isinstance(house_pre, dict):
+                metrics['pre_quality'] = house_pre.get('quality_score')
+                metrics['nan_continuity'] = house_pre.get('nan_continuity', 'unknown')
+                metrics['max_nan_pct'] = house_pre.get('max_nan_pct', 0)
+            else:
+                # Backward compatibility: old format was scalar
+                metrics['pre_quality'] = house_pre
+                metrics['nan_continuity'] = 'unknown'
+                metrics['max_nan_pct'] = 0
         all_metrics.append(metrics)
 
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -498,13 +507,14 @@ def _build_aggregate_html(
     # Link prefix for per-house reports
     link_prefix = f"{house_reports_subdir}/" if house_reports_subdir else ""
 
-    # House rows with tier data
+    # House rows with tier and continuity data
     house_rows = ''
     for m in sorted(valid, key=lambda x: x['totals']['efficiency'], reverse=True):
         hid = m['house_id']
         t = m['totals']
         pre_quality = m.get('pre_quality')
         tier = _assign_tier(pre_quality)
+        nan_cont = m.get('nan_continuity', 'unknown')
 
         eff = t.get('efficiency', 0)
         if eff >= 70:
@@ -517,7 +527,9 @@ def _build_aggregate_html(
         pq_html = _format_pre_quality(pre_quality)
 
         house_rows += f'''
-        <tr data-tier="{tier}">
+        <tr data-tier="{tier}" data-continuity="{nan_cont}"
+            data-explained="{t.get('explained_pct', 0):.1f}" data-background="{t.get('background_pct', 0):.1f}"
+            data-improvable="{t.get('improvable_pct', 0):.1f}" data-efficiency="{eff:.1f}">
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee;">
                 <a href="{link_prefix}dynamic_report_{hid}.html" style="color: #667eea; text-decoration: none;">{hid}</a>
             </td>
@@ -530,11 +542,14 @@ def _build_aggregate_html(
         </tr>
         '''
 
-    # Count tiers
+    # Count tiers and continuity labels
     tier_counts = {}
+    continuity_counts = {}
     for m in valid:
         tier = _assign_tier(m.get('pre_quality'))
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        cont = m.get('nan_continuity', 'unknown')
+        continuity_counts[cont] = continuity_counts.get(cont, 0) + 1
 
     # Distribution chart for efficiency
     chart_id = 'agg-efficiency-dist'
@@ -566,7 +581,7 @@ def _build_aggregate_html(
     })
 
     # Build filter bar
-    filter_bar = _build_filter_bar(tier_counts)
+    filter_bar = _build_filter_bar(tier_counts, continuity_counts)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -663,6 +678,11 @@ def _build_aggregate_html(
         .tier-poor {{ background: #fde2d4; color: #813e1a; }}
         .tier-faulty {{ background: #f8d7da; color: #721c24; }}
         .tier-unknown {{ background: #e9ecef; color: #495057; }}
+        .cont-continuous {{ background: #d4edda; color: #155724; }}
+        .cont-minor_gaps {{ background: #cce5ff; color: #004085; }}
+        .cont-discontinuous {{ background: #fff3cd; color: #856404; }}
+        .cont-fragmented {{ background: #f8d7da; color: #721c24; }}
+        .cont-unknown {{ background: #e9ecef; color: #495057; }}
         .filter-btn {{ padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer; font-size: 0.85em; }}
         .filter-btn:hover {{ background: #e9ecef; }}
         .filter-status {{ font-size: 0.85em; color: #888; margin-left: auto; }}
@@ -692,23 +712,23 @@ def _build_aggregate_html(
             <h2>Summary</h2>
             <div class="summary-grid">
                 <div class="summary-card" title="Total number of houses with valid data">
-                    <div class="summary-number">{n_houses}</div>
+                    <div class="summary-number" id="value-houses">{n_houses}</div>
                     <div class="summary-label">Houses</div>
                 </div>
                 <div class="summary-card" title="Average % of total power attributed to detected device activations">
-                    <div class="summary-number" style="color: #28a745;">{avg_explained:.1f}%</div>
+                    <div class="summary-number" id="value-explained" style="color: #28a745;">{avg_explained:.1f}%</div>
                     <div class="summary-label">Avg Explained</div>
                 </div>
                 <div class="summary-card" title="Average baseline power (5th percentile) - always-on devices like fridge, standby, etc.">
-                    <div class="summary-number" style="color: #6c757d;">{avg_background:.1f}%</div>
+                    <div class="summary-number" id="value-background" style="color: #6c757d;">{avg_background:.1f}%</div>
                     <div class="summary-label">Avg Background</div>
                 </div>
                 <div class="summary-card" title="Average power above background not matched to any device — includes sub-threshold events, complex-pattern appliances, and noise">
-                    <div class="summary-number" style="color: #fd7e14;">{avg_improvable:.1f}%</div>
+                    <div class="summary-number" id="value-improvable" style="color: #fd7e14;">{avg_improvable:.1f}%</div>
                     <div class="summary-label">Avg Unmatched</div>
                 </div>
                 <div class="summary-card" title="Explained / (Total - Background) - measures how well the algorithm detects non-background device activations">
-                    <div class="summary-number" style="color: #667eea;">{avg_eff:.1f}%</div>
+                    <div class="summary-number" id="value-efficiency" style="color: #667eea;">{avg_eff:.1f}%</div>
                     <div class="summary-label">Avg Efficiency</div>
                 </div>
             </div>
@@ -798,42 +818,63 @@ def _build_aggregate_html(
     }}
 
     // ── Tier Filtering ──────────────────────────────────────────
+    function getCheckedValues(className) {{
+        var checkboxes = document.querySelectorAll('.' + className + ' input[type=checkbox]');
+        var values = [];
+        checkboxes.forEach(function(cb) {{ if (cb.checked) values.push(cb.value); }});
+        return values;
+    }}
+
     function getCheckedTiers() {{
-        var checkboxes = document.querySelectorAll('.filter-checkbox input[type=checkbox]');
-        var tiers = [];
-        checkboxes.forEach(function(cb) {{ if (cb.checked) tiers.push(cb.value); }});
-        return tiers;
+        return getCheckedValues('tier-filter');
+    }}
+
+    function getCheckedContinuity() {{
+        return getCheckedValues('cont-filter');
     }}
 
     function updateFilter() {{
-        var selected = getCheckedTiers();
+        var selectedTiers = getCheckedTiers();
+        var selectedCont = getCheckedContinuity();
         var table = document.getElementById('houses-table');
         var rows = table.querySelectorAll('tbody tr');
         var visible = 0;
+        var sumExpl = 0, sumBg = 0, sumImp = 0, sumEff = 0;
 
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier');
-            if (selected.indexOf(tier) !== -1) {{
+            var cont = row.getAttribute('data-continuity');
+            if (selectedTiers.indexOf(tier) !== -1 && selectedCont.indexOf(cont) !== -1) {{
                 row.classList.remove('hidden');
                 visible++;
+                sumExpl += parseFloat(row.getAttribute('data-explained')) || 0;
+                sumBg += parseFloat(row.getAttribute('data-background')) || 0;
+                sumImp += parseFloat(row.getAttribute('data-improvable')) || 0;
+                sumEff += parseFloat(row.getAttribute('data-efficiency')) || 0;
             }} else {{
                 row.classList.add('hidden');
             }}
         }});
+
+        // Update summary cards
+        document.getElementById('value-houses').textContent = visible;
+        document.getElementById('value-explained').textContent = (visible > 0 ? (sumExpl / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-background').textContent = (visible > 0 ? (sumBg / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-improvable').textContent = (visible > 0 ? (sumImp / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-efficiency').textContent = (visible > 0 ? (sumEff / visible).toFixed(1) : '0.0') + '%';
 
         var status = document.getElementById('filter-status');
         if (status) status.textContent = 'Showing ' + visible + ' / ' + rows.length + ' houses';
     }}
 
     function allExceptFaulty() {{
-        var checkboxes = document.querySelectorAll('.filter-checkbox input[type=checkbox]');
-        checkboxes.forEach(function(cb) {{ cb.checked = (cb.value !== 'faulty'); }});
+        document.querySelectorAll('.tier-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = (cb.value !== 'faulty'); }});
+        document.querySelectorAll('.cont-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
         updateFilter();
     }}
 
     function selectAll() {{
-        var checkboxes = document.querySelectorAll('.filter-checkbox input[type=checkbox]');
-        checkboxes.forEach(function(cb) {{ cb.checked = true; }});
+        document.querySelectorAll('.filter-bar input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
         updateFilter();
     }}
     </script>
@@ -841,8 +882,8 @@ def _build_aggregate_html(
 </html>"""
 
 
-def _build_filter_bar(tier_counts: Dict[str, int]) -> str:
-    """Build the tier filter bar HTML."""
+def _build_filter_bar(tier_counts: Dict[str, int], continuity_counts: Optional[Dict[str, int]] = None) -> str:
+    """Build the tier and continuity filter bars HTML."""
     tiers = [
         ('excellent', 'Excellent', 'tier-excellent'),
         ('good', 'Good', 'tier-good'),
@@ -852,28 +893,56 @@ def _build_filter_bar(tier_counts: Dict[str, int]) -> str:
         ('unknown', 'Unknown', 'tier-unknown'),
     ]
 
-    checkboxes = ''
+    tier_checkboxes = ''
     for value, label, css_class in tiers:
         count = tier_counts.get(value, 0)
         if count == 0:
             continue
-        checkboxes += f'''
-            <span class="filter-checkbox {css_class}">
+        tier_checkboxes += f'''
+            <span class="filter-checkbox tier-filter {css_class}">
                 <input type="checkbox" value="{value}" checked onchange="updateFilter()">
                 {label} ({count})
             </span>'''
 
-    if not checkboxes:
+    if not tier_checkboxes:
         return ''
+
+    # NaN continuity filter
+    cont_checkboxes = ''
+    if continuity_counts:
+        cont_items = [
+            ('continuous', 'Continuous', 'cont-continuous'),
+            ('minor_gaps', 'Minor Gaps', 'cont-minor_gaps'),
+            ('discontinuous', 'Discontinuous', 'cont-discontinuous'),
+            ('fragmented', 'Fragmented', 'cont-fragmented'),
+            ('unknown', 'Unknown', 'cont-unknown'),
+        ]
+        for value, label, css_class in cont_items:
+            count = continuity_counts.get(value, 0)
+            if count == 0:
+                continue
+            cont_checkboxes += f'''
+            <span class="filter-checkbox cont-filter {css_class}">
+                <input type="checkbox" value="{value}" checked onchange="updateFilter()">
+                {label} ({count})
+            </span>'''
+
+    cont_bar = ''
+    if cont_checkboxes:
+        cont_bar = f'''
+    <div class="filter-bar">
+        <label>Filter by NaN Continuity:</label>
+        {cont_checkboxes}
+    </div>'''
 
     return f'''
     <div class="filter-bar">
         <label>Filter by Pre-Quality:</label>
-        {checkboxes}
+        {tier_checkboxes}
         <button class="filter-btn" onclick="allExceptFaulty()" style="font-weight:bold;">All except Faulty</button>
         <button class="filter-btn" onclick="selectAll()">Show All</button>
         <span class="filter-status" id="filter-status"></span>
-    </div>'''
+    </div>{cont_bar}'''
 
 
 def _build_empty_aggregate_html(generated_at: str, experiment_dir: str, total: int) -> str:

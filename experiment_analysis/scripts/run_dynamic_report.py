@@ -193,9 +193,11 @@ def main():
             else:
                 print(f"  [{successful+failed+1}/{len(house_ids)}] house {house_id}...", end=" ", flush=True)
 
+            house_pre = pre_analysis_scores.get(house_id, {})
+            pre_quality = house_pre.get('quality_score') if isinstance(house_pre, dict) else house_pre
             generate_dynamic_house_report(
                 str(experiment_dir), house_id, out_path,
-                pre_quality=pre_analysis_scores.get(house_id),
+                pre_quality=pre_quality,
             )
 
             successful += 1

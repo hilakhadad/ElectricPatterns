@@ -389,6 +389,20 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         badge_class = 'badge-red'
         badge_text = 'Poor'
 
+    # NaN continuity badge
+    nan_continuity = quality.get('nan_continuity_label', '')
+    nan_cont_colors = {
+        'continuous': ('badge-green', 'Continuous'),
+        'minor_gaps': ('badge-blue', 'Minor Gaps'),
+        'discontinuous': ('badge-orange', 'Discontinuous'),
+        'fragmented': ('badge-red', 'Fragmented'),
+    }
+    nan_cont_class, nan_cont_text = nan_cont_colors.get(nan_continuity, ('', ''))
+    max_nan_pct = quality.get('max_phase_nan_pct', 0)
+    nan_badge_html = ''
+    if nan_cont_text:
+        nan_badge_html = f' <span class="badge {nan_cont_class}" title="NaN continuity: max phase NaN = {max_nan_pct:.1f}%">{nan_cont_text}</span>'
+
     # Active flags
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
@@ -653,7 +667,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
         <header>
             <h1>House {house_id} Analysis</h1>
-            <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>
+            <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>{nan_badge_html}
         </header>
 
         <div class="tabs-container">
