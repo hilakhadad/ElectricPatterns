@@ -305,7 +305,10 @@ def _add_classification_if_available(analysis: Dict[str, Any], experiment_dir: P
         analysis['classification'] = classification
 
         # Load activation list if it exists
-        activation_path = experiment_dir / f"activation_list_{house_id}.json"
+        activation_path = experiment_dir / "activation_lists" / f"activation_list_{house_id}.json"
+        # Fallback: check legacy location (experiment root)
+        if not activation_path.exists():
+            activation_path = experiment_dir / f"activation_list_{house_id}.json"
         if activation_path.exists():
             with open(activation_path, 'r') as f:
                 analysis['activation_list'] = json.load(f)

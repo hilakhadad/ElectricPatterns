@@ -1,11 +1,23 @@
 """
-Test script to run the pipeline on multiple houses in parallel.
-Calls run_pipeline_for_house directly (no subprocess overhead).
+Run the pipeline on multiple houses in parallel.
+
+Supports both static and dynamic threshold experiments automatically.
+The mode is determined by the experiment config (same as test_single_house.py).
 
 Performance optimized:
 - Auto-detects CPU cores for optimal parallelization
 - Tracks time per house for ETA estimation
 - Sorts houses by file size (largest first) for better load balancing
+
+Usage:
+    # Default (dynamic threshold, exp010):
+    python scripts/test_array_of_houses.py
+
+    # Static experiment (legacy):
+    python scripts/test_array_of_houses.py --experiment_name exp007_symmetric_threshold
+
+    # With options:
+    python scripts/test_array_of_houses.py --skip_visualization --minimal_output
 """
 import sys
 import os
@@ -66,12 +78,6 @@ def get_houses_sorted_by_size():
 # HOUSE_IDS = get_houses_sorted_by_size()
 HOUSE_IDS = ["305", "1"]
 
-# Experiment name (must match one in detection_config.py)
-EXPERIMENT_NAME = "exp008_tail_extension"
-
-# Number of iterations per house
-MAX_ITERATIONS = 2
-
 # Auto-detect CPU cores
 # NOTE: More workers != faster! Often 2-4 workers is optimal due to:
 # - Disk I/O bottleneck (all processes read/write same disk)
@@ -79,11 +85,7 @@ MAX_ITERATIONS = 2
 # - CPU thermal throttling
 import multiprocessing
 CPU_COUNT = multiprocessing.cpu_count()
-# Use fewer workers - 2-4 is usually optimal for I/O-heavy tasks
 MAX_WORKERS = min(4, CPU_COUNT)  # Try 2, 3, or 4 and see which is fastest
-
-# Skip visualization step (faster processing)
-SKIP_VISUALIZATION = False
 
 # ============================================================================
 
@@ -93,39 +95,68 @@ def process_single_house(args):
     Worker function for parallel processing.
     Must be at module level for multiprocessing to work.
     """
-    house_id, experiment_name, house_output, max_iterations, input_path, skip_visualization = args
+    house_id, experiment_name, output_path, max_iterations, input_path, skip_visualization, minimal_output = args
 
     # Import here to avoid issues with multiprocessing
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-    from test_single_house import run_pipeline_for_house
+    from pipeline.runner import run_pipeline
 
-    result = run_pipeline_for_house(
+    result = run_pipeline(
         house_id=house_id,
         experiment_name=experiment_name,
-        output_path=house_output,
+        output_path=output_path,
         max_iterations=max_iterations,
         input_path=input_path,
         quiet=True,  # Suppress console output in parallel mode
-        skip_visualization=skip_visualization
+        skip_visualization=skip_visualization,
+        minimal_output=minimal_output,
     )
 
     return {
         'house_id': house_id,
         'success': result['success'],
         'iterations': result['iterations'],
-        'error': result.get('error')
+        'error': result.get('error'),
     }
 
 
 def main():
+    import argparse
+
+    # Add src to path for config import
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from core.config import DEFAULT_EXPERIMENT, get_experiment
+
+    parser = argparse.ArgumentParser(description="Run pipeline on multiple houses in parallel")
+    parser.add_argument("--experiment_name", type=str, default=DEFAULT_EXPERIMENT,
+                        help=f"Experiment name (default: {DEFAULT_EXPERIMENT})")
+    parser.add_argument("--max_iterations", type=int, default=2,
+                        help="Max iterations per house (static experiments only, default: 2)")
+    parser.add_argument("--skip_visualization", action="store_true",
+                        help="Skip visualization step (recommended for batch)")
+    parser.add_argument("--minimal_output", action="store_true",
+                        help="Delete intermediate pkl files (dynamic experiments only)")
+    args = parser.parse_args()
+
+    exp_config = get_experiment(args.experiment_name)
+    is_dynamic = exp_config.threshold_schedule is not None
+
     start_time = time.time()
 
     print("=" * 60)
-    print("RUNNING PIPELINE ON MULTIPLE HOUSES")
-    print("=" * 60)
-    print(f"Houses: {len(HOUSE_IDS)} total")
-    print(f"Experiment: {EXPERIMENT_NAME}")
-    print(f"Max iterations per house: {MAX_ITERATIONS}")
+    if is_dynamic:
+        print("DYNAMIC THRESHOLD PIPELINE — MULTIPLE HOUSES")
+        print("=" * 60)
+        print(f"Houses: {len(HOUSE_IDS)} total")
+        print(f"Experiment: {args.experiment_name}")
+        print(f"Threshold schedule: {exp_config.threshold_schedule}")
+    else:
+        print("STATIC PIPELINE — MULTIPLE HOUSES")
+        print("=" * 60)
+        print(f"Houses: {len(HOUSE_IDS)} total")
+        print(f"Experiment: {args.experiment_name}")
+        print(f"Threshold: {exp_config.threshold}W, Max iterations: {args.max_iterations}")
+    print(f"Skip visualization: {args.skip_visualization}")
     print(f"Parallel workers: {min(MAX_WORKERS, len(HOUSE_IDS))} (CPU cores: {CPU_COUNT})")
     print("=" * 60 + "\n")
 
@@ -135,15 +166,18 @@ def main():
 
     # Create shared output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    shared_output_dir = str(_SCRIPT_DIR / "OUTPUT" / "experiments" / f"{EXPERIMENT_NAME}_{timestamp}")
+    shared_output_dir = str(
+        _SCRIPT_DIR / "OUTPUT" / "experiments" / f"{exp_config.exp_id}_{timestamp}"
+    )
     os.makedirs(shared_output_dir, exist_ok=True)
 
     print(f"Output directory: {shared_output_dir}\n")
 
-    # Prepare tasks
+    # Prepare tasks — all houses share the same output root
     input_path = str(_INPUT_PATH)
     tasks = [
-        (house_id, EXPERIMENT_NAME, f"{shared_output_dir}/house_{house_id}", MAX_ITERATIONS, input_path, SKIP_VISUALIZATION)
+        (house_id, args.experiment_name, shared_output_dir,
+         args.max_iterations, input_path, args.skip_visualization, args.minimal_output)
         for house_id in HOUSE_IDS
     ]
 
@@ -168,7 +202,7 @@ def main():
                 if HAS_TQDM:
                     futures_iter.set_postfix(last=house_id, status=status)
                 else:
-                    print(f"[{house_id}] {status}")
+                    print(f"[{house_id}] {status} ({result.get('iterations', 0)} iterations)")
             except Exception as e:
                 print(f"[{house_id}] Exception: {e}")
                 results.append({'house_id': house_id, 'success': False, 'error': str(e)})
@@ -190,7 +224,8 @@ def main():
 
     total_time = time.time() - start_time
     print(f"\nTotal time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
-    print(f"Average per house: {total_time/len(HOUSE_IDS):.1f}s")
+    if HOUSE_IDS:
+        print(f"Average per house: {total_time/len(HOUSE_IDS):.1f}s")
     print(f"\nResults saved to: {shared_output_dir}")
 
 

@@ -37,13 +37,15 @@ def build_device_activations_json(
         threshold_schedule: List of thresholds [2000, 1500, 1100, 800]
         device_profiles: Dict mapping run_number -> {on_event_id -> {timestamps, values}}
                          If None, activations will not have per-minute values.
-        output_path: Where to save the JSON. Default: experiment_dir/device_activations_{house_id}.json
+        output_path: Where to save the JSON. Default: experiment_dir/device_activations/device_activations_{house_id}.json
 
     Returns:
         Path to the saved JSON file
     """
     if output_path is None:
-        output_path = experiment_dir / f"device_activations_{house_id}.json"
+        activations_dir = experiment_dir / "device_activations"
+        activations_dir.mkdir(parents=True, exist_ok=True)
+        output_path = activations_dir / f"device_activations_{house_id}.json"
 
     activations = []
     matched_count = 0

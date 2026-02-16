@@ -198,6 +198,10 @@ EXPERIMENTS = {
 }
 
 
+# Default experiment — Dynamic Threshold (exp010) is the standard pipeline
+DEFAULT_EXPERIMENT = 'exp010_dynamic_threshold'
+
+
 def get_experiment(exp_name: str) -> ExperimentConfig:
     """
     Get experiment configuration by name.

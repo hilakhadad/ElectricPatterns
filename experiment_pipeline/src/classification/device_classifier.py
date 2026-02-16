@@ -183,7 +183,9 @@ def generate_activation_list(
     }
 
     # Save to JSON
-    output_path = experiment_dir / f"activation_list_{house_id}.json"
+    activation_lists_dir = experiment_dir / "activation_lists"
+    activation_lists_dir.mkdir(parents=True, exist_ok=True)
+    output_path = activation_lists_dir / f"activation_list_{house_id}.json"
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, indent=2, default=str)
 
