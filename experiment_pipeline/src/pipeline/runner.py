@@ -268,8 +268,8 @@ def run_pipeline(
 
                 # Evaluation and optional visualization
                 eval_viz_steps = [
-                    ('Evaluation', lambda eth=evaluation_threshold: process_evaluation(
-                        house_id=house_id, run_number=run_number, threshold=eth)),
+                    ('Evaluation', lambda eth=evaluation_threshold, ath=threshold: process_evaluation(
+                        house_id=house_id, run_number=run_number, threshold=eth, actual_threshold=ath)),
                 ]
                 if not skip_visualization:
                     eval_viz_steps.append(('Visualization', lambda th=threshold: process_visualization(
@@ -306,8 +306,8 @@ def run_pipeline(
                     ('Segmentation', lambda: process_segmentation(
                         house_id=house_id, run_number=run_number, skip_large_file=True,
                         use_nan_imputation=getattr(exp_config, 'use_nan_imputation', False))),
-                    ('Evaluation', lambda: process_evaluation(
-                        house_id=house_id, run_number=run_number, threshold=threshold)),
+                    ('Evaluation', lambda th=threshold: process_evaluation(
+                        house_id=house_id, run_number=run_number, threshold=th, actual_threshold=th)),
                 ]
 
                 if not skip_visualization:
