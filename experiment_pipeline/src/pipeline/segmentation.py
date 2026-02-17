@@ -114,6 +114,10 @@ def process_segmentation(
         if data.empty:
             continue
 
+        # NaN imputation — ensure remaining power doesn't have NaN gaps
+        from core.nan_imputation import impute_nan_gaps
+        data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
+
         all_new_columns = {}
         all_skipped_ids = []
 

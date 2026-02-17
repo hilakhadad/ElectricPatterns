@@ -156,6 +156,11 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             continue
 
         data = data.sort_values('timestamp').reset_index(drop=True)
+
+        # NaN imputation — fill short gaps to prevent false diff() jumps
+        from core.nan_imputation import impute_nan_gaps
+        data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
+
         data_indexed = data.set_index('timestamp')
 
         month_results = pd.DataFrame()
