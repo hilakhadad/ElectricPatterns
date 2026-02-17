@@ -32,6 +32,7 @@ class ExperimentConfig:
     tail_min_gain: int = 100
     tail_min_residual_fraction: float = 0.05
     threshold_schedule: Optional[List[int]] = None  # Dynamic threshold: list of thresholds per iteration
+    use_nan_imputation: bool = False  # Fill short NaN gaps at runtime to prevent false diff() events
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -55,6 +56,7 @@ class ExperimentConfig:
             'tail_min_gain': self.tail_min_gain,
             'tail_min_residual_fraction': self.tail_min_residual_fraction,
             'threshold_schedule': self.threshold_schedule,
+            'use_nan_imputation': self.use_nan_imputation,
         }
 
     def to_json(self, file_path: str):
@@ -194,6 +196,22 @@ EXPERIMENTS = {
         use_near_threshold_detection=False,
         use_tail_extension=True,
         threshold_schedule=[2000, 1500, 1100, 800],
+    ),
+
+    'exp012_nan_imputation': ExperimentConfig(
+        exp_id='exp012',
+        description='NaN imputation test: exp010 + runtime NaN gap filling (ffill<=5min, interp<=60min)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
     ),
 }
 

@@ -259,6 +259,7 @@ def run_pipeline(
                     run_number=run_number,
                     skip_large_file=True,
                     capture_device_profiles=True,
+                    use_nan_imputation=getattr(exp_config, 'use_nan_imputation', False),
                 )
                 step_times['segmentation'] = time.time() - t0
                 logger.info(f"  Segmentation took {step_times['segmentation']:.1f}s")
@@ -303,7 +304,8 @@ def run_pipeline(
                     ('Matching', lambda: process_matching(
                         house_id=house_id, run_number=run_number, threshold=threshold)),
                     ('Segmentation', lambda: process_segmentation(
-                        house_id=house_id, run_number=run_number, skip_large_file=True)),
+                        house_id=house_id, run_number=run_number, skip_large_file=True,
+                        use_nan_imputation=getattr(exp_config, 'use_nan_imputation', False))),
                     ('Evaluation', lambda: process_evaluation(
                         house_id=house_id, run_number=run_number, threshold=threshold)),
                 ]

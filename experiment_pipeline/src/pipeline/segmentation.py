@@ -19,7 +19,8 @@ def process_segmentation(
     house_id: str,
     run_number: int,
     skip_large_file: bool = True,
-    capture_device_profiles: bool = False
+    capture_device_profiles: bool = False,
+    use_nan_imputation: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Process segmentation for a house - processes month by month.
@@ -115,8 +116,9 @@ def process_segmentation(
             continue
 
         # NaN imputation — ensure remaining power doesn't have NaN gaps
-        from core.nan_imputation import impute_nan_gaps
-        data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
+        if use_nan_imputation:
+            from core.nan_imputation import impute_nan_gaps
+            data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
 
         all_new_columns = {}
         all_skipped_ids = []
