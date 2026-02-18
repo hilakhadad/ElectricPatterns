@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 def _assign_tier(pre_quality) -> str:
     """Assign quality tier based on pre-analysis quality score."""
-    if pre_quality == 'faulty':
-        return 'faulty'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
     elif pre_quality is None:
         return 'unknown'
     elif pre_quality >= 90:
@@ -46,8 +46,14 @@ def _assign_tier(pre_quality) -> str:
 
 def _format_pre_quality(pre_quality) -> str:
     """Format pre-quality score as colored HTML."""
-    if pre_quality == 'faulty':
-        return '<span style="color:#dc3545;font-weight:bold;" title="Phase with >=20% NaN values">Faulty</span>'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        _faulty_labels = {
+            'faulty_dead_phase': ('Dead Phase', 'Phase with <1% power'),
+            'faulty_high_nan': ('High NaN', 'Phase with >=20% NaN values'),
+            'faulty_both': ('Both', 'Dead phase + high NaN'),
+        }
+        _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
+        return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
     elif pre_quality is None:
         return '<span style="color:#999;">-</span>'
     else:
@@ -676,7 +682,9 @@ def _build_aggregate_html(
         .tier-good {{ background: #cce5ff; color: #004085; }}
         .tier-fair {{ background: #fff3cd; color: #856404; }}
         .tier-poor {{ background: #fde2d4; color: #813e1a; }}
-        .tier-faulty {{ background: #f8d7da; color: #721c24; }}
+        .tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
+        .tier-faulty_high_nan {{ background: #e2d5f0; color: #6f42c1; }}
+        .tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .tier-unknown {{ background: #e9ecef; color: #495057; }}
         .cont-continuous {{ background: #d4edda; color: #155724; }}
         .cont-minor_gaps {{ background: #cce5ff; color: #004085; }}
@@ -801,8 +809,8 @@ def _build_aggregate_html(
             }} else if (type === 'quality') {{
                 var txtA = cellA.textContent.trim();
                 var txtB = cellB.textContent.trim();
-                valA = txtA === 'Faulty' ? -1 : txtA === '-' ? -2 : parseFloat(txtA) || 0;
-                valB = txtB === 'Faulty' ? -1 : txtB === '-' ? -2 : parseFloat(txtB) || 0;
+                valA = (txtA === 'Dead Phase' || txtA === 'High NaN' || txtA === 'Both') ? -1 : txtA === '-' ? -2 : parseFloat(txtA) || 0;
+                valB = (txtB === 'Dead Phase' || txtB === 'High NaN' || txtB === 'Both') ? -1 : txtB === '-' ? -2 : parseFloat(txtB) || 0;
             }} else {{
                 valA = cellA.textContent.trim().toLowerCase();
                 valB = cellB.textContent.trim().toLowerCase();
@@ -868,7 +876,7 @@ def _build_aggregate_html(
     }}
 
     function allExceptFaulty() {{
-        document.querySelectorAll('.tier-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = (cb.value !== 'faulty'); }});
+        document.querySelectorAll('.tier-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = !cb.value.startsWith('faulty'); }});
         document.querySelectorAll('.cont-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
         updateFilter();
     }}
@@ -889,7 +897,9 @@ def _build_filter_bar(tier_counts: Dict[str, int], continuity_counts: Optional[D
         ('good', 'Good', 'tier-good'),
         ('fair', 'Fair', 'tier-fair'),
         ('poor', 'Poor', 'tier-poor'),
-        ('faulty', 'Faulty', 'tier-faulty'),
+        ('faulty_dead_phase', 'Dead Phase', 'tier-faulty_dead_phase'),
+        ('faulty_high_nan', 'High NaN', 'tier-faulty_high_nan'),
+        ('faulty_both', 'Both', 'tier-faulty_both'),
         ('unknown', 'Unknown', 'tier-unknown'),
     ]
 

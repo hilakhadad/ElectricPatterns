@@ -516,8 +516,15 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['quality_flags'] = quality_flags
 
     # Mark faulty phases via label (keep numeric score for sorting/comparison)
-    if metrics['has_faulty_nan_phase']:
-        metrics['quality_label'] = 'faulty'
+    # Split into 3 subcategories: dead_phase, high_nan, both
+    has_dead = metrics['has_dead_phase']
+    has_nan = metrics['has_faulty_nan_phase']
+    if has_dead and has_nan:
+        metrics['quality_label'] = 'faulty_both'
+    elif has_dead:
+        metrics['quality_label'] = 'faulty_dead_phase'
+    elif has_nan:
+        metrics['quality_label'] = 'faulty_high_nan'
     else:
         metrics['quality_label'] = None
 

@@ -22,8 +22,8 @@ from visualization.charts import (
 
 def _assign_tier(pre_quality) -> str:
     """Assign quality tier based on pre-analysis quality score."""
-    if pre_quality == 'faulty':
-        return 'faulty'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
     elif pre_quality is None:
         return 'unknown'
     elif pre_quality >= 90:
@@ -334,8 +334,14 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         # Pre-analysis quality score (from house_analysis)
         pre_quality = a.get('pre_analysis_quality_score', None)
         tier = _assign_tier(pre_quality)
-        if pre_quality == 'faulty':
-            pre_quality_html = '<span style="color: #dc3545; font-weight: bold;" title="Phase with ≥20% NaN values">Faulty</span>'
+        if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+            _faulty_labels = {
+                'faulty_dead_phase': ('Dead Phase', 'Phase with <1% power'),
+                'faulty_high_nan': ('High NaN', 'Phase with ≥20% NaN values'),
+                'faulty_both': ('Both', 'Dead phase + high NaN'),
+            }
+            _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
+            pre_quality_html = f'<span style="color: #6f42c1; font-weight: bold;" title="{_ft}">{_fl}</span>'
         elif pre_quality is not None:
             pre_q_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
             pre_quality_html = f'<span style="color: {pre_q_color}; font-weight: bold;">{pre_quality:.0f}</span>'
@@ -644,7 +650,9 @@ def _build_html_document(title: str, summary: str, table: str,
         .filter-checkbox.tier-good {{ background: #cce5ff; color: #004085; }}
         .filter-checkbox.tier-fair {{ background: #fff3cd; color: #856404; }}
         .filter-checkbox.tier-poor {{ background: #f8d7da; color: #721c24; }}
-        .filter-checkbox.tier-faulty {{ background: #e2d5f0; color: #6f42c1; }}
+        .filter-checkbox.tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
+        .filter-checkbox.tier-faulty_high_nan {{ background: #e2d5f0; color: #6f42c1; }}
+        .filter-checkbox.tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .filter-checkbox.tier-unknown {{ background: #e9ecef; color: #495057; }}
 
         .filter-checkbox.unchecked {{
@@ -853,8 +861,14 @@ def _build_html_document(title: str, summary: str, table: str,
             <span class="filter-checkbox tier-poor">
                 <input type="checkbox" value="poor" checked onchange="updateFilter()"> Poor <span class="tier-count-label" id="count-poor"></span>
             </span>
-            <span class="filter-checkbox tier-faulty">
-                <input type="checkbox" value="faulty" checked onchange="updateFilter()"> Faulty <span class="tier-count-label" id="count-faulty"></span>
+            <span class="filter-checkbox tier-faulty_dead_phase">
+                <input type="checkbox" value="faulty_dead_phase" checked onchange="updateFilter()"> Dead Phase <span class="tier-count-label" id="count-faulty_dead_phase"></span>
+            </span>
+            <span class="filter-checkbox tier-faulty_high_nan">
+                <input type="checkbox" value="faulty_high_nan" checked onchange="updateFilter()"> High NaN <span class="tier-count-label" id="count-faulty_high_nan"></span>
+            </span>
+            <span class="filter-checkbox tier-faulty_both">
+                <input type="checkbox" value="faulty_both" checked onchange="updateFilter()"> Both <span class="tier-count-label" id="count-faulty_both"></span>
             </span>
             <span class="filter-checkbox tier-unknown">
                 <input type="checkbox" value="unknown" checked onchange="updateFilter()"> Unknown <span class="tier-count-label" id="count-unknown"></span>
@@ -893,7 +907,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
         // Count houses per tier and show in filter bar
         function initFilterCounts() {{
-            const tiers = ['excellent', 'good', 'fair', 'poor', 'faulty', 'unknown'];
+            const tiers = ['excellent', 'good', 'fair', 'poor', 'faulty_dead_phase', 'faulty_high_nan', 'faulty_both', 'unknown'];
             tiers.forEach(function(tier) {{
                 const count = houseData.filter(function(h) {{ return h.tier === tier; }}).length;
                 const el = document.getElementById('count-' + tier);
@@ -934,7 +948,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
         function allExceptFaulty() {{
             document.querySelectorAll('#filter-bar input[type=checkbox]').forEach(function(cb) {{
-                cb.checked = (cb.value !== 'faulty');
+                cb.checked = !cb.value.startsWith('faulty');
             }});
             updateFilter();
         }}
@@ -1396,9 +1410,14 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     pre_quality = analysis.get('pre_analysis_quality_score', None)
 
     # Pre-quality display values (computed outside f-string to avoid format issues)
-    if pre_quality == 'faulty':
-        pre_quality_display = 'Faulty'
-        pre_quality_color = '#dc3545'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        _faulty_displays = {
+            'faulty_dead_phase': 'Dead Phase',
+            'faulty_high_nan': 'High NaN',
+            'faulty_both': 'Both',
+        }
+        pre_quality_display = _faulty_displays.get(pre_quality, 'Faulty')
+        pre_quality_color = '#6f42c1'
     elif pre_quality is not None:
         pre_quality_display = f'{pre_quality:.0f}'
         pre_quality_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'

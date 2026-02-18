@@ -185,13 +185,17 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         else:
             issues_html = '<span class="no-issues">None</span>'
 
-        # Quality badge with special "Faulty" category
+        # Quality badge with Faulty subcategories
         score = quality.get('quality_score', 0)
         has_dead_phase = flags.get('has_dead_phase', False)
         has_faulty_nan = flags.get('has_faulty_nan_phase', False)
 
-        if has_dead_phase or has_faulty_nan:
-            badge = '<span class="badge badge-purple">Faulty</span>'
+        if has_dead_phase and has_faulty_nan:
+            badge = '<span class="badge badge-purple-dark">Faulty (Both)</span>'
+        elif has_dead_phase:
+            badge = '<span class="badge badge-purple-light">Faulty (Dead Phase)</span>'
+        elif has_faulty_nan:
+            badge = '<span class="badge badge-purple">Faulty (High NaN)</span>'
         elif score >= 90:
             badge = '<span class="badge badge-green">Excellent</span>'
         elif score >= 75:
@@ -298,13 +302,17 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
 
 def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate quality tiers breakdown HTML."""
-    tiers = {
-        'Faulty': [],
-        'Excellent (90+)': [],
-        'Good (75-89)': [],
-        'Fair (50-74)': [],
-        'Poor (<50)': []
-    }
+    # Use ordered list of tuples to preserve display order
+    tiers = [
+        ('Faulty — Dead Phase', []),
+        ('Faulty — High NaN', []),
+        ('Faulty — Both', []),
+        ('Excellent (90+)', []),
+        ('Good (75-89)', []),
+        ('Fair (50-74)', []),
+        ('Poor (<50)', []),
+    ]
+    tier_dict = {name: houses for name, houses in tiers}
 
     for a in analyses:
         house_id = a.get('house_id', 'unknown')
@@ -313,28 +321,39 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
         has_dead_phase = flags.get('has_dead_phase', False)
         has_faulty_nan = flags.get('has_faulty_nan_phase', False)
 
-        # Faulty takes priority over other tiers
-        if has_dead_phase or has_faulty_nan:
-            tiers['Faulty'].append(house_id)
+        # Faulty subcategories take priority over numeric tiers
+        if has_dead_phase and has_faulty_nan:
+            tier_dict['Faulty — Both'].append(house_id)
+        elif has_dead_phase:
+            tier_dict['Faulty — Dead Phase'].append(house_id)
+        elif has_faulty_nan:
+            tier_dict['Faulty — High NaN'].append(house_id)
         elif score >= 90:
-            tiers['Excellent (90+)'].append(house_id)
+            tier_dict['Excellent (90+)'].append(house_id)
         elif score >= 75:
-            tiers['Good (75-89)'].append(house_id)
+            tier_dict['Good (75-89)'].append(house_id)
         elif score >= 50:
-            tiers['Fair (50-74)'].append(house_id)
+            tier_dict['Fair (50-74)'].append(house_id)
         else:
-            tiers['Poor (<50)'].append(house_id)
+            tier_dict['Poor (<50)'].append(house_id)
 
     html_parts = []
-    colors = {'Faulty': 'purple', 'Excellent (90+)': 'green', 'Good (75-89)': 'blue',
-              'Fair (50-74)': 'orange', 'Poor (<50)': 'red'}
+    colors = {
+        'Faulty — Dead Phase': 'purple-light',
+        'Faulty — High NaN': 'purple',
+        'Faulty — Both': 'purple-dark',
+        'Excellent (90+)': 'green',
+        'Good (75-89)': 'blue',
+        'Fair (50-74)': 'orange',
+        'Poor (<50)': 'red',
+    }
 
-    for tier, houses in tiers.items():
-        color = colors[tier]
+    for tier_name, houses in tiers:
+        color = colors[tier_name]
         houses_str = ', '.join(str(h) for h in houses) if houses else 'None'
         html_parts.append(f"""
         <div class="tier-card tier-{color}">
-            <h4>{tier}</h4>
+            <h4>{tier_name}</h4>
             <div class="tier-count">{len(houses)} houses</div>
             <div class="tier-houses">{houses_str}</div>
         </div>
@@ -370,12 +389,19 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     temporal_by_period = analysis.get('temporal_by_period', {})
     flags = analysis.get('flags', {})
 
-    # Quality badge
+    # Quality badge with Faulty subcategories
     score = quality.get('quality_score', 0)
-    has_faulty = flags.get('has_dead_phase', False) or flags.get('has_faulty_nan_phase', False)
-    if has_faulty:
+    has_dead = flags.get('has_dead_phase', False)
+    has_nan = flags.get('has_faulty_nan_phase', False)
+    if has_dead and has_nan:
+        badge_class = 'badge-purple-dark'
+        badge_text = 'Faulty (Both)'
+    elif has_dead:
+        badge_class = 'badge-purple-light'
+        badge_text = 'Faulty (Dead Phase)'
+    elif has_nan:
         badge_class = 'badge-purple'
-        badge_text = 'Faulty'
+        badge_text = 'Faulty (High NaN)'
     elif score >= 90:
         badge_class = 'badge-green'
         badge_text = 'Excellent'
@@ -587,6 +613,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         .badge-orange {{ background: #fff3cd; color: #856404; }}
         .badge-red {{ background: #f8d7da; color: #721c24; }}
         .badge-purple {{ background: #e2d5f1; color: #6f42c1; }}
+        .badge-purple-light {{ background: #d4c5e2; color: #5a3d7a; }}
+        .badge-purple-dark {{ background: #c9a3d4; color: #4a0e6b; }}
         .flags {{ color: #e74c3c; }}
         .back-link {{ margin-bottom: 15px; }}
         .back-link a {{ color: #667eea; text-decoration: none; }}
@@ -1001,6 +1029,8 @@ def _build_html_document(title: str, summary: str, table: str,
         .badge-orange {{ background: #fff3cd; color: #856404; }}
         .badge-red {{ background: #f8d7da; color: #721c24; }}
         .badge-purple {{ background: #e2d5f1; color: #6f42c1; }}
+        .badge-purple-light {{ background: #d4c5e2; color: #5a3d7a; }}
+        .badge-purple-dark {{ background: #c9a3d4; color: #4a0e6b; }}
 
         /* Issue tags in table */
         .issues-cell {{
@@ -1038,11 +1068,17 @@ def _build_html_document(title: str, summary: str, table: str,
         /* Quality tiers */
         .tiers-grid {{
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(7, 1fr);
             gap: 12px;
         }}
 
-        @media (max-width: 1000px) {{
+        @media (max-width: 1200px) {{
+            .tiers-grid {{
+                grid-template-columns: repeat(4, 1fr);
+            }}
+        }}
+
+        @media (max-width: 800px) {{
             .tiers-grid {{
                 grid-template-columns: repeat(3, 1fr);
             }}
@@ -1066,6 +1102,8 @@ def _build_html_document(title: str, summary: str, table: str,
         }}
 
         .tier-purple {{ background: #e2d5f1; border-color: #6f42c1; }}
+        .tier-purple-light {{ background: #d4c5e2; border-color: #5a3d7a; }}
+        .tier-purple-dark {{ background: #c9a3d4; border-color: #4a0e6b; }}
         .tier-green {{ background: #d4edda; border-color: #28a745; }}
         .tier-blue {{ background: #cce5ff; border-color: #007bff; }}
         .tier-orange {{ background: #fff3cd; border-color: #ffc107; }}

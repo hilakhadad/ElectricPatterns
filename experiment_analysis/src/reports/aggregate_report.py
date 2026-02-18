@@ -57,8 +57,8 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
         quality_label = quality.get('quality_label', None)
         quality_score = quality.get('quality_score', None)
 
-        if quality_label == 'faulty':
-            qs = 'faulty'
+        if quality_label and quality_label.startswith('faulty'):
+            qs = quality_label  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
         elif quality_score is not None:
             qs = quality_score
         else:
