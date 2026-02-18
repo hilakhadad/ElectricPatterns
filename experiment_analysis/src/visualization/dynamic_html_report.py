@@ -264,6 +264,20 @@ def _build_house_html(
             f'</div>'
         )
 
+    # Build activations section (may be empty if skipped)
+    activations_section_html = ''
+    if activations_detail_html:
+        activations_section_html = (
+            '<section>'
+            '<h2>Device Activations Detail</h2>'
+            '<p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">'
+            'Individual ON&rarr;OFF activations grouped by device type (high-confidence only). '
+            'Click column headers to sort. Use "Copy Dates" or "Copy All Dates" for external tools.'
+            '</p>'
+            f'{activations_detail_html}'
+            '</section>'
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -423,14 +437,7 @@ def _build_house_html(
             </section>
         </div>
 
-        {f"""<section>
-            <h2>Device Activations Detail</h2>
-            <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
-                Individual ON&rarr;OFF activations grouped by device type (high-confidence only).
-                Click column headers to sort. Use "Copy Dates" or "Copy All Dates" for external tools.
-            </p>
-            {activations_detail_html}
-        </section>""" if activations_detail_html else ""}
+        {activations_section_html}
 
         <footer>
             ElectricPatterns - Dynamic Threshold Experiment Report
