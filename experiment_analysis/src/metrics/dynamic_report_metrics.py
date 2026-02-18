@@ -159,14 +159,16 @@ def _compute_phase_decomposition(
         how='inner',
     )
 
-    original = merged[orig_col].clip(lower=0)
-    remaining = merged[remain_col].clip(lower=0)
+    # NaN = no consumption reading → treat as 0W (background)
+    nan_minutes = int((merged[orig_col].isna() | merged[remain_col].isna()).sum())
+    original = merged[orig_col].fillna(0).clip(lower=0)
+    remaining = merged[remain_col].fillna(0).clip(lower=0)
 
     total_power = original.sum()
     minutes = len(original)
 
     # Background: 5th percentile of original power * minutes
-    p5 = np.percentile(original.dropna(), 5) if len(original.dropna()) > 0 else 0
+    p5 = np.percentile(original, 5) if minutes > 0 else 0
     background_power = p5 * minutes
 
     # Explained: original - remaining (per-minute, clipped >= 0)
@@ -189,7 +191,7 @@ def _compute_phase_decomposition(
     to_kwh = lambda w: round(w / 60 / 1000, 2)
 
     # Negative remaining minutes (sanity check)
-    neg_minutes = (final[remain_col] < 0).sum() if remain_col in final.columns else 0
+    neg_minutes = int((remaining < 0).sum())
 
     return {
         'total_power': round(total_power, 1),
@@ -206,6 +208,7 @@ def _compute_phase_decomposition(
         'improvable_pct': round(improvable_pct, 1),
         'efficiency': round(efficiency, 1),
         'minutes': minutes,
+        'nan_minutes': nan_minutes,
         'negative_minutes': neg_minutes,
     }
 

@@ -73,6 +73,7 @@ def generate_dynamic_house_report(
     house_id: str,
     output_path: Optional[str] = None,
     pre_quality=None,
+    skip_activations_detail: bool = False,
 ) -> str:
     """
     Generate dynamic threshold HTML report for a single house.
@@ -82,6 +83,7 @@ def generate_dynamic_house_report(
         house_id: House ID
         output_path: Where to save the HTML file (optional, auto-generated if None)
         pre_quality: Pre-analysis quality score (float, 'faulty', or None)
+        skip_activations_detail: If True, omit the Device Activations Detail section
 
     Returns:
         Path to generated HTML file
@@ -100,8 +102,11 @@ def generate_dynamic_house_report(
     devices_html = create_device_summary_table(metrics)
 
     # Load device activations for detailed table
-    activations = _load_device_activations(experiment_dir, house_id)
-    activations_detail_html = create_device_activations_detail(activations)
+    if skip_activations_detail:
+        activations_detail_html = ''
+    else:
+        activations = _load_device_activations(experiment_dir, house_id)
+        activations_detail_html = create_device_activations_detail(activations)
 
     # Build HTML document
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -240,6 +245,25 @@ def _build_house_html(
     # Phase detail table
     phase_detail = _build_phase_detail_table(metrics.get('phases', {}))
 
+    # NaN info: show per-phase NaN minutes if any exist
+    nan_info_html = ''
+    phases_data = metrics.get('phases', {})
+    nan_parts = []
+    for ph in ['w1', 'w2', 'w3']:
+        ph_data = phases_data.get(ph, {})
+        nan_min = ph_data.get('nan_minutes', 0)
+        total_min = ph_data.get('minutes', 0)
+        if nan_min > 0 and total_min > 0:
+            nan_pct = nan_min / total_min * 100
+            nan_parts.append(f'{ph}: {nan_pct:.0f}%')
+    if nan_parts:
+        nan_info_html = (
+            f'<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;'
+            f'padding:8px 15px;margin-bottom:12px;font-size:0.82em;color:#856404;">'
+            f'NaN minutes treated as 0W (background): {", ".join(nan_parts)}'
+            f'</div>'
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -349,6 +373,8 @@ def _build_house_html(
             </div>
         </header>
 
+        {nan_info_html}
+
         <section>
             <h2>Power Decomposition Summary</h2>
             {summary_html}
@@ -397,14 +423,14 @@ def _build_house_html(
             </section>
         </div>
 
-        <section>
+        {f"""<section>
             <h2>Device Activations Detail</h2>
             <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
                 Individual ON&rarr;OFF activations grouped by device type (high-confidence only).
                 Click column headers to sort. Use "Copy Dates" or "Copy All Dates" for external tools.
             </p>
             {activations_detail_html}
-        </section>
+        </section>""" if activations_detail_html else ""}
 
         <footer>
             ElectricPatterns - Dynamic Threshold Experiment Report

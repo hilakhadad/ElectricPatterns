@@ -56,7 +56,7 @@
         /* Navigation cards */
         .nav-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: 1fr 1fr;
             gap: 25px;
             margin-bottom: 35px;
         }
@@ -535,6 +535,81 @@
             .module-banner { flex-direction: column; text-align: center; }
         }
 
+        /* Comparison overlay */
+        .comparison-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 1000;
+            background: #f5f7fa;
+            flex-direction: column;
+        }
+
+        .comparison-overlay.active {
+            display: flex;
+        }
+
+        .comparison-toolbar {
+            background: #2d3748;
+            color: white;
+            padding: 8px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-shrink: 0;
+        }
+
+        .comparison-toolbar h2 {
+            font-size: 1.1em;
+            font-weight: 600;
+            margin: 0;
+            border: none;
+            padding: 0;
+            color: white;
+        }
+
+        .comparison-close {
+            background: #e53e3e;
+            color: white;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        .comparison-close:hover { background: #c53030; }
+
+        .comparison-labels {
+            display: flex;
+            flex-shrink: 0;
+        }
+
+        .comparison-labels div {
+            flex: 1;
+            text-align: center;
+            padding: 6px;
+            font-weight: 600;
+            font-size: 0.85em;
+        }
+
+        .comparison-labels .label-original { background: #e2e8f0; color: #2d3748; }
+        .comparison-labels .label-nan { background: #c6f6d5; color: #22543d; }
+
+        .comparison-frames {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            gap: 2px;
+        }
+
+        .comparison-frames iframe {
+            flex: 1;
+            border: none;
+        }
+
         /* Footer */
         footer {
             text-align: center;
@@ -720,16 +795,11 @@
                 <h2>M1 Input Analysis</h2>
                 <p><strong>Raw data quality</strong> — coverage, phase health, power patterns, and quality scoring for each household before processing.</p>
             </a>
-            <a class="nav-card experiment" href="report.html">
-                <div class="card-icon">&#9889;</div>
-                <h2>M1 Output Analysis</h2>
-                <p><strong>Algorithm results</strong> — matching rates, segmentation metrics, device detection, and per-house comparison after Module 1 processing.</p>
-            </a>
-            <a class="nav-card comparison" href="nan_comparison.html">
+            <div class="nav-card comparison" onclick="openComparison()" style="cursor:pointer;">
                 <div class="card-icon">&#9878;</div>
-                <h2>NaN Imputation Comparison</h2>
-                <p><strong>Side-by-side</strong> — algorithm results with NaN imputation vs. without. Compare explained power, efficiency and matching rates across all houses.</p>
-            </a>
+                <h2>M1 Output &mdash; NaN Comparison</h2>
+                <p><strong>Side-by-side</strong> — algorithm results with NaN imputation vs. without, in a split view.</p>
+            </div>
         </div>
 
         <!-- Table of Contents -->
@@ -1583,5 +1653,38 @@
         </footer>
 
     </div>
+
+    <!-- Full-screen comparison overlay -->
+    <div class="comparison-overlay" id="comparisonOverlay">
+        <div class="comparison-toolbar">
+            <h2>M1 Output &mdash; NaN Imputation Comparison</h2>
+            <button class="comparison-close" onclick="closeComparison()">Close &times;</button>
+        </div>
+        <div class="comparison-labels">
+            <div class="label-original">Original (no imputation)</div>
+            <div class="label-nan">With NaN Imputation</div>
+        </div>
+        <div class="comparison-frames">
+            <iframe id="frame-original"></iframe>
+            <iframe id="frame-nan"></iframe>
+        </div>
+    </div>
+
+    <script>
+    function openComparison() {
+        var overlay = document.getElementById('comparisonOverlay');
+        overlay.classList.add('active');
+        document.getElementById('frame-original').src = 'report.html';
+        document.getElementById('frame-nan').src = 'nan_comparison.html';
+        document.body.style.overflow = 'hidden';
+    }
+    function closeComparison() {
+        var overlay = document.getElementById('comparisonOverlay');
+        overlay.classList.remove('active');
+        document.getElementById('frame-original').src = '';
+        document.getElementById('frame-nan').src = '';
+        document.body.style.overflow = '';
+    }
+    </script>
 </body>
 </html>

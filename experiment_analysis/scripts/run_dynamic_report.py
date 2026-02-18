@@ -120,6 +120,16 @@ def main():
         dest="pre_analysis",
         help="Path to house_analysis output (default: auto-detect)"
     )
+    parser.add_argument(
+        "--skip-activations", action="store_true",
+        dest="skip_activations",
+        help="Omit Device Activations Detail section (saves disk space)"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None,
+        dest="output_dir",
+        help="Output directory (flat: all HTML files go here directly)"
+    )
     args = parser.parse_args()
 
     # Find experiment directory
@@ -165,11 +175,18 @@ def main():
         print(f"Pre-analysis scores loaded: {len(pre_analysis_scores)} houses", flush=True)
     print(flush=True)
 
-    # Output directory: experiment_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
-    experiment_name = experiment_dir.name
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = _ANALYSIS_OUTPUT_DIR / f"analysis_{experiment_name}_{timestamp}"
-    house_reports_dir = output_dir / "house_reports"
+    # Output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+        house_reports_dir = output_dir  # Flat: per-house reports go directly here
+        house_reports_subdir = None     # No subdirectory in aggregate links
+    else:
+        experiment_name = experiment_dir.name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = _ANALYSIS_OUTPUT_DIR / f"analysis_{experiment_name}_{timestamp}"
+        house_reports_dir = output_dir / "house_reports"
+        house_reports_subdir = "house_reports"
+
     os.makedirs(house_reports_dir, exist_ok=True)
 
     print(f"Output directory: {output_dir}", flush=True)
@@ -198,6 +215,7 @@ def main():
             generate_dynamic_house_report(
                 str(experiment_dir), house_id, out_path,
                 pre_quality=pre_quality,
+                skip_activations_detail=args.skip_activations,
             )
 
             successful += 1
@@ -231,7 +249,7 @@ def main():
             generate_dynamic_aggregate_report(
                 str(experiment_dir), house_ids, agg_path,
                 pre_analysis_scores=pre_analysis_scores,
-                house_reports_subdir="house_reports",
+                house_reports_subdir=house_reports_subdir,
             )
             print(f"Aggregate report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

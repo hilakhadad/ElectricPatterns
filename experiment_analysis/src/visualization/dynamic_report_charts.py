@@ -143,7 +143,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
         <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
         <span style="color:{imp_color};">Unmatched ({improvable_pct:.1f}%)</span>
-        = 100%
+        = {explained_pct + background_pct + improvable_pct:.1f}%
         &nbsp;|&nbsp;
         <strong>Efficiency</strong> = {explained_pct:.1f}% / {targetable_pct:.1f}% = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
