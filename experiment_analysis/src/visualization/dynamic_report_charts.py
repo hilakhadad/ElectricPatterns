@@ -181,7 +181,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         {no_data_formula_html}
         = {total_sum:.1f}%
         &nbsp;|&nbsp;
-        <strong>Efficiency</strong> = {explained_pct_m:.1f}% / {targetable_pct:.1f}%
+        <strong>Efficiency</strong> = {explained_kwh} / ({total_kwh} &minus; {background_kwh}) kWh
         {of_measured_html}
         = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
