@@ -248,19 +248,20 @@ def _build_house_html(
     # NaN info: show per-phase NaN minutes if any exist
     nan_info_html = ''
     phases_data = metrics.get('phases', {})
-    nan_parts = []
-    for ph in ['w1', 'w2', 'w3']:
-        ph_data = phases_data.get(ph, {})
-        nan_min = ph_data.get('nan_minutes', 0)
-        total_min = ph_data.get('minutes', 0)
-        if nan_min > 0 and total_min > 0:
-            nan_pct = nan_min / total_min * 100
-            nan_parts.append(f'{ph}: {nan_pct:.0f}%')
-    if nan_parts:
+    total_nan = sum(phases_data.get(ph, {}).get('nan_minutes', 0) for ph in ['w1', 'w2', 'w3'])
+    if total_nan > 0:
+        nan_parts = []
+        for ph in ['w1', 'w2', 'w3']:
+            ph_data = phases_data.get(ph, {})
+            nan_min = ph_data.get('nan_minutes', 0)
+            all_min = ph_data.get('all_minutes', 0)
+            if nan_min > 0 and all_min > 0:
+                nan_pct = nan_min / all_min * 100
+                nan_parts.append(f'{ph}: {nan_min:,} min ({nan_pct:.0f}%)')
         nan_info_html = (
-            f'<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;'
-            f'padding:8px 15px;margin-bottom:12px;font-size:0.82em;color:#856404;">'
-            f'NaN minutes treated as 0W (background): {", ".join(nan_parts)}'
+            f'<div style="background:#e8daf0;border:1px solid #6f42c1;border-radius:6px;'
+            f'padding:8px 15px;margin-bottom:12px;font-size:0.82em;color:#4a0e6b;">'
+            f'NaN minutes (shown as "No Data"): {", ".join(nan_parts)}'
             f'</div>'
         )
 

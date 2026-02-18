@@ -19,9 +19,11 @@ GREEN = '#28a745'
 GRAY = '#6c757d'
 ORANGE = '#fd7e14'
 YELLOW = '#ffc107'
+PURPLE = '#6f42c1'
 LIGHT_GREEN = '#d4edda'
 LIGHT_GRAY = '#e9ecef'
 LIGHT_ORANGE = '#fff3cd'
+LIGHT_PURPLE = '#e8daf0'
 
 
 def create_summary_boxes(metrics: Dict[str, Any]) -> str:
@@ -36,12 +38,15 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     explained_pct = totals.get('explained_pct', 0)
     background_pct = totals.get('background_pct', 0)
     improvable_pct = totals.get('improvable_pct', 0)
+    no_data_pct = totals.get('no_data_pct', 0)
     efficiency = totals.get('efficiency', 0)
 
     explained_kwh = totals.get('explained_kwh', 0)
     background_kwh = totals.get('background_kwh', 0)
     improvable_kwh = totals.get('improvable_kwh', 0)
     total_kwh = totals.get('total_kwh', 0)
+
+    has_no_data = no_data_pct >= 0.1
 
     # Average background per minute across phases (watts)
     bg_per_min = [phases.get(p, {}).get('background_per_minute', 0) for p in ['w1', 'w2', 'w3']]
@@ -90,11 +95,37 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     else:
         imp_color, imp_border, imp_bg, imp_label_color = ORANGE, ORANGE, LIGHT_ORANGE, '#856404'
 
-    # Complementary percentages
-    not_explained_pct = 100 - explained_pct
-    targetable_pct = 100 - background_pct
+    # Measured percentages (before coverage scaling) — for efficiency formula display
+    coverage = totals.get('coverage', 1.0)
+    explained_pct_m = explained_pct / coverage if coverage > 0 else explained_pct
+    background_pct_m = background_pct / coverage if coverage > 0 else background_pct
+    targetable_pct = 100 - background_pct_m
 
     min_threshold = metrics.get('threshold_schedule', [800])[-1]
+
+    # Build No Data card + formula terms (pre-built for Python 3.9 compat)
+    grid_cols = 4 if has_no_data else 3
+    no_data_card_html = ''
+    no_data_formula_html = ''
+    of_measured_html = ''
+    total_sum = explained_pct + background_pct + improvable_pct + no_data_pct
+    if has_no_data:
+        no_data_card_html = (
+            '<div style="background:' + LIGHT_PURPLE + '; border-left: 4px solid ' + PURPLE
+            + '; border-radius: 8px; padding: 14px; text-align: center;">'
+            '<div style="font-size: 1.8em; font-weight: bold; color: ' + PURPLE + ';">'
+            + str(round(no_data_pct, 1)) + '%</div>'
+            '<div style="font-size: 0.9em; color: #4a0e6b; font-weight: 600;">No Data</div>'
+            '<div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">'
+            'Minutes with no power reading (NaN).<br>'
+            '<em>Not included in any calculation.</em>'
+            '</div></div>'
+        )
+        no_data_formula_html = (
+            '+ <span style="color:' + PURPLE + ';">No Data ('
+            + str(round(no_data_pct, 1)) + '%)</span>'
+        )
+        of_measured_html = '<em>(of measured)</em>'
 
     return f'''
     <p style="color: #555; margin-bottom: 15px; line-height: 1.5; font-size: 0.88em;">
@@ -107,18 +138,19 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         <div style="font-size: 2.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
         <div style="font-size: 1em; font-weight: 700; color: #333;">Detection Efficiency</div>
         <div style="font-size: 0.82em; color: #555; margin-top: 4px; line-height: 1.5;">
-            Of non-background power ({targetable_pct:.1f}%), <strong>{efficiency:.1f}%</strong> matched to devices.
-            Unmatched includes sub-threshold events, complex appliances (ovens, washing machines), and noise.
+            Of non-background power ({targetable_pct:.1f}%), <strong>{efficiency:.1f}%</strong> matched to devices.<br>
+            <em>Efficiency = Explained / (Total &minus; Background)</em>
         </div>
     </div>
 
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 12px;">
+    <div style="display: grid; grid-template-columns: repeat({grid_cols}, 1fr); gap: 15px; margin-bottom: 12px;">
         <div style="background: {exp_bg}; border-left: 4px solid {exp_border}; border-radius: 8px; padding: 14px; text-align: center;">
             <div style="font-size: 1.8em; font-weight: bold; color: {exp_color};">{explained_pct:.1f}%</div>
             <div style="font-size: 0.9em; color: {exp_label_color}; font-weight: 600;">Explained</div>
             <div style="font-size: 0.8em; color: #666;">{explained_kwh} kWh</div>
             <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Matched ON&rarr;OFF events (boilers, ACs, high-power devices).
+                Matched ON&rarr;OFF events (boilers, ACs, high-power devices).<br>
+                <em>Per-minute difference: original &minus; remaining, summed across all minutes.</em>
             </div>
         </div>
         <div style="background: {bg_bg}; border-left: 4px solid {bg_border}; border-radius: 8px; padding: 14px; text-align: center;">
@@ -126,7 +158,8 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             <div style="font-size: 0.9em; color: {bg_label_color}; font-weight: 600;">Background</div>
             <div style="font-size: 0.8em; color: #666;">{background_kwh} kWh</div>
             <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Always-on baseload (~{avg_bg_watts}W avg/phase). Not targetable.
+                Always-on baseload (~{avg_bg_watts}W avg/phase). Not targetable.<br>
+                <em>P5 (5th percentile of original power) &times; measured minutes.</em>
             </div>
         </div>
         <div style="background: {imp_bg}; border-left: 4px solid {imp_border}; border-radius: 8px; padding: 14px; text-align: center;">
@@ -134,18 +167,23 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             <div style="font-size: 0.9em; color: {imp_label_color}; font-weight: 600;">Unmatched</div>
             <div style="font-size: 0.8em; color: #666;">{improvable_kwh} kWh</div>
             <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Sub-threshold events, complex appliances, noise.
+                Sub-threshold events (&lt;{min_threshold}W), complex appliances, noise.<br>
+                <em>Remaining power &minus; Background. What the algorithm could not match.</em>
             </div>
         </div>
+        {no_data_card_html}
     </div>
 
     <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; margin-bottom: 8px; text-align: center; font-size: 0.82em; color: #555;">
         <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
         <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
         <span style="color:{imp_color};">Unmatched ({improvable_pct:.1f}%)</span>
-        = {explained_pct + background_pct + improvable_pct:.1f}%
+        {no_data_formula_html}
+        = {total_sum:.1f}%
         &nbsp;|&nbsp;
-        <strong>Efficiency</strong> = {explained_pct:.1f}% / {targetable_pct:.1f}% = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
+        <strong>Efficiency</strong> = {explained_pct_m:.1f}% / {targetable_pct:.1f}%
+        {of_measured_html}
+        = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
     '''
 
@@ -154,7 +192,7 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     """
     Create stacked horizontal bar chart showing power decomposition per phase.
 
-    Each phase gets one bar: [Explained (green) | Background (gray) | Unmatched (orange)]
+    Each phase gets one bar: [Explained | Background | Unmatched | No Data]
     """
     phases = metrics.get('phases', {})
     chart_id = 'power-breakdown-chart'
@@ -163,15 +201,18 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     explained_vals = []
     background_vals = []
     improvable_vals = []
+    no_data_vals = []
     hover_texts_explained = []
     hover_texts_bg = []
     hover_texts_imp = []
+    hover_texts_nd = []
 
     for p in phase_labels:
         ph = phases.get(p, {})
         explained_vals.append(ph.get('explained_pct', 0))
         background_vals.append(ph.get('background_pct', 0))
         improvable_vals.append(ph.get('improvable_pct', 0))
+        no_data_vals.append(ph.get('no_data_pct', 0))
         hover_texts_explained.append(
             f"{p}: {ph.get('explained_kwh', 0)} kWh ({ph.get('explained_pct', 0):.1f}%)"
         )
@@ -181,6 +222,12 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         hover_texts_imp.append(
             f"{p}: {ph.get('improvable_kwh', 0)} kWh ({ph.get('improvable_pct', 0):.1f}%)"
         )
+        nan_min = ph.get('nan_minutes', 0)
+        hover_texts_nd.append(
+            f"{p}: {nan_min:,} NaN minutes ({ph.get('no_data_pct', 0):.1f}%)"
+        )
+
+    has_no_data = any(v >= 0.1 for v in no_data_vals)
 
     trace_explained = {
         'y': phase_labels,
@@ -221,17 +268,34 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         'hoverinfo': 'text',
     }
 
+    traces = [trace_explained, trace_background, trace_improvable]
+
+    if has_no_data:
+        trace_no_data = {
+            'y': phase_labels,
+            'x': no_data_vals,
+            'name': 'No Data',
+            'type': 'bar',
+            'orientation': 'h',
+            'marker': {'color': PURPLE},
+            'text': [f'{v:.1f}%' if v >= 1 else '' for v in no_data_vals],
+            'textposition': 'inside',
+            'hovertext': hover_texts_nd,
+            'hoverinfo': 'text',
+        }
+        traces.append(trace_no_data)
+
     layout = {
         'title': 'Power Decomposition by Phase',
         'barmode': 'stack',
-        'xaxis': {'title': '% of Total Power', 'range': [0, 105]},
+        'xaxis': {'title': '% of Total Period', 'range': [0, 105]},
         'yaxis': {'title': ''},
         'legend': {'orientation': 'h', 'y': -0.2},
         'margin': {'l': 50, 'r': 30, 't': 50, 'b': 60},
         'height': 250,
     }
 
-    data_json = json.dumps([trace_explained, trace_background, trace_improvable])
+    data_json = json.dumps(traces)
 
     return f'''
     <div id="{chart_id}" style="width:100%;height:250px;"></div>

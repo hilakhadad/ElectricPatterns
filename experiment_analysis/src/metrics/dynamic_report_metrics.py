@@ -159,15 +159,17 @@ def _compute_phase_decomposition(
         how='inner',
     )
 
-    # NaN = no consumption reading → treat as 0W (background)
-    nan_minutes = int((merged[orig_col].isna() | merged[remain_col].isna()).sum())
-    original = merged[orig_col].fillna(0).clip(lower=0)
-    remaining = merged[remain_col].fillna(0).clip(lower=0)
+    # Exclude NaN minutes — only compute on real measurements
+    all_minutes = len(merged)
+    valid_mask = merged[orig_col].notna() & merged[remain_col].notna()
+    nan_minutes = int((~valid_mask).sum())
+    original = merged.loc[valid_mask, orig_col].clip(lower=0)
+    remaining = merged.loc[valid_mask, remain_col].clip(lower=0)
 
     total_power = original.sum()
-    minutes = len(original)
+    minutes = len(original)  # only valid minutes
 
-    # Background: 5th percentile of original power * minutes
+    # Background: 5th percentile of original power * valid minutes
     p5 = np.percentile(original, 5) if minutes > 0 else 0
     background_power = p5 * minutes
 
@@ -177,13 +179,21 @@ def _compute_phase_decomposition(
     # Improvable: what's left after subtracting background from remaining
     improvable_power = max(0, remaining.sum() - background_power)
 
-    # Percentages
-    total_pct = 100.0
-    explained_pct = (explained_power / total_power * 100) if total_power > 0 else 0
-    background_pct = (background_power / total_power * 100) if total_power > 0 else 0
-    improvable_pct = (improvable_power / total_power * 100) if total_power > 0 else 0
+    # Coverage: fraction of total period with real measurements
+    coverage = minutes / all_minutes if all_minutes > 0 else 1.0
+    no_data_pct = (1 - coverage) * 100
 
-    # Detection efficiency: explained / targetable
+    # Percentages of measured power (internal, for efficiency calc)
+    explained_pct_measured = (explained_power / total_power * 100) if total_power > 0 else 0
+    background_pct_measured = (background_power / total_power * 100) if total_power > 0 else 0
+    improvable_pct_measured = (improvable_power / total_power * 100) if total_power > 0 else 0
+
+    # Display percentages: scaled by coverage so all 4 categories sum to 100%
+    explained_pct = explained_pct_measured * coverage
+    background_pct = background_pct_measured * coverage
+    improvable_pct = improvable_pct_measured * coverage
+
+    # Detection efficiency: explained / targetable (based on measured data only)
     targetable = total_power - background_power
     efficiency = (explained_power / targetable * 100) if targetable > 0 else 0
 
@@ -206,9 +216,12 @@ def _compute_phase_decomposition(
         'improvable_power': round(improvable_power, 1),
         'improvable_kwh': to_kwh(improvable_power),
         'improvable_pct': round(improvable_pct, 1),
+        'no_data_pct': round(no_data_pct, 1),
         'efficiency': round(efficiency, 1),
         'minutes': minutes,
         'nan_minutes': nan_minutes,
+        'all_minutes': all_minutes,
+        'coverage': round(coverage, 4),
         'negative_minutes': neg_minutes,
     }
 
@@ -220,9 +233,20 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
     background_power = sum(p.get('background_power', 0) for p in phases.values())
     improvable_power = sum(p.get('improvable_power', 0) for p in phases.values())
 
-    explained_pct = (explained_power / total_power * 100) if total_power > 0 else 0
-    background_pct = (background_power / total_power * 100) if total_power > 0 else 0
-    improvable_pct = (improvable_power / total_power * 100) if total_power > 0 else 0
+    total_minutes = sum(p.get('minutes', 0) for p in phases.values())
+    total_all_minutes = sum(p.get('all_minutes', 0) for p in phases.values())
+    coverage = total_minutes / total_all_minutes if total_all_minutes > 0 else 1.0
+    no_data_pct = (1 - coverage) * 100
+
+    # Internal percentages (of measured power)
+    explained_pct_m = (explained_power / total_power * 100) if total_power > 0 else 0
+    background_pct_m = (background_power / total_power * 100) if total_power > 0 else 0
+    improvable_pct_m = (improvable_power / total_power * 100) if total_power > 0 else 0
+
+    # Display percentages: scaled by coverage
+    explained_pct = explained_pct_m * coverage
+    background_pct = background_pct_m * coverage
+    improvable_pct = improvable_pct_m * coverage
 
     targetable = total_power - background_power
     efficiency = (explained_power / targetable * 100) if targetable > 0 else 0
@@ -241,7 +265,9 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
         'improvable_power': round(improvable_power, 1),
         'improvable_kwh': to_kwh(improvable_power),
         'improvable_pct': round(improvable_pct, 1),
+        'no_data_pct': round(no_data_pct, 1),
         'efficiency': round(efficiency, 1),
+        'coverage': round(coverage, 4),
     }
 
 
