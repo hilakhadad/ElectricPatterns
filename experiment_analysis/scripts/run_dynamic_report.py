@@ -106,6 +106,20 @@ def discover_houses(experiment_dir: Path) -> list:
     return houses
 
 
+def count_iterations(experiment_dir: Path) -> int:
+    """Count total iteration (run_*) directories in experiment."""
+    return len(list(experiment_dir.glob("run_*")))
+
+
+def house_iterations(experiment_dir: Path, house_id: str) -> int:
+    """Count how many run directories contain this house."""
+    count = 0
+    for run_dir in experiment_dir.glob("run_*"):
+        if (run_dir / f"house_{house_id}").exists():
+            count += 1
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate dynamic threshold HTML reports"
@@ -192,12 +206,22 @@ def main():
         sys.exit(1)
 
     # In resume mode, filter out already-processed houses
+    # Also regenerate reports for houses whose experiment has more iterations now
     all_house_ids = list(house_ids)  # keep full list for aggregate
     if resume_mode:
+        total_iters = count_iterations(experiment_dir)
         new_houses = [h for h in house_ids if h not in existing_houses]
+
+        # Stale: houses with a report but fewer iterations than expected
+        stale_houses = [
+            h for h in existing_houses
+            if h in set(all_house_ids) and house_iterations(experiment_dir, h) < total_iters
+        ]
+
+        house_ids = new_houses + stale_houses
         print(f"Resume mode: {len(existing_houses)} existing reports, "
-              f"{len(new_houses)} new houses to process", flush=True)
-        house_ids = new_houses
+              f"{len(new_houses)} new + {len(stale_houses)} incomplete to (re)process "
+              f"(total iterations: {total_iters})", flush=True)
 
     if not resume_mode:
         print(f"Houses to analyze: {len(all_house_ids)}", flush=True)
