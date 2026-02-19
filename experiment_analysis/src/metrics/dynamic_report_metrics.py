@@ -59,10 +59,17 @@ def calculate_dynamic_report_metrics(
 
     # Per-phase power decomposition
     min_threshold = threshold_schedule[-1] if threshold_schedule else 800
+
+    # Calculate expected minutes from time range (true denominator)
+    ts = baseline_data['timestamp']
+    expected_minutes = int((ts.max() - ts.min()).total_seconds() / 60) + 1
+
     phases = {}
     for phase in ['w1', 'w2', 'w3']:
         phases[phase] = _compute_phase_decomposition(
-            baseline_data, final_data, phase, min_threshold=min_threshold
+            baseline_data, final_data, phase,
+            min_threshold=min_threshold,
+            expected_minutes=expected_minutes,
         )
 
     # Totals across all phases
@@ -138,6 +145,7 @@ def _compute_phase_decomposition(
     final: pd.DataFrame,
     phase: str,
     min_threshold: int = 800,
+    expected_minutes: int = None,
 ) -> Dict[str, Any]:
     """
     Compute 3-bucket power decomposition for a single phase.
@@ -162,9 +170,10 @@ def _compute_phase_decomposition(
     )
 
     # Exclude NaN minutes — only compute on real measurements
-    all_minutes = len(merged)
+    merged_minutes = len(merged)  # rows in pkl (subset of expected)
+    all_minutes = expected_minutes if expected_minutes else merged_minutes
     valid_mask = merged[orig_col].notna() & merged[remain_col].notna()
-    nan_minutes = int((~valid_mask).sum())
+    nan_minutes = all_minutes - int(valid_mask.sum())  # includes dropped + in-pkl NaN
     original = merged.loc[valid_mask, orig_col].clip(lower=0)
     remaining = merged.loc[valid_mask, remain_col].clip(lower=0)
 
