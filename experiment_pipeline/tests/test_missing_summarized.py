@@ -2,15 +2,16 @@
 Regression test for Bug #22: Missing summarized files cause NaN inflation.
 
 When no events are detected for a month in iteration N, that month must still
-get a summarized file (copied from iteration N-1).  Without this, the dynamic
-report's inner merge drops all timestamps from the missing month, inflating
-the "No Data" percentage.
+get a summarized file — either via passthrough or copied from a previous run.
+Without this, the dynamic report's inner merge drops all timestamps from the
+missing month, inflating the "No Data" percentage.
 
-The test creates a two-iteration layout where run_1 has NO events in any
-month, then verifies:
-  1. All months still receive a summarized file in run_1.
-  2. The copied files contain no NaN in the power columns.
-  3. An inner merge (same logic as the report) loses zero rows.
+Scenarios tested:
+  A. run_1 has no events, run_0 has all months → copied from run_0.
+  B. run_3 has no events, and run_1/run_2 also lack that month → copied
+     backwards from run_0 (multi-hop search).
+  C. matches dir doesn't exist at all → still creates summarized files.
+  D. Report merge loses zero rows after the fix.
 """
 import pytest
 import numpy as np
@@ -44,9 +45,20 @@ def _make_summarized_df(month, year, minutes=60, base_power=500.0):
     return pd.DataFrame(data)
 
 
-# ── tests ───────────────────────────────────────────────────────────────
+def _run_segmentation(tmp_path, house_id, run_number):
+    """Run process_segmentation with patched core paths."""
+    import core
+    with mock.patch.object(core, 'OUTPUT_BASE_PATH', str(tmp_path)), \
+         mock.patch.object(core, 'RAW_INPUT_DIRECTORY', str(tmp_path / 'raw')), \
+         mock.patch.object(core, 'LOGS_DIRECTORY', str(tmp_path / 'logs')), \
+         mock.patch.object(core, 'ERRORS_DIRECTORY', str(tmp_path / 'errors')):
+        from disaggregation.pipeline.segmentation_step import process_segmentation
+        process_segmentation(house_id=house_id, run_number=run_number)
+
+
+# ── Scenario A: single empty run ────────────────────────────────────────
 class TestMissingSummarizedCopy:
-    """Bug #22: months with no events must still get summarized files."""
+    """run_1 has zero events — all months must be copied from run_0."""
 
     HOUSE_ID = 'test'
     MONTHS = [1, 2, 3]
@@ -56,7 +68,7 @@ class TestMissingSummarizedCopy:
     def setup_dirs(self, tmp_path):
         self.tmp = tmp_path
 
-        # ── run_0: all 3 months have summarized files ──
+        # run_0: all 3 months have summarized files
         run0_summ = tmp_path / 'run_0' / f'house_{self.HOUSE_ID}' / 'summarized'
         run0_summ.mkdir(parents=True)
         for m in self.MONTHS:
@@ -64,59 +76,33 @@ class TestMissingSummarizedCopy:
                 run0_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
             )
 
-        # ── run_1: matches dir exists but is EMPTY (no events detected) ──
+        # run_1: matches dir exists but is EMPTY (no events detected)
         run1_house = tmp_path / 'run_1' / f'house_{self.HOUSE_ID}'
         (run1_house / 'matches').mkdir(parents=True)
 
-        # logging directory
         (tmp_path / 'logs').mkdir(exist_ok=True)
-
-    # ── helper: run segmentation with patched core paths ──
-    def _run_segmentation(self):
-        import core
-        with mock.patch.object(core, 'OUTPUT_BASE_PATH', str(self.tmp)), \
-             mock.patch.object(core, 'RAW_INPUT_DIRECTORY', str(self.tmp / 'raw')), \
-             mock.patch.object(core, 'LOGS_DIRECTORY', str(self.tmp / 'logs')), \
-             mock.patch.object(core, 'ERRORS_DIRECTORY', str(self.tmp / 'errors')):
-            from disaggregation.pipeline.segmentation_step import process_segmentation
-            process_segmentation(house_id=self.HOUSE_ID, run_number=1)
 
     def _run1_summ_dir(self):
         return self.tmp / 'run_1' / f'house_{self.HOUSE_ID}' / 'summarized'
 
-    # ── test 1: every month has a summarized file ──
     def test_all_months_have_summarized_after_empty_run(self):
-        """Even when run_1 has zero events, every month gets a summarized file."""
-        self._run_segmentation()
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=1)
         for m in self.MONTHS:
             f = self._run1_summ_dir() / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
-            assert f.exists(), (
-                f"summarized file missing for month {m:02d}/{self.YEAR} in run_1"
-            )
+            assert f.exists(), f"summarized missing for month {m:02d}"
 
-    # ── test 2: no NaN in copied files ──
     def test_copied_months_have_no_nan_in_power_columns(self):
-        """Copied summarized files contain no NaN in original/remaining columns."""
-        self._run_segmentation()
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=1)
         for m in self.MONTHS:
             df = pd.read_pickle(
                 self._run1_summ_dir() / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
             )
             for phase in PHASES:
-                assert df[f'remaining_{phase}'].notna().all(), (
-                    f"NaN in remaining_{phase} for month {m:02d}"
-                )
-                assert df[f'original_{phase}'].notna().all(), (
-                    f"NaN in original_{phase} for month {m:02d}"
-                )
+                assert df[f'remaining_{phase}'].notna().all()
+                assert df[f'original_{phase}'].notna().all()
 
-    # ── test 3: report merge loses zero rows ──
     def test_report_merge_no_nan_inflation(self):
-        """
-        Simulate the dynamic report merge (baseline inner-join final).
-        All baseline timestamps must survive — zero row loss.
-        """
-        self._run_segmentation()
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=1)
 
         run0_summ = self.tmp / 'run_0' / f'house_{self.HOUSE_ID}' / 'summarized'
         run1_summ = self._run1_summ_dir()
@@ -133,12 +119,115 @@ class TestMissingSummarizedCopy:
         for phase in PHASES:
             merged = baseline[['timestamp', f'original_{phase}']].merge(
                 final[['timestamp', f'remaining_{phase}']],
-                on='timestamp',
-                how='inner',
+                on='timestamp', how='inner',
             )
             assert len(merged) == len(baseline), (
-                f"Inner merge lost {len(baseline) - len(merged)} rows for {phase} "
-                f"— missing summarized files cause NaN inflation in reports"
+                f"Merge lost {len(baseline) - len(merged)} rows for {phase}"
             )
-            assert merged[f'original_{phase}'].notna().all()
-            assert merged[f'remaining_{phase}'].notna().all()
+
+
+# ── Scenario B: multi-hop backwards search ──────────────────────────────
+class TestMultiHopBackwardsSearch:
+    """
+    run_0 has months 1-3.  run_1 and run_2 have only month 1.
+    run_3 must find months 2-3 by searching back to run_0.
+    """
+
+    HOUSE_ID = 'hop'
+    YEAR = 1990
+
+    @pytest.fixture(autouse=True)
+    def setup_dirs(self, tmp_path):
+        self.tmp = tmp_path
+
+        # run_0: all 3 months
+        run0_summ = tmp_path / 'run_0' / f'house_{self.HOUSE_ID}' / 'summarized'
+        run0_summ.mkdir(parents=True)
+        for m in [1, 2, 3]:
+            _make_summarized_df(m, self.YEAR).to_pickle(
+                run0_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
+            )
+
+        # run_1: only month 1 (months 2-3 missing — simulates broken old code)
+        run1_summ = tmp_path / 'run_1' / f'house_{self.HOUSE_ID}' / 'summarized'
+        run1_summ.mkdir(parents=True)
+        _make_summarized_df(1, self.YEAR).to_pickle(
+            run1_summ / f'summarized_{self.HOUSE_ID}_01_{self.YEAR}.pkl'
+        )
+
+        # run_2: only month 1 (same gap)
+        run2_summ = tmp_path / 'run_2' / f'house_{self.HOUSE_ID}' / 'summarized'
+        run2_summ.mkdir(parents=True)
+        _make_summarized_df(1, self.YEAR).to_pickle(
+            run2_summ / f'summarized_{self.HOUSE_ID}_01_{self.YEAR}.pkl'
+        )
+
+        # run_3: matches dir empty (no events)
+        run3_house = tmp_path / 'run_3' / f'house_{self.HOUSE_ID}'
+        (run3_house / 'matches').mkdir(parents=True)
+
+        (tmp_path / 'logs').mkdir(exist_ok=True)
+
+    def test_missing_months_found_from_run_0(self):
+        """Safeguard searches run_2 → run_1 → run_0 to find months 2-3."""
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=3)
+
+        run3_summ = self.tmp / 'run_3' / f'house_{self.HOUSE_ID}' / 'summarized'
+        for m in [1, 2, 3]:
+            f = run3_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
+            assert f.exists(), (
+                f"month {m:02d} missing in run_3 — backwards search failed"
+            )
+
+    def test_backwards_copy_has_no_nan(self):
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=3)
+
+        run3_summ = self.tmp / 'run_3' / f'house_{self.HOUSE_ID}' / 'summarized'
+        for m in [2, 3]:
+            df = pd.read_pickle(
+                run3_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
+            )
+            for phase in PHASES:
+                assert df[f'remaining_{phase}'].notna().all()
+                assert df[f'original_{phase}'].notna().all()
+
+
+# ── Scenario C: no matches directory at all ──────────────────────────────
+class TestNoMatchesDirectory:
+    """
+    matches/ dir doesn't exist (e.g. detection found zero events).
+    Segmentation must NOT return early — must still create summarized.
+    """
+
+    HOUSE_ID = 'nodir'
+    YEAR = 1990
+
+    @pytest.fixture(autouse=True)
+    def setup_dirs(self, tmp_path):
+        self.tmp = tmp_path
+
+        # run_0: all 3 months
+        run0_summ = tmp_path / 'run_0' / f'house_{self.HOUSE_ID}' / 'summarized'
+        run0_summ.mkdir(parents=True)
+        for m in [1, 2, 3]:
+            _make_summarized_df(m, self.YEAR).to_pickle(
+                run0_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
+            )
+
+        # run_1: house dir exists but NO matches/ subdirectory at all
+        run1_house = tmp_path / 'run_1' / f'house_{self.HOUSE_ID}'
+        run1_house.mkdir(parents=True)
+        # intentionally NOT creating matches/ dir
+
+        (tmp_path / 'logs').mkdir(exist_ok=True)
+
+    def test_summarized_created_despite_no_matches_dir(self):
+        _run_segmentation(self.tmp, self.HOUSE_ID, run_number=1)
+
+        run1_summ = self.tmp / 'run_1' / f'house_{self.HOUSE_ID}' / 'summarized'
+        for m in [1, 2, 3]:
+            f = run1_summ / f'summarized_{self.HOUSE_ID}_{m:02d}_{self.YEAR}.pkl'
+            assert f.exists(), (
+                f"month {m:02d} missing — segmentation returned early "
+                f"because matches/ dir doesn't exist"
+            )

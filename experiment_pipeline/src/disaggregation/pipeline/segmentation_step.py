@@ -49,30 +49,37 @@ def process_segmentation(
     os.makedirs(summarized_dir, exist_ok=True)
 
     # Find data path: run 0 reads raw data, run N reads remaining from summarized of run N-1
+    data_path = None
     try:
         if run_number == 0:
             data_path = find_house_data_path(core.RAW_INPUT_DIRECTORY, house_id)
         else:
             data_path = find_previous_run_summarized(core.OUTPUT_BASE_PATH, house_id, run_number)
     except FileNotFoundError as e:
-        logger.error(str(e))
-        return
+        if run_number == 0:
+            logger.error(str(e))
+            return
+        else:
+            logger.warning(f"Previous summarized not found: {e} — will copy from earlier run")
 
-    # Get list of matches monthly files
-    if not matches_dir.is_dir():
-        logger.error(f"Matches folder not found: {matches_dir}")
-        return
-
-    matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
-    if not matches_files:
-        logger.info(f"No matches files found - creating passthrough summaries")
+    # Get list of matches monthly files (may be empty)
+    if matches_dir.is_dir():
+        matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
+        if not matches_files:
+            logger.info(f"No matches files found - creating passthrough summaries")
+    else:
+        matches_files = []
+        logger.info(f"No matches folder — will create passthrough summaries")
 
     # Get list of data monthly files (handles both HouseholdData and summarized naming)
-    data_path = Path(data_path)
-    if data_path.is_dir():
-        data_files = build_data_files_dict(data_path)
+    if data_path is not None:
+        data_path = Path(data_path)
+        if data_path.is_dir():
+            data_files = build_data_files_dict(data_path)
+        else:
+            data_files = {data_path.stem: data_path}
     else:
-        data_files = {data_path.stem: data_path}
+        data_files = {}
 
     phases = ['w1', 'w2', 'w3']
 
@@ -196,23 +203,26 @@ def process_segmentation(
         if not data.empty:
             _create_passthrough_summary(data, phases, summary_file, logger, month, year)
 
-    # Final safeguard: for run N>0, copy any missing months from the previous
-    # iteration's summarized output.  This covers cases where the passthrough
-    # above couldn't locate the source data file (e.g. single-file houses).
+    # Final safeguard: for run N>0, search backwards through ALL previous runs
+    # and copy any missing summarized months.  This guarantees every month that
+    # ever had data keeps a summarized file in every iteration — even when
+    # several consecutive iterations find zero events for a particular month.
     if run_number > 0:
-        prev_summarized_dir = (
-            Path(core.OUTPUT_BASE_PATH)
-            / f"run_{run_number - 1}"
-            / f"house_{house_id}"
-            / "summarized"
-        )
-        if prev_summarized_dir.is_dir():
+        for prev_run in range(run_number - 1, -1, -1):
+            prev_summarized_dir = (
+                Path(core.OUTPUT_BASE_PATH)
+                / f"run_{prev_run}"
+                / f"house_{house_id}"
+                / "summarized"
+            )
+            if not prev_summarized_dir.is_dir():
+                continue
             for prev_file in prev_summarized_dir.glob(f"summarized_{house_id}_*.pkl"):
                 target_file = summarized_dir / prev_file.name
                 if not target_file.exists():
                     shutil.copy2(prev_file, target_file)
                     logger.info(
-                        f"Copied {prev_file.name} from previous iteration "
+                        f"Copied {prev_file.name} from run_{prev_run} "
                         f"(no events found in current iteration)"
                     )
 
