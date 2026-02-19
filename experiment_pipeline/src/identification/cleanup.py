@@ -18,12 +18,12 @@ def cleanup_intermediate_files(
     Delete intermediate pkl files after unified JSON is built.
 
     Deletes:
-    - on_off/, matches/, unmatched_on/, unmatched_off/, classification/ (all runs)
+    - on_off/, matches/, unmatched_on/, unmatched_off/ (all runs)
     - summarized/ for intermediate runs (keep run_0 + last run)
 
     Keeps:
     - summarized/ for run_0 (baseline for evaluation) and last run (final remaining)
-    - evaluation CSV files, logs, device_activations JSON
+    - evaluation CSV files, logs, device_sessions JSON, device_activations JSON
     """
     logger.info("Starting cleanup of intermediate files...")
 
@@ -37,7 +37,7 @@ def cleanup_intermediate_files(
             continue
 
         # Always delete event-level pkl directories
-        for subdir in ['on_off', 'matches', 'unmatched_on', 'unmatched_off', 'classification']:
+        for subdir in ['on_off', 'matches', 'unmatched_on', 'unmatched_off']:
             dir_path = house_dir / subdir
             if dir_path.exists():
                 shutil.rmtree(dir_path)

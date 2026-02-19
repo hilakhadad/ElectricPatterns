@@ -1,0 +1,63 @@
+"""
+Configuration constants for device identification.
+
+All thresholds and tolerances centralised in one place for easy tuning.
+Adapted from device_classifier.py and patterns.py.
+"""
+from dataclasses import dataclass, field
+from typing import List
+
+# ============================================================================
+# Cross-iteration deduplication
+# ============================================================================
+DEDUP_TIME_TOLERANCE_MINUTES = 2
+DEDUP_MAGNITUDE_TOLERANCE_W = 50
+
+# ============================================================================
+# Session grouping
+# ============================================================================
+DEFAULT_SESSION_GAP_MINUTES = 30    # user requested ~30 (was 60 in legacy code)
+
+# ============================================================================
+# Boiler classification
+# ============================================================================
+BOILER_MIN_DURATION = 25            # minutes
+BOILER_MIN_MAGNITUDE = 1500         # watts
+BOILER_ISOLATION_WINDOW = 30        # minutes — no medium events nearby
+BOILER_MIN_COUNT = 3                # sessions to confirm pattern (informational)
+
+# ============================================================================
+# Central AC classification
+# ============================================================================
+CENTRAL_AC_SYNC_TOLERANCE = 10      # minutes — phase sync tolerance
+
+# ============================================================================
+# Regular AC classification
+# ============================================================================
+AC_MIN_MAGNITUDE = 800              # watts
+AC_MIN_CYCLE_DURATION = 3           # minutes
+AC_MAX_CYCLE_DURATION = 30          # minutes
+AC_MIN_INITIAL_DURATION = 15        # minutes — first activation in session
+AC_MIN_FOLLOWING_CYCLES = 3         # cycles after initial (total ≥ 4)
+AC_MAX_MAGNITUDE_CV = 0.20          # 20% coefficient of variation
+
+# ============================================================================
+# AC filter for boiler candidates
+# ============================================================================
+AC_FILTER_WINDOW = 60               # minutes — search window for compressor cycles
+AC_FILTER_MIN_CYCLES = 2            # minimum nearby cycles to disqualify boiler
+AC_FILTER_MIN_CYCLE_MAG = 800       # watts
+AC_FILTER_MAG_RATIO = 0.50          # cycle ≥ 50% of boiler magnitude
+
+# ============================================================================
+# Multi-phase simultaneity
+# ============================================================================
+MULTI_PHASE_WINDOW = 5              # minutes
+
+PHASES = ['w1', 'w2', 'w3']
+
+
+@dataclass
+class IdentificationConfig:
+    """Runtime configuration for identification module."""
+    session_gap_minutes: int = DEFAULT_SESSION_GAP_MINUTES

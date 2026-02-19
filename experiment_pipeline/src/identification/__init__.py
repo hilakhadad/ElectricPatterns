@@ -1,29 +1,43 @@
 """
-Identification module — device-level analysis.
+Identification module — session-level device classification.
 
-Classifies matched activations into device types (boiler, central AC,
-regular AC) and builds the unified JSON output. This module reads
-disaggregation output files from disk.
+Takes disaggregation output (matched ON→OFF pairs from all iterations),
+groups them into sessions, and classifies sessions as device types
+(boiler, central AC, regular AC, unknown).
 
-Sub-packages:
-    classifier/  — Device type classification rules
-    output/      — Unified JSON activation builder
-    cleanup.py   — Intermediate file cleanup
+Key modules:
+    config.py              — Constants and configuration
+    session_grouper.py     — Load, deduplicate, group into sessions
+    session_classifier.py  — Classify sessions
+    session_output.py      — Session-level JSON builder
+    cleanup.py             — Intermediate file cleanup
 """
 
-# Re-export from sub-packages (moved here in Phase 4)
-from .classifier.device_classifier import (
-    classify_iteration_matches,
-    generate_activation_list,
+from .session_grouper import (
+    load_all_matches,
+    deduplicate_cross_iteration,
+    group_into_sessions,
+    Session,
+    MultiPhaseSession,
 )
 
-from .output.activation_builder import build_device_activations_json
+from .session_classifier import classify_sessions, ClassifiedSession
+
+from .session_output import build_session_json
 
 from .cleanup import cleanup_intermediate_files
 
+from .config import IdentificationConfig
+
 __all__ = [
-    'classify_iteration_matches',
-    'generate_activation_list',
-    'build_device_activations_json',
+    'load_all_matches',
+    'deduplicate_cross_iteration',
+    'group_into_sessions',
+    'classify_sessions',
+    'build_session_json',
     'cleanup_intermediate_files',
+    'Session',
+    'MultiPhaseSession',
+    'ClassifiedSession',
+    'IdentificationConfig',
 ]

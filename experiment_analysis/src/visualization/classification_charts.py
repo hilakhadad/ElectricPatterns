@@ -62,9 +62,18 @@ def create_quality_section(quality: Dict[str, Any], confidence: Dict[str, Any]) 
     parts = [
         '<section>',
         '<h2>Classification Quality</h2>',
-        '<p style="color: #666; margin-bottom: 12px; font-size: 0.82em;">',
-        'Internal consistency metrics assess classification quality without ground truth.',
+        '<div style="color: #555; margin-bottom: 16px; font-size: 0.85em; line-height: 1.5;">',
+        '<p style="margin:0 0 8px;">',
+        'This section evaluates <strong>how consistent the automatic device classification is</strong>, ',
+        'without relying on ground truth. Each detected ON\u2192OFF event was classified as a device type ',
+        '(boiler, central AC, regular AC, or unclassified) based on power, duration, and phase patterns. ',
+        'The metrics below check whether activations within each category behave consistently.',
         '</p>',
+        '<p style="margin:0;font-size:0.92em;color:#888;">',
+        'Note: Each activation represents a single matched ON\u2192OFF pair (e.g., one compressor cycle for AC), ',
+        'not a full usage session.',
+        '</p>',
+        '</div>',
     ]
 
     # Quality summary box
@@ -171,7 +180,12 @@ def _create_temporal_chart(temporal: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Temporal Consistency</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Temporal Consistency</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            What fraction of months contain at least one activation of this type.
+            A device that appears consistently across months scores higher.
+            Low values may indicate misclassification or seasonal-only usage.
+        </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
         {flag_html}
@@ -212,7 +226,12 @@ def _create_magnitude_chart(magnitude: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Magnitude Stability</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Magnitude Stability</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            Mean power (W) per device type, with standard deviation bars.
+            CV (Coefficient of Variation) = std/mean &mdash; lower is better.
+            A real device should have consistent power draw across activations (CV &lt; 0.3).
+        </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
     </div>'''
@@ -258,7 +277,12 @@ def _create_duration_chart(duration: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Duration Plausibility</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Duration Plausibility</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            Median activation duration per device type, with IQR (25th&ndash;75th percentile) bars.
+            Expected ranges: boiler &ge;25 min, regular AC 3&ndash;30 min (compressor cycle), central AC 5&ndash;30 min.
+            Values far outside these ranges suggest misclassification.
+        </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
     </div>'''
@@ -310,7 +334,12 @@ def _create_seasonal_chart(seasonal: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Seasonal Coherence</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Seasonal Coherence</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            Activation count by season &mdash; warm (May&ndash;Oct) vs cool (Nov&ndash;Apr).
+            The ratio annotation shows warm/cool. AC should peak in warm months (ratio &gt;1),
+            boiler in cool months (ratio &lt;1). Reversed patterns indicate possible misclassification.
+        </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
     </div>'''
@@ -366,7 +395,13 @@ def _create_confidence_histogram(confidence: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;margin:16px 0;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Confidence Distribution</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Confidence Distribution</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            Each activation receives a confidence score (0&ndash;1) based on magnitude consistency,
+            duration fit, phase pattern, and match quality tag. Tiers: High (&ge;0.70), Medium (0.40&ndash;0.70),
+            Low (&lt;0.40). Dashed lines mark tier boundaries. A healthy classification has most activations
+            in the High tier.
+        </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
     </div>'''
@@ -387,7 +422,11 @@ def _create_flags_table(flags: List[Dict]) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;margin:16px 0;">
-        <h3 style="font-size:0.95em;margin-bottom:8px;">Quality Flags ({len(flags)})</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Quality Flags ({len(flags)})</h3>
+        <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
+            Specific issues detected in the classification. Each flag points to a device type
+            and metric that fell outside expected ranges, suggesting possible misclassification.
+        </p>
         <table style="width:100%;border-collapse:collapse;font-size:0.85em;">
             <thead>
                 <tr style="border-bottom:2px solid #dee2e6;text-align:left;">
