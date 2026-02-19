@@ -398,7 +398,7 @@ def _build_house_html(
         <section>
             <h2>Power Breakdown by Phase</h2>
             <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
-                Per-phase (w1, w2, w3) decomposition into Explained, Background, Unmatched, and Sub-threshold.
+                Per-phase (w1, w2, w3) decomposition into Explained, Unmatched, Sub-threshold, Background, and No Data.
             </p>
             {breakdown_html}
             {phase_detail}
@@ -494,9 +494,9 @@ def _build_phase_detail_table(phases: Dict[str, Dict]) -> str:
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; font-weight: 600;">{phase}</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;">{ph.get('total_kwh', 0)} kWh</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #28a745;">{ph.get('explained_kwh', 0)} kWh ({ph.get('explained_pct', 0):.1f}%)</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #e67e22;">{ph.get('above_th_kwh', 0)} kWh ({ph.get('above_th_pct', 0):.1f}%)</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #a38600;">{ph.get('sub_threshold_kwh', 0)} kWh ({ph.get('sub_threshold_pct', 0):.1f}%)</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;">{ph.get('background_kwh', 0)} kWh ({ph.get('background_pct', 0):.1f}%)</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;">{ph.get('above_th_kwh', 0)} kWh ({ph.get('above_th_pct', 0):.1f}%)</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #b8860b;">{ph.get('sub_threshold_kwh', 0)} kWh ({ph.get('sub_threshold_pct', 0):.1f}%)</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;">{ph.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;">{ph.get('efficiency', 0):.1f}%</td>
         </tr>
@@ -509,9 +509,9 @@ def _build_phase_detail_table(phases: Dict[str, Dict]) -> str:
                 <th style="padding: 10px 15px; text-align: left;">Phase</th>
                 <th style="padding: 10px 15px; text-align: right;" title="Total original power consumption">Total</th>
                 <th style="padding: 10px 15px; text-align: right; color: #28a745;" title="Power attributed to detected device activations">Explained</th>
+                <th style="padding: 10px 15px; text-align: right; color: #e67e22;" title="Above minimum threshold, not matched to any device">Unmatched</th>
+                <th style="padding: 10px 15px; text-align: right; color: #a38600;" title="Between background and minimum threshold — undetectable by design">Sub-threshold</th>
                 <th style="padding: 10px 15px; text-align: right; color: #6c757d;" title="Baseline power (5th percentile) - always-on devices">Background</th>
-                <th style="padding: 10px 15px; text-align: right; color: #fd7e14;" title="Above minimum threshold, not matched to any device">Unmatched</th>
-                <th style="padding: 10px 15px; text-align: right; color: #b8860b;" title="Between background and minimum threshold — undetectable by design">Sub-threshold</th>
                 <th style="padding: 10px 15px; text-align: right; color: #6f42c1;" title="% of time with no power reading (NaN)">No Data</th>
                 <th style="padding: 10px 15px; text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power">Efficiency</th>
             </tr>
@@ -568,9 +568,9 @@ def _build_aggregate_html(
         if eff >= 70:
             eff_color = '#28a745'
         elif eff >= 50:
-            eff_color = '#ffc107'
+            eff_color = '#eab308'
         else:
-            eff_color = '#fd7e14'
+            eff_color = '#e67e22'
 
         pq_html = _format_pre_quality(pre_quality)
         days = m.get('data_period', {}).get('days', 0)
@@ -587,9 +587,9 @@ def _build_aggregate_html(
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;">{pq_html}</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;" data-value="{t.get('total_kwh', 0)}">{t.get('total_kwh', 0)} kWh</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #28a745;" data-value="{t.get('explained_pct', 0):.1f}">{t.get('explained_pct', 0):.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #e67e22;" data-value="{t.get('above_th_pct', 0):.1f}">{t.get('above_th_pct', 0):.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #a38600;" data-value="{t.get('sub_threshold_pct', 0):.1f}">{t.get('sub_threshold_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;" data-value="{t.get('background_pct', 0):.1f}">{t.get('background_pct', 0):.1f}%</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;" data-value="{t.get('above_th_pct', 0):.1f}">{t.get('above_th_pct', 0):.1f}%</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #b8860b;" data-value="{t.get('sub_threshold_pct', 0):.1f}">{t.get('sub_threshold_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;" data-value="{t.get('no_data_pct', 0):.1f}">{t.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; font-weight: bold; color: {eff_color};" data-value="{eff:.1f}">{eff:.1f}%</td>
         </tr>
@@ -623,7 +623,7 @@ def _build_aggregate_html(
         'x': list(bins.keys()),
         'y': list(bins.values()),
         'type': 'bar',
-        'marker': {'color': ['#fd7e14', '#fd7e14', '#ffc107', '#28a745', '#28a745']},
+        'marker': {'color': ['#e67e22', '#e67e22', '#eab308', '#28a745', '#28a745']},
     })
     dist_layout = json.dumps({
         'title': f'Detection Efficiency Distribution<br><sub>Avg: {avg_eff:.1f}% across {n_houses} houses</sub>',
@@ -774,17 +774,17 @@ def _build_aggregate_html(
                         <div class="summary-number" id="value-explained" style="color: #28a745;">{avg_explained:.1f}%</div>
                         <div class="summary-label">Avg Explained</div>
                     </div>
-                    <div class="summary-card" title="Average baseline power (5th percentile) - always-on devices">
-                        <div class="summary-number" id="value-background" style="color: #6c757d;">{avg_background:.1f}%</div>
-                        <div class="summary-label">Avg Background</div>
-                    </div>
                     <div class="summary-card" title="Average above-threshold power not matched to any device">
-                        <div class="summary-number" id="value-aboveth" style="color: #fd7e14;">{avg_above_th:.1f}%</div>
+                        <div class="summary-number" id="value-aboveth" style="color: #e67e22;">{avg_above_th:.1f}%</div>
                         <div class="summary-label">Avg Unmatched</div>
                     </div>
                     <div class="summary-card" title="Average sub-threshold power — below detection threshold, undetectable by design">
-                        <div class="summary-number" id="value-subth" style="color: #b8860b;">{avg_sub_threshold:.1f}%</div>
+                        <div class="summary-number" id="value-subth" style="color: #a38600;">{avg_sub_threshold:.1f}%</div>
                         <div class="summary-label">Avg Sub-threshold</div>
+                    </div>
+                    <div class="summary-card" title="Average baseline power (5th percentile) - always-on devices">
+                        <div class="summary-number" id="value-background" style="color: #6c757d;">{avg_background:.1f}%</div>
+                        <div class="summary-label">Avg Background</div>
                     </div>
                     <div class="summary-card" title="Average % of time with no power reading (NaN). Not included in any calculation.">
                         <div class="summary-number" id="value-nodata" style="color: #6f42c1;">{avg_no_data:.1f}%</div>
@@ -820,9 +820,9 @@ def _build_aggregate_html(
                         <th onclick="sortTable(2, 'quality')" style="text-align: center;" title="Pre-analysis data quality score (0-100). Based on sharp entry rate, device signatures, power profile, variability, data volume, and data integrity.">Pre-Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(3, 'num')" style="text-align: right;" title="Total original power consumption across all phases">Total <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(4, 'num')" style="text-align: right;" title="% of total power attributed to detected ON/OFF device activations">Explained <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="% of above-threshold power not matched to any device">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of power between background and min threshold — undetectable by design">Sub-threshold <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of above-threshold power not matched to any device">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="% of power between background and min threshold — undetectable by design">Sub-threshold <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(8, 'num')" style="text-align: right;" title="% of time with no power reading (NaN) — not included in any calculation">No Data <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(9, 'num')" style="text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power in scope">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                     </tr>

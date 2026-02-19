@@ -7,22 +7,23 @@ with embedded Plotly charts or pure HTML/CSS.
 Color scheme (no red):
   Green  = #28a745 (explained / success)
   Gray   = #6c757d (background / baseload)
-  Orange = #fd7e14 (unmatched / attention)
-  Yellow = #ffc107 (medium efficiency)
+  Orange = #e67e22 (unmatched / attention)
+  Yellow = #eab308 (sub-threshold / warm yellow)
 """
 import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 # Color constants
-GREEN = '#28a745'
-GRAY = '#6c757d'
-ORANGE = '#fd7e14'
-YELLOW = '#ffc107'
-PURPLE = '#6f42c1'
+GREEN = '#28a745'           # Explained (success)
+GRAY = '#6c757d'            # Background (baseload)
+ORANGE = '#e67e22'          # Unmatched (distinct orange)
+YELLOW = '#eab308'          # Sub-threshold (warm yellow)
+PURPLE = '#6f42c1'          # No Data (NaN minutes)
 LIGHT_GREEN = '#d4edda'
 LIGHT_GRAY = '#e9ecef'
-LIGHT_ORANGE = '#fff3cd'
+LIGHT_ORANGE = '#fde8cd'    # Unmatched card background
+LIGHT_YELLOW = '#fef9e7'    # Sub-threshold card background
 LIGHT_PURPLE = '#e8daf0'
 
 
@@ -100,13 +101,6 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         )
 
     return f'''
-    <p style="color: #555; margin-bottom: 15px; line-height: 1.5; font-size: 0.88em;">
-        Total consumption ({total_kwh} kWh) = <strong>Explained</strong> (detected devices)
-        + <strong>Background</strong> (always-on baseload)
-        + <strong>Unmatched</strong> (above {min_threshold}W, not matched)
-        + <strong>Sub-threshold</strong> (below {min_threshold}W, undetectable by design).
-    </p>
-
     <div style="border: 2px solid #dee2e6; border-radius: 12px; padding: 18px; margin-bottom: 18px;">
         <div style="font-size: 0.82em; font-weight: 600; color: #555; margin-bottom: 12px;">
             Power Decomposition (= 100%)
@@ -121,6 +115,24 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
                     <em>Per-minute difference: original &minus; remaining.</em>
                 </div>
             </div>
+            <div style="background: {LIGHT_ORANGE}; border-left: 4px solid {ORANGE}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: {ORANGE};">{above_th_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #7a4510; font-weight: 600;">Unmatched</div>
+                <div style="font-size: 0.8em; color: #666;">{above_th_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Above {min_threshold}W, not matched. Includes complex-pattern<br>
+                    devices not targeted for detection.
+                </div>
+            </div>
+            <div style="background: {LIGHT_YELLOW}; border-left: 4px solid {YELLOW}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: #a38600;">{sub_threshold_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #7a6400; font-weight: 600;">Sub-threshold</div>
+                <div style="font-size: 0.8em; color: #666;">{sub_threshold_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Between background and {min_threshold}W.<br>
+                    Below detection threshold &mdash; undetectable by design.
+                </div>
+            </div>
             <div style="background: {LIGHT_GRAY}; border-left: 4px solid {GRAY}; border-radius: 8px; padding: 14px; text-align: center;">
                 <div style="font-size: 1.8em; font-weight: bold; color: {GRAY};">{background_pct:.1f}%</div>
                 <div style="font-size: 0.9em; color: #495057; font-weight: 600;">Background</div>
@@ -130,31 +142,13 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
                     <em>P5 (5th percentile) &times; measured minutes.</em>
                 </div>
             </div>
-            <div style="background: {LIGHT_ORANGE}; border-left: 4px solid {ORANGE}; border-radius: 8px; padding: 14px; text-align: center;">
-                <div style="font-size: 1.8em; font-weight: bold; color: {ORANGE};">{above_th_pct:.1f}%</div>
-                <div style="font-size: 0.9em; color: #856404; font-weight: 600;">Unmatched</div>
-                <div style="font-size: 0.8em; color: #666;">{above_th_kwh} kWh</div>
-                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                    Above {min_threshold}W, not matched. Includes complex-pattern<br>
-                    devices not targeted for detection.
-                </div>
-            </div>
-            <div style="background: #fff8e1; border-left: 4px solid {YELLOW}; border-radius: 8px; padding: 14px; text-align: center;">
-                <div style="font-size: 1.8em; font-weight: bold; color: #b8860b;">{sub_threshold_pct:.1f}%</div>
-                <div style="font-size: 0.9em; color: #856404; font-weight: 600;">Sub-threshold</div>
-                <div style="font-size: 0.8em; color: #666;">{sub_threshold_kwh} kWh</div>
-                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                    Between background and {min_threshold}W.<br>
-                    Below detection threshold &mdash; undetectable by design.
-                </div>
-            </div>
             {no_data_card_html}
         </div>
         <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; text-align: center; font-size: 0.82em; color: #555;">
             <span style="color:{GREEN};">Explained ({explained_pct:.1f}%)</span> +
-            <span style="color:{GRAY};">Background ({background_pct:.1f}%)</span> +
             <span style="color:{ORANGE};">Unmatched ({above_th_pct:.1f}%)</span> +
-            <span style="color:#b8860b;">Sub-threshold ({sub_threshold_pct:.1f}%)</span>
+            <span style="color:{YELLOW};">Sub-threshold ({sub_threshold_pct:.1f}%)</span> +
+            <span style="color:{GRAY};">Background ({background_pct:.1f}%)</span>
             {no_data_formula_html}
             = {total_sum:.1f}%
         </div>
@@ -225,12 +219,6 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         'text': [f'{v:.1f}%' for v in explained_vals], 'textposition': 'inside',
         'hovertext': hover_explained, 'hoverinfo': 'text',
     }
-    trace_background = {
-        'y': phase_labels, 'x': background_vals, 'name': 'Background',
-        'type': 'bar', 'orientation': 'h', 'marker': {'color': GRAY},
-        'text': [f'{v:.1f}%' for v in background_vals], 'textposition': 'inside',
-        'hovertext': hover_bg, 'hoverinfo': 'text',
-    }
     trace_above_th = {
         'y': phase_labels, 'x': above_th_vals, 'name': 'Unmatched',
         'type': 'bar', 'orientation': 'h', 'marker': {'color': ORANGE},
@@ -243,8 +231,14 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         'text': [f'{v:.1f}%' for v in sub_th_vals], 'textposition': 'inside',
         'hovertext': hover_sub, 'hoverinfo': 'text',
     }
+    trace_background = {
+        'y': phase_labels, 'x': background_vals, 'name': 'Background',
+        'type': 'bar', 'orientation': 'h', 'marker': {'color': GRAY},
+        'text': [f'{v:.1f}%' for v in background_vals], 'textposition': 'inside',
+        'hovertext': hover_bg, 'hoverinfo': 'text',
+    }
 
-    traces = [trace_explained, trace_background, trace_above_th, trace_sub_th]
+    traces = [trace_explained, trace_above_th, trace_sub_th, trace_background]
 
     if has_no_data:
         trace_no_data = {
@@ -261,15 +255,15 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         'barmode': 'stack',
         'xaxis': {'title': '% of Total Period', 'range': [0, 105]},
         'yaxis': {'title': ''},
-        'legend': {'orientation': 'h', 'y': -0.2},
-        'margin': {'l': 50, 'r': 30, 't': 50, 'b': 60},
-        'height': 250,
+        'legend': {'orientation': 'h', 'y': -0.25},
+        'margin': {'l': 50, 'r': 30, 't': 50, 'b': 80},
+        'height': 320,
     }
 
     data_json = json.dumps(traces)
 
     return f'''
-    <div id="{chart_id}" style="width:100%;height:250px;"></div>
+    <div id="{chart_id}" style="width:100%;height:320px;"></div>
     <script>
         Plotly.newPlot('{chart_id}', {data_json}, {json.dumps(layout)});
     </script>
@@ -385,12 +379,12 @@ def create_threshold_waterfall(metrics: Dict[str, Any]) -> str:
         'yaxis': {'title': '% of Total Power Explained'},
         'xaxis': {'title': ''},
         'showlegend': False,
-        'margin': {'t': 50, 'b': 50},
-        'height': 350,
+        'margin': {'t': 60, 'b': 50, 'l': 60, 'r': 30},
+        'height': 400,
     }
 
     return f'''
-    <div id="{chart_id}" style="width:100%;height:350px;"></div>
+    <div id="{chart_id}" style="width:100%;height:400px;"></div>
     <script>
         Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
     </script>
