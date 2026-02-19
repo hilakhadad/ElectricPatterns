@@ -361,7 +361,7 @@ def create_issues_heatmap(analyses: List[Dict[str, Any]]) -> str:
         'single_active_phase': 'Single Active Phase',
         'very_high_power': 'Max Power > 20kW',
         'unusual_night_ratio': 'Night/Day > 3',
-        'has_dead_phase': 'Dead Phase (<1%)',
+        'has_dead_phase': 'Dead Phase (<2% of sisters)',
         'low_sharp_entry': 'Low Sharp Entry Rate',
         'low_device_signature': 'Low Device Signature',
         'low_power_profile': 'Low Power Profile',

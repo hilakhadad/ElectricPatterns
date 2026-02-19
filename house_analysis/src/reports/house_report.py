@@ -144,6 +144,7 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     # Faulty/defective meter flags
     flags['has_dead_phase'] = quality.get('has_dead_phase', False)
     flags['has_faulty_nan_phase'] = quality.get('has_faulty_nan_phase', False)
+    flags['quality_label'] = quality.get('quality_label')  # faulty_dead_phase / faulty_high_nan / faulty_both / None
 
     # Quality scoring component flags (from quality.py quality_flags)
     quality_flags = quality.get('quality_flags', [])

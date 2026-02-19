@@ -166,7 +166,7 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         metrics[f'{col}_jumps_over_2000W'] = int((diffs > 2000).sum())
 
     # Detect dead/faulty phases using relative threshold
-    # A phase is considered damaged if its total power is less than 1% of the maximum phase's power
+    # A phase is dead if its total power is less than 2% of the average of the other two phases
     dead_phases = []
     phase_powers = {}
 
@@ -180,22 +180,21 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         else:
             phase_powers[col] = phase_data.sum()
 
-    # Find max power among phases
-    max_power = max(phase_powers.values()) if phase_powers else 0
-    threshold_ratio = 0.01  # 1% threshold
+    DEAD_PHASE_RATIO = 0.02  # 2% of sisters' average
 
     for col, power in phase_powers.items():
-        ratio = power / max_power if max_power > 0 else 0
-        if ratio < threshold_ratio:
+        sisters = [v for k, v in phase_powers.items() if k != col]
+        sisters_avg = sum(sisters) / len(sisters) if sisters else 0
+        if sisters_avg > 0 and power / sisters_avg < DEAD_PHASE_RATIO:
             dead_phases.append(col)
 
     metrics['dead_phases'] = dead_phases
     metrics['has_dead_phase'] = len(dead_phases) > 0
 
-    # ===== FAULTY PHASE DETECTION (NaN >= 20%) =====
-    # A phase with >= 20% NaN values is considered faulty (תקולה)
-    # Houses with faulty phases get quality_label='faulty' instead of numeric score
-    FAULTY_NAN_THRESHOLD = 20.0  # percent
+    # ===== FAULTY PHASE DETECTION (NaN >= 10%) =====
+    # A non-dead phase with >= 10% NaN values is considered faulty.
+    # Dead phases are excluded — their NaN is expected and already flagged separately.
+    FAULTY_NAN_THRESHOLD = 10.0  # percent
 
     faulty_nan_phases = []
     for col in phase_cols:
@@ -203,7 +202,7 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
             continue
         col_nan_pct = data[col].isna().sum() / len(data) * 100 if len(data) > 0 else 0
         metrics[f'{col}_nan_pct'] = col_nan_pct
-        if col_nan_pct >= FAULTY_NAN_THRESHOLD:
+        if col not in dead_phases and col_nan_pct >= FAULTY_NAN_THRESHOLD:
             faulty_nan_phases.append(col)
 
     metrics['faulty_nan_phases'] = faulty_nan_phases
@@ -517,9 +516,11 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
 
     # Mark faulty phases via label (keep numeric score for sorting/comparison)
     # Split into 3 subcategories: dead_phase, high_nan, both
+    # "both" requires high NaN on NON-dead phases (dead phase NaN doesn't count)
     has_dead = metrics['has_dead_phase']
     has_nan = metrics['has_faulty_nan_phase']
-    if has_dead and has_nan:
+    non_dead_nan = [p for p in metrics['faulty_nan_phases'] if p not in metrics['dead_phases']]
+    if has_dead and len(non_dead_nan) > 0:
         metrics['quality_label'] = 'faulty_both'
     elif has_dead:
         metrics['quality_label'] = 'faulty_dead_phase'

@@ -336,9 +336,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         tier = _assign_tier(pre_quality)
         if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
             _faulty_labels = {
-                'faulty_dead_phase': ('Dead Phase', 'Phase with <1% power'),
-                'faulty_high_nan': ('High NaN', 'Phase with ≥20% NaN values'),
-                'faulty_both': ('Both', 'Dead phase + high NaN'),
+                'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
+                'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
+                'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
             }
             _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
             pre_quality_html = f'<span style="color: #6f42c1; font-weight: bold;" title="{_ft}">{_fl}</span>'

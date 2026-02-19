@@ -147,8 +147,8 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'very_high_power': 'Max Power > 20kW',
         'many_flat_segments': '>70% Flat Readings',
         'unusual_night_ratio': 'Night/Day > 3',
-        'has_dead_phase': 'Dead Phase (<1%)',
-        'has_faulty_nan_phase': 'Faulty Phase (NaN≥20%)',
+        'has_dead_phase': 'Dead Phase (<2% of sisters)',
+        'has_faulty_nan_phase': 'Faulty Phase (NaN≥10%)',
         'many_nan_values': 'NaN > 2%',
         'low_sharp_entry': 'Low Sharp Entry Rate',
         'low_device_signature': 'Low Device Signature',
@@ -187,14 +187,13 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
 
         # Quality badge with Faulty subcategories
         score = quality.get('quality_score', 0)
-        has_dead_phase = flags.get('has_dead_phase', False)
-        has_faulty_nan = flags.get('has_faulty_nan_phase', False)
+        qlabel = flags.get('quality_label')
 
-        if has_dead_phase and has_faulty_nan:
+        if qlabel == 'faulty_both':
             badge = '<span class="badge badge-purple-dark">Faulty (Both)</span>'
-        elif has_dead_phase:
+        elif qlabel == 'faulty_dead_phase':
             badge = '<span class="badge badge-purple-light">Faulty (Dead Phase)</span>'
-        elif has_faulty_nan:
+        elif qlabel == 'faulty_high_nan':
             badge = '<span class="badge badge-purple">Faulty (High NaN)</span>'
         elif score >= 90:
             badge = '<span class="badge badge-green">Excellent</span>'
@@ -318,15 +317,14 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
         house_id = a.get('house_id', 'unknown')
         score = a.get('data_quality', {}).get('quality_score', 0)
         flags = a.get('flags', {})
-        has_dead_phase = flags.get('has_dead_phase', False)
-        has_faulty_nan = flags.get('has_faulty_nan_phase', False)
+        qlabel = flags.get('quality_label')
 
         # Faulty subcategories take priority over numeric tiers
-        if has_dead_phase and has_faulty_nan:
+        if qlabel == 'faulty_both':
             tier_dict['Faulty — Both'].append(house_id)
-        elif has_dead_phase:
+        elif qlabel == 'faulty_dead_phase':
             tier_dict['Faulty — Dead Phase'].append(house_id)
-        elif has_faulty_nan:
+        elif qlabel == 'faulty_high_nan':
             tier_dict['Faulty — High NaN'].append(house_id)
         elif score >= 90:
             tier_dict['Excellent (90+)'].append(house_id)
@@ -391,15 +389,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
     # Quality badge with Faulty subcategories
     score = quality.get('quality_score', 0)
-    has_dead = flags.get('has_dead_phase', False)
-    has_nan = flags.get('has_faulty_nan_phase', False)
-    if has_dead and has_nan:
+    qlabel = flags.get('quality_label')
+    if qlabel == 'faulty_both':
         badge_class = 'badge-purple-dark'
         badge_text = 'Faulty (Both)'
-    elif has_dead:
+    elif qlabel == 'faulty_dead_phase':
         badge_class = 'badge-purple-light'
         badge_text = 'Faulty (Dead Phase)'
-    elif has_nan:
+    elif qlabel == 'faulty_high_nan':
         badge_class = 'badge-purple'
         badge_text = 'Faulty (High NaN)'
     elif score >= 90:
