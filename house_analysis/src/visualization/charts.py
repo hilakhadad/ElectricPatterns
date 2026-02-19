@@ -470,6 +470,84 @@ def create_power_distribution_chart(analyses: List[Dict[str, Any]],
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
+def create_tier_score_comparison_chart(analyses: List[Dict[str, Any]]) -> str:
+    """
+    Create grouped bar chart showing average score components per quality tier.
+
+    Args:
+        analyses: List of house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    # Score component definitions
+    components = [
+        ('sharp_entry_score', 'Sharp Entry (20)', '#e74c3c'),
+        ('device_signature_score', 'Device Sig. (15)', '#e67e22'),
+        ('power_profile_score', 'Power Profile (20)', '#f39c12'),
+        ('variability_score', 'Variability (20)', '#9b59b6'),
+        ('data_volume_score', 'Data Volume (15)', '#3498db'),
+        ('integrity_score', 'Integrity (10)', '#2ecc71'),
+    ]
+
+    # Group houses into tiers
+    tier_order = ['Excellent', 'Good', 'Fair', 'Poor', 'Faulty']
+    tier_houses = {t: [] for t in tier_order}
+
+    for a in analyses:
+        score = a.get('data_quality', {}).get('quality_score', 0)
+        qlabel = a.get('flags', {}).get('quality_label')
+
+        if qlabel and 'faulty' in qlabel:
+            tier_houses['Faulty'].append(a)
+        elif score >= 90:
+            tier_houses['Excellent'].append(a)
+        elif score >= 75:
+            tier_houses['Good'].append(a)
+        elif score >= 50:
+            tier_houses['Fair'].append(a)
+        else:
+            tier_houses['Poor'].append(a)
+
+    # Only include tiers with houses
+    active_tiers = [t for t in tier_order if tier_houses[t]]
+
+    if not active_tiers:
+        return "<p>No data available for tier comparison</p>"
+
+    fig = go.Figure()
+
+    for comp_key, comp_label, color in components:
+        avgs = []
+        for tier in active_tiers:
+            houses = tier_houses[tier]
+            avg = sum(h.get('data_quality', {}).get(comp_key, 0) for h in houses) / len(houses)
+            avgs.append(round(avg, 1))
+
+        fig.add_trace(go.Bar(
+            name=comp_label,
+            x=active_tiers,
+            y=avgs,
+            marker_color=color,
+            text=[f'{v:.1f}' for v in avgs],
+            textposition='outside',
+            textfont=dict(size=9),
+        ))
+
+    fig.update_layout(
+        title='Average Score Components by Quality Tier',
+        xaxis_title='Quality Tier',
+        yaxis_title='Average Points',
+        barmode='group',
+        height=450,
+        legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5,
+                    font=dict(size=10)),
+        margin=dict(b=100),
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
 def create_hourly_pattern_chart(analysis: Dict[str, Any]) -> str:
     """
     Create hourly power pattern chart with confidence band.

@@ -9,13 +9,10 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 
 from visualization.charts import (
-    create_days_distribution_chart,
     create_quality_distribution_chart,
-    create_coverage_comparison_chart,
-    create_phase_balance_chart,
     create_day_night_scatter,
     create_issues_heatmap,
-    create_power_distribution_chart,
+    create_tier_score_comparison_chart,
     create_hourly_pattern_chart,
     create_phase_power_chart,
     create_monthly_pattern_chart,
@@ -47,7 +44,8 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     """
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
-    table_html = _generate_comparison_table(analyses, per_house_dir)
+    table_html, tier_counts, continuity_counts = _generate_comparison_table(analyses, per_house_dir)
+    filter_bar_html = _build_filter_bar(tier_counts, continuity_counts)
     charts_html = _generate_charts_section(analyses)
     quality_tiers_html = _generate_quality_tiers_section(analyses)
 
@@ -55,6 +53,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     html_content = _build_html_document(
         title=title,
         summary=summary_html,
+        filter_bar=filter_bar_html,
         table=table_html,
         charts=charts_html,
         quality_tiers=quality_tiers_html,
@@ -91,19 +90,19 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     return f"""
     <div class="summary-grid">
         <div class="summary-card">
-            <div class="summary-number">{n_houses}</div>
+            <div class="summary-number" id="summary-total">{n_houses}</div>
             <div class="summary-label">Houses Analyzed</div>
         </div>
         <div class="summary-card">
-            <div class="summary-number">{avg_quality:.0f}</div>
+            <div class="summary-number" id="summary-avg-score">{avg_quality:.0f}</div>
             <div class="summary-label">Avg Quality Score</div>
         </div>
         <div class="summary-card">
-            <div class="summary-number">{avg_coverage:.1%}</div>
+            <div class="summary-number" id="summary-avg-coverage">{avg_coverage:.1%}</div>
             <div class="summary-label">Avg Coverage</div>
         </div>
         <div class="summary-card">
-            <div class="summary-number">{total_days:,}</div>
+            <div class="summary-number" id="summary-total-days">{total_days:,}</div>
             <div class="summary-label">Total Days of Data</div>
         </div>
     </div>
@@ -128,8 +127,12 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
 
 
 def _generate_comparison_table(analyses: List[Dict[str, Any]],
-                                per_house_dir: str = '../per_house') -> str:
-    """Generate sortable comparison table HTML with links to individual reports."""
+                                per_house_dir: str = '../per_house') -> tuple:
+    """Generate sortable comparison table HTML with links to individual reports.
+
+    Returns:
+        Tuple of (html_string, tier_counts, continuity_counts)
+    """
     # Friendly flag names for display
     flag_display_names = {
         'low_coverage': 'Coverage < 80%',
@@ -157,6 +160,10 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'low_data_integrity': 'Low Data Integrity',
     }
 
+    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0,
+                   'faulty_dead': 0, 'faulty_nan': 0, 'faulty_both': 0}
+    continuity_counts = {'continuous': 0, 'minor_gaps': 0,
+                         'discontinuous': 0, 'fragmented': 0, 'unknown': 0}
     rows = []
 
     for a in analyses:
@@ -176,51 +183,75 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 display_name = flag_display_names.get(flag_key, flag_key.replace('_', ' ').title())
                 active_issues.append(display_name)
 
-        # Create issues HTML - show as comma-separated colored badges
+        # Create issues HTML with tooltip for overflow
         if active_issues:
+            issues_text = ', '.join(active_issues)
             issues_html = ', '.join(f'<span class="issue-tag">{issue}</span>' for issue in active_issues[:5])
             if len(active_issues) > 5:
                 issues_html += f' <span class="issue-more">+{len(active_issues) - 5}</span>'
         else:
+            issues_text = 'None'
             issues_html = '<span class="no-issues">None</span>'
 
-        # Quality badge with Faulty subcategories
+        # Quality badge + tier key
         score = quality.get('quality_score', 0)
         qlabel = flags.get('quality_label')
 
         if qlabel == 'faulty_both':
             badge = '<span class="badge badge-purple-dark">Faulty (Both)</span>'
+            tier_key = 'faulty_both'
         elif qlabel == 'faulty_dead_phase':
             badge = '<span class="badge badge-purple-light">Faulty (Dead Phase)</span>'
+            tier_key = 'faulty_dead'
         elif qlabel == 'faulty_high_nan':
             badge = '<span class="badge badge-purple">Faulty (High NaN)</span>'
+            tier_key = 'faulty_nan'
         elif score >= 90:
             badge = '<span class="badge badge-green">Excellent</span>'
+            tier_key = 'excellent'
         elif score >= 75:
             badge = '<span class="badge badge-blue">Good</span>'
+            tier_key = 'good'
         elif score >= 50:
             badge = '<span class="badge badge-orange">Fair</span>'
+            tier_key = 'fair'
         else:
             badge = '<span class="badge badge-red">Poor</span>'
+            tier_key = 'poor'
+
+        tier_counts[tier_key] += 1
+
+        # NaN continuity
+        continuity = quality.get('nan_continuity_label', 'unknown')
+        if continuity not in continuity_counts:
+            continuity = 'unknown'
+        continuity_counts[continuity] += 1
 
         # Link to individual report
         house_link = f'{per_house_dir}/house_{house_id}.html'
 
+        cov_ratio = coverage.get('coverage_ratio', 0)
+        nan_pct = coverage.get('avg_nan_pct', 0)
+        days_span = coverage.get('days_span', 0)
+
         rows.append(f"""
-        <tr>
+        <tr data-tier="{tier_key}" data-continuity="{continuity}" data-house-id="{house_id}"
+            data-excluded="false" data-score="{score:.1f}" data-coverage="{cov_ratio:.4f}"
+            data-nan="{nan_pct:.2f}" data-days="{days_span}"
+            onclick="toggleExcludeRow(event, this)">
             <td><a href="{house_link}" class="house-link"><strong>{house_id}</strong></a></td>
-            <td>{coverage.get('days_span', 0)}</td>
-            <td>{coverage.get('coverage_ratio', 0):.1%}</td>
-            <td>{coverage.get('avg_nan_pct', 0):.1f}%</td>
+            <td>{days_span}</td>
+            <td>{cov_ratio:.1%}</td>
+            <td>{nan_pct:.1f}%</td>
             <td>{score:.0f} {badge}</td>
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
             <td>{temporal.get('total_night_day_ratio', 0):.2f}</td>
-            <td class="issues-cell">{issues_html}</td>
+            <td class="issues-cell" title="{issues_text}">{issues_html}</td>
         </tr>
         """)
 
-    return f"""
+    html = f"""
     <div class="table-legend" style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-size: 0.9em;">
         <h4 style="margin: 0 0 10px 0; color: #2c3e50;">Quality Score Calculation (0-100) &mdash; Optimized for Algorithm Performance</h4>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;">
@@ -239,6 +270,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         <strong>Phase Balance</strong> = max(phases)/min(phases), ideal=1 |
         <strong>Night/Day</strong> = avg night power / avg day power
     </div>
+    <div class="table-wrapper">
     <table class="data-table" id="comparison-table">
         <thead>
             <tr>
@@ -257,36 +289,81 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             {''.join(rows)}
         </tbody>
     </table>
+    </div>
+    """
+    return html, tier_counts, continuity_counts
+
+
+def _build_filter_bar(tier_counts: Dict[str, int],
+                      continuity_counts: Dict[str, int]) -> str:
+    """Build the filter bar with tier and NaN continuity checkboxes."""
+    tier_labels = {
+        'excellent': ('Excellent', '#28a745'),
+        'good': ('Good', '#007bff'),
+        'fair': ('Fair', '#ffc107'),
+        'poor': ('Poor', '#dc3545'),
+        'faulty_dead': ('Faulty (Dead)', '#5a3d7a'),
+        'faulty_nan': ('Faulty (NaN)', '#6f42c1'),
+        'faulty_both': ('Faulty (Both)', '#4a0e6b'),
+    }
+    continuity_labels = {
+        'continuous': ('Continuous', '#28a745'),
+        'minor_gaps': ('Minor Gaps', '#007bff'),
+        'discontinuous': ('Discontinuous', '#ffc107'),
+        'fragmented': ('Fragmented', '#dc3545'),
+    }
+
+    # Tier checkboxes
+    tier_html = ''
+    for key, (label, color) in tier_labels.items():
+        count = tier_counts.get(key, 0)
+        if count == 0:
+            continue
+        tier_html += f"""
+        <label class="filter-checkbox" style="border-color: {color};">
+            <input type="checkbox" checked onchange="updateFilter()" data-filter-tier="{key}">
+            <span class="filter-dot" style="background: {color};"></span>
+            {label} <span class="filter-count">({count})</span>
+        </label>"""
+
+    # Continuity checkboxes
+    cont_html = ''
+    for key, (label, color) in continuity_labels.items():
+        count = continuity_counts.get(key, 0)
+        if count == 0:
+            continue
+        cont_html += f"""
+        <label class="filter-checkbox" style="border-color: {color};">
+            <input type="checkbox" checked onchange="updateFilter()" data-filter-continuity="{key}">
+            <span class="filter-dot" style="background: {color};"></span>
+            {label} <span class="filter-count">({count})</span>
+        </label>"""
+
+    return f"""
+    <div class="filter-bar">
+        <div class="filter-group">
+            <span class="filter-group-label">Quality Tier:</span>
+            {tier_html}
+        </div>
+        <div class="filter-group">
+            <span class="filter-group-label">NaN Continuity:</span>
+            {cont_html}
+        </div>
+    </div>
     """
 
 
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
-    """Generate all charts HTML."""
-    charts = []
-
-    # Days distribution (how many houses per days range)
-    charts.append(('Houses by Days Range', create_days_distribution_chart(analyses)))
-
-    # Quality distribution
-    charts.append(('Quality Score Distribution', create_quality_distribution_chart(analyses)))
-
-    # Coverage comparison
-    charts.append(('Data Coverage', create_coverage_comparison_chart(analyses)))
-
-    # Phase balance
-    charts.append(('Phase Balance', create_phase_balance_chart(analyses)))
-
-    # Day/Night scatter
-    charts.append(('Day vs Night Consumption', create_day_night_scatter(analyses)))
-
-    # Issues heatmap
-    charts.append(('Issues Overview', create_issues_heatmap(analyses)))
-
-    # Power distribution (average)
-    charts.append(('Power Range Distribution', create_power_distribution_chart(analyses)))
+    """Generate all charts HTML (4 charts: quality distribution, tier scores, day/night, issues)."""
+    charts = [
+        create_quality_distribution_chart(analyses),
+        create_tier_score_comparison_chart(analyses),
+        create_day_night_scatter(analyses),
+        create_issues_heatmap(analyses),
+    ]
 
     html_parts = []
-    for title, chart_html in charts:
+    for chart_html in charts:
         html_parts.append(f"""
         <div class="chart-container">
             <div class="chart-content">
@@ -299,60 +376,85 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
 
 
 def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
-    """Generate quality tiers breakdown HTML."""
-    # Use ordered list of tuples to preserve display order
-    tiers = [
-        ('Faulty — Dead Phase', []),
-        ('Faulty — High NaN', []),
-        ('Faulty — Both', []),
-        ('Excellent (90+)', []),
-        ('Good (75-89)', []),
-        ('Fair (50-74)', []),
-        ('Poor (<50)', []),
+    """Generate quality tiers with score component mini-bars."""
+    # Score component definitions: (key, label, max_score)
+    score_components = [
+        ('sharp_entry_score', 'Sharp Entry', 20),
+        ('device_signature_score', 'Device Sig.', 15),
+        ('power_profile_score', 'Power Profile', 20),
+        ('variability_score', 'Variability', 20),
+        ('data_volume_score', 'Data Volume', 15),
+        ('integrity_score', 'Integrity', 10),
     ]
-    tier_dict = {name: houses for name, houses in tiers}
+
+    # Group houses into tiers
+    tiers = [
+        ('Excellent (90+)', 'green', 'excellent'),
+        ('Good (75-89)', 'blue', 'good'),
+        ('Fair (50-74)', 'orange', 'fair'),
+        ('Poor (<50)', 'red', 'poor'),
+        ('Faulty — Dead Phase', 'purple-light', 'faulty_dead_phase'),
+        ('Faulty — High NaN', 'purple', 'faulty_high_nan'),
+        ('Faulty — Both', 'purple-dark', 'faulty_both'),
+    ]
+    tier_houses = {key: [] for _, _, key in tiers}
 
     for a in analyses:
-        house_id = a.get('house_id', 'unknown')
         score = a.get('data_quality', {}).get('quality_score', 0)
-        flags = a.get('flags', {})
-        qlabel = flags.get('quality_label')
+        qlabel = a.get('flags', {}).get('quality_label')
 
-        # Faulty subcategories take priority over numeric tiers
         if qlabel == 'faulty_both':
-            tier_dict['Faulty — Both'].append(house_id)
+            tier_houses['faulty_both'].append(a)
         elif qlabel == 'faulty_dead_phase':
-            tier_dict['Faulty — Dead Phase'].append(house_id)
+            tier_houses['faulty_dead_phase'].append(a)
         elif qlabel == 'faulty_high_nan':
-            tier_dict['Faulty — High NaN'].append(house_id)
+            tier_houses['faulty_high_nan'].append(a)
         elif score >= 90:
-            tier_dict['Excellent (90+)'].append(house_id)
+            tier_houses['excellent'].append(a)
         elif score >= 75:
-            tier_dict['Good (75-89)'].append(house_id)
+            tier_houses['good'].append(a)
         elif score >= 50:
-            tier_dict['Fair (50-74)'].append(house_id)
+            tier_houses['fair'].append(a)
         else:
-            tier_dict['Poor (<50)'].append(house_id)
+            tier_houses['poor'].append(a)
 
+    # Build tier cards
+    component_colors = ['#e74c3c', '#e67e22', '#f39c12', '#9b59b6', '#3498db', '#2ecc71']
     html_parts = []
-    colors = {
-        'Faulty — Dead Phase': 'purple-light',
-        'Faulty — High NaN': 'purple',
-        'Faulty — Both': 'purple-dark',
-        'Excellent (90+)': 'green',
-        'Good (75-89)': 'blue',
-        'Fair (50-74)': 'orange',
-        'Poor (<50)': 'red',
-    }
 
-    for tier_name, houses in tiers:
-        color = colors[tier_name]
-        houses_str = ', '.join(str(h) for h in houses) if houses else 'None'
+    for tier_name, color, key in tiers:
+        houses = tier_houses[key]
+        if not houses:
+            continue
+
+        # Calculate average scores per component
+        mini_bars_html = ''
+        for i, (comp_key, comp_label, max_score) in enumerate(score_components):
+            avg = sum(h.get('data_quality', {}).get(comp_key, 0) for h in houses) / len(houses)
+            pct = min(100, avg / max_score * 100)
+            bar_color = component_colors[i]
+            mini_bars_html += f"""
+            <div class="mini-bar-row">
+                <span class="mini-bar-label">{comp_label}</span>
+                <div class="mini-bar-container">
+                    <div class="mini-bar" style="width: {pct:.0f}%; background: {bar_color};"></div>
+                </div>
+                <span class="mini-bar-value">{avg:.1f}/{max_score}</span>
+            </div>"""
+
+        house_ids = ', '.join(str(h.get('house_id', '?')) for h in houses)
+        avg_score = sum(h.get('data_quality', {}).get('quality_score', 0) for h in houses) / len(houses)
+
         html_parts.append(f"""
-        <div class="tier-card tier-{color}">
-            <h4>{tier_name}</h4>
-            <div class="tier-count">{len(houses)} houses</div>
-            <div class="tier-houses">{houses_str}</div>
+        <div class="tier-score-card tier-{color}">
+            <div class="tier-header">
+                <h4>{tier_name}</h4>
+                <div class="tier-count">{len(houses)} houses &middot; avg {avg_score:.0f}</div>
+            </div>
+            <div class="mini-bars">
+                {mini_bars_html}
+            </div>
+            <div class="tier-houses">{house_ids}</div>
         </div>
         """)
 
@@ -994,8 +1096,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     return output_path
 
 
-def _build_html_document(title: str, summary: str, table: str,
-                         charts: str, quality_tiers: str,
+def _build_html_document(title: str, summary: str, filter_bar: str,
+                         table: str, charts: str, quality_tiers: str,
                          generated_at: str) -> str:
     """Build complete HTML document."""
     return f"""
@@ -1102,6 +1204,81 @@ def _build_html_document(title: str, summary: str, table: str,
             background: #fdf2f2;
         }}
 
+        /* Filter bar */
+        .filter-bar {{
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }}
+
+        .filter-group {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }}
+
+        .filter-group:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .filter-group-label {{
+            font-weight: 600;
+            font-size: 0.85em;
+            color: #555;
+            min-width: 110px;
+        }}
+
+        .filter-checkbox {{
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 16px;
+            border: 2px solid #ddd;
+            font-size: 0.82em;
+            cursor: pointer;
+            transition: all 0.15s;
+            user-select: none;
+            background: white;
+        }}
+
+        .filter-checkbox:hover {{
+            background: #f0f0f0;
+        }}
+
+        .filter-checkbox input {{
+            display: none;
+        }}
+
+        .filter-checkbox input:not(:checked) + .filter-dot {{
+            opacity: 0.3;
+        }}
+
+        .filter-checkbox input:not(:checked) ~ .filter-count {{
+            opacity: 0.4;
+        }}
+
+        .filter-dot {{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }}
+
+        .filter-count {{
+            color: #888;
+            font-size: 0.9em;
+        }}
+
+        /* Table wrapper for horizontal scroll */
+        .table-wrapper {{
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }}
+
         /* Data table */
         .data-table {{
             width: 100%;
@@ -1116,6 +1293,7 @@ def _build_html_document(title: str, summary: str, table: str,
             text-align: left;
             cursor: pointer;
             user-select: none;
+            white-space: nowrap;
         }}
 
         .data-table th:hover {{
@@ -1128,7 +1306,23 @@ def _build_html_document(title: str, summary: str, table: str,
         }}
 
         .data-table tr:hover {{
-            background: #f8f9fa;
+            background: #f0f4ff;
+        }}
+
+        .data-table tr[data-excluded="true"] {{
+            opacity: 0.35;
+        }}
+
+        .data-table tr[data-excluded="true"] .house-link {{
+            text-decoration: line-through;
+        }}
+
+        .data-table tr.row-hidden {{
+            display: none;
+        }}
+
+        .data-table tr {{
+            cursor: pointer;
         }}
 
         .house-link {{
@@ -1159,7 +1353,9 @@ def _build_html_document(title: str, summary: str, table: str,
 
         /* Issue tags in table */
         .issues-cell {{
-            max-width: 300px;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         .issue-tag {{
             display: inline-block;
@@ -1184,68 +1380,97 @@ def _build_html_document(title: str, summary: str, table: str,
         /* Chart containers */
         .chart-container {{
             margin-bottom: 30px;
+            max-width: 100%;
+            overflow-x: auto;
         }}
 
         .chart-content {{
             min-height: 400px;
         }}
 
-        /* Quality tiers */
+        /* Quality tiers - score boxes */
         .tiers-grid {{
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
         }}
 
-        @media (max-width: 1200px) {{
-            .tiers-grid {{
-                grid-template-columns: repeat(4, 1fr);
-            }}
+        .tier-score-card {{
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 5px solid;
         }}
 
-        @media (max-width: 800px) {{
-            .tiers-grid {{
-                grid-template-columns: repeat(3, 1fr);
-            }}
+        .tier-score-card .tier-header {{
+            margin-bottom: 12px;
         }}
 
-        @media (max-width: 600px) {{
-            .tiers-grid {{
-                grid-template-columns: repeat(2, 1fr);
-            }}
+        .tier-score-card h4 {{
+            font-size: 0.95em;
+            margin: 0;
         }}
 
-        .tier-card {{
-            padding: 12px;
-            border-radius: 8px;
-            border-left: 4px solid;
+        .tier-score-card .tier-count {{
+            font-size: 0.82em;
+            color: #666;
+            margin-top: 2px;
         }}
 
-        .tier-card h4 {{
-            font-size: 0.85em;
-            margin: 0 0 5px 0;
+        .tier-purple {{ background: #f3edf7; border-color: #6f42c1; }}
+        .tier-purple-light {{ background: #ece4f0; border-color: #5a3d7a; }}
+        .tier-purple-dark {{ background: #e0d0e8; border-color: #4a0e6b; }}
+        .tier-green {{ background: #e8f5e9; border-color: #28a745; }}
+        .tier-blue {{ background: #e3f2fd; border-color: #007bff; }}
+        .tier-orange {{ background: #fff8e1; border-color: #ffc107; }}
+        .tier-red {{ background: #fce4ec; border-color: #dc3545; }}
+
+        /* Mini bars for score components */
+        .mini-bars {{
+            margin-bottom: 10px;
         }}
 
-        .tier-purple {{ background: #e2d5f1; border-color: #6f42c1; }}
-        .tier-purple-light {{ background: #d4c5e2; border-color: #5a3d7a; }}
-        .tier-purple-dark {{ background: #c9a3d4; border-color: #4a0e6b; }}
-        .tier-green {{ background: #d4edda; border-color: #28a745; }}
-        .tier-blue {{ background: #cce5ff; border-color: #007bff; }}
-        .tier-orange {{ background: #fff3cd; border-color: #ffc107; }}
-        .tier-red {{ background: #f8d7da; border-color: #dc3545; }}
+        .mini-bar-row {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }}
 
-        .tier-count {{
-            font-size: 1.3em;
-            font-weight: bold;
-            margin: 8px 0;
+        .mini-bar-label {{
+            font-size: 0.75em;
+            color: #555;
+            min-width: 80px;
+            text-align: right;
+        }}
+
+        .mini-bar-container {{
+            flex: 1;
+            height: 12px;
+            background: rgba(0,0,0,0.08);
+            border-radius: 6px;
+            overflow: hidden;
+        }}
+
+        .mini-bar {{
+            height: 100%;
+            border-radius: 6px;
+            transition: width 0.3s;
+        }}
+
+        .mini-bar-value {{
+            font-size: 0.72em;
+            color: #666;
+            min-width: 45px;
         }}
 
         .tier-houses {{
             font-size: 0.75em;
-            color: #666;
+            color: #888;
             word-break: break-word;
-            max-height: 80px;
+            max-height: 50px;
             overflow-y: auto;
+            border-top: 1px solid rgba(0,0,0,0.08);
+            padding-top: 8px;
         }}
 
         footer {{
@@ -1276,12 +1501,13 @@ def _build_html_document(title: str, summary: str, table: str,
         </section>
 
         <section>
-            <h2>Quality Tiers</h2>
+            <h2>Quality Score Breakdown</h2>
             {quality_tiers}
         </section>
 
         <section>
             <h2>House Comparison</h2>
+            {filter_bar}
             {table}
         </section>
 
@@ -1298,7 +1524,7 @@ def _build_html_document(title: str, summary: str, table: str,
     <script>
         function sortTable(n) {{
             var table = document.getElementById("comparison-table");
-            var rows = Array.from(table.rows).slice(1);
+            var rows = Array.from(table.tBodies[0].rows);
             var ascending = table.getAttribute('data-sort-col') !== String(n) ||
                            table.getAttribute('data-sort-dir') !== 'asc';
 
@@ -1306,7 +1532,6 @@ def _build_html_document(title: str, summary: str, table: str,
                 var aVal = a.cells[n].textContent.trim();
                 var bVal = b.cells[n].textContent.trim();
 
-                // Try numeric comparison
                 var aNum = parseFloat(aVal.replace(/[^0-9.-]/g, ''));
                 var bNum = parseFloat(bVal.replace(/[^0-9.-]/g, ''));
 
@@ -1314,15 +1539,87 @@ def _build_html_document(title: str, summary: str, table: str,
                     return ascending ? aNum - bNum : bNum - aNum;
                 }}
 
-                // Fall back to string comparison
                 return ascending ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
             }});
 
-            var tbody = table.getElementsByTagName('tbody')[0];
+            var tbody = table.tBodies[0];
             rows.forEach(function(row) {{ tbody.appendChild(row); }});
 
             table.setAttribute('data-sort-col', n);
             table.setAttribute('data-sort-dir', ascending ? 'asc' : 'desc');
+        }}
+
+        function updateFilter() {{
+            // Get checked tiers
+            var checkedTiers = [];
+            document.querySelectorAll('[data-filter-tier]').forEach(function(cb) {{
+                if (cb.checked) checkedTiers.push(cb.getAttribute('data-filter-tier'));
+            }});
+
+            // Get checked continuity
+            var checkedCont = [];
+            document.querySelectorAll('[data-filter-continuity]').forEach(function(cb) {{
+                if (cb.checked) checkedCont.push(cb.getAttribute('data-filter-continuity'));
+            }});
+
+            // Show/hide rows
+            var rows = document.querySelectorAll('#comparison-table tbody tr');
+            rows.forEach(function(row) {{
+                var tier = row.getAttribute('data-tier');
+                var cont = row.getAttribute('data-continuity');
+                var tierMatch = checkedTiers.length === 0 || checkedTiers.indexOf(tier) !== -1;
+                var contMatch = checkedCont.length === 0 || checkedCont.indexOf(cont) !== -1;
+
+                if (tierMatch && contMatch) {{
+                    row.classList.remove('row-hidden');
+                }} else {{
+                    row.classList.add('row-hidden');
+                }}
+            }});
+
+            updateSummaryCards();
+        }}
+
+        function toggleExcludeRow(event, row) {{
+            // Don't toggle if clicking a link
+            if (event.target.tagName === 'A' || event.target.closest('a')) return;
+
+            var excluded = row.getAttribute('data-excluded') === 'true';
+            row.setAttribute('data-excluded', excluded ? 'false' : 'true');
+            updateSummaryCards();
+        }}
+
+        function updateSummaryCards() {{
+            var rows = document.querySelectorAll('#comparison-table tbody tr');
+            var totalHouses = 0;
+            var totalScore = 0;
+            var totalCoverage = 0;
+            var totalDays = 0;
+
+            rows.forEach(function(row) {{
+                if (row.classList.contains('row-hidden')) return;
+                if (row.getAttribute('data-excluded') === 'true') return;
+
+                totalHouses++;
+                totalScore += parseFloat(row.getAttribute('data-score') || 0);
+                totalCoverage += parseFloat(row.getAttribute('data-coverage') || 0);
+                totalDays += parseInt(row.getAttribute('data-days') || 0);
+            }});
+
+            var el;
+            el = document.getElementById('summary-total');
+            if (el) el.textContent = totalHouses;
+
+            el = document.getElementById('summary-avg-score');
+            if (el) el.textContent = totalHouses > 0 ? Math.round(totalScore / totalHouses) : 0;
+
+            el = document.getElementById('summary-avg-coverage');
+            if (el) el.textContent = totalHouses > 0
+                ? (totalCoverage / totalHouses * 100).toFixed(1) + '%'
+                : '0.0%';
+
+            el = document.getElementById('summary-total-days');
+            if (el) el.textContent = totalDays.toLocaleString();
         }}
     </script>
 </body>
