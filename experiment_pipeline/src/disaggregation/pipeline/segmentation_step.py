@@ -3,6 +3,7 @@ Segmentation pipeline step.
 
 Separates power consumption into device-specific time series - processes month by month.
 """
+import shutil
 import pandas as pd
 from tqdm import tqdm
 import os
@@ -194,6 +195,26 @@ def process_segmentation(
         data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
         if not data.empty:
             _create_passthrough_summary(data, phases, summary_file, logger, month, year)
+
+    # Final safeguard: for run N>0, copy any missing months from the previous
+    # iteration's summarized output.  This covers cases where the passthrough
+    # above couldn't locate the source data file (e.g. single-file houses).
+    if run_number > 0:
+        prev_summarized_dir = (
+            Path(core.OUTPUT_BASE_PATH)
+            / f"run_{run_number - 1}"
+            / f"house_{house_id}"
+            / "summarized"
+        )
+        if prev_summarized_dir.is_dir():
+            for prev_file in prev_summarized_dir.glob(f"summarized_{house_id}_*.pkl"):
+                target_file = summarized_dir / prev_file.name
+                if not target_file.exists():
+                    shutil.copy2(prev_file, target_file)
+                    logger.info(
+                        f"Copied {prev_file.name} from previous iteration "
+                        f"(no events found in current iteration)"
+                    )
 
     logger.info(f"Segmentation completed for house {house_id}, run {run_number}")
     return all_device_profiles
