@@ -54,6 +54,19 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics['max_gap_minutes'] = time_diffs.max() / 60
         metrics['pct_gaps_over_2min'] = (time_diffs > 120).sum() / len(time_diffs) * 100
 
+    # Per-phase max consecutive NaN gap (in minutes, assuming 1-min resolution)
+    for col in phase_cols:
+        if col not in data.columns:
+            continue
+        is_nan = data[col].isna()
+        if not is_nan.any():
+            metrics[f'{col}_max_nan_gap_minutes'] = 0
+            continue
+        # Find consecutive NaN streaks
+        groups = (is_nan != is_nan.shift()).cumsum()
+        nan_streaks = is_nan.groupby(groups).sum()
+        metrics[f'{col}_max_nan_gap_minutes'] = int(nan_streaks.max())
+
     # Duplicate timestamps
     if 'timestamp' in data.columns:
         duplicate_count = data['timestamp'].duplicated(keep=False).sum()

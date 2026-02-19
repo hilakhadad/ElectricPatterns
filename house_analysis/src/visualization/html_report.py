@@ -757,16 +757,19 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         @media (max-width: 600px) {{
             .two-col-grid {{ grid-template-columns: 1fr; }}
         }}
-        .phase-values {{
+        .phase-list {{
             font-size: 0.88em;
             color: #555;
+            text-align: left;
+            display: inline-block;
         }}
-        .phase-val {{
-            font-weight: 500;
+        .phase-list .phase-row {{
+            line-height: 1.6;
         }}
-        .phase-sep {{
-            color: #ccc;
-            margin: 0 6px;
+        .phase-list .phase-name {{
+            font-weight: 700;
+            display: inline-block;
+            min-width: 28px;
         }}
     </style>
 </head>
@@ -828,19 +831,21 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 <div class="two-col-grid">
                     <div class="overview-item">
                         <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN %</div>
-                        <div class="phase-values">
-                            <span class="phase-val">w1: {quality.get('w1_nan_pct', 0):.1f}%</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w2: {quality.get('w2_nan_pct', 0):.1f}%</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w3: {quality.get('w3_nan_pct', 0):.1f}%</span>
+                        <div class="phase-list">
+                            <div class="phase-row"><span class="phase-name">w1:</span> {quality.get('w1_nan_pct', 0):.1f}%</div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> {quality.get('w2_nan_pct', 0):.1f}%</div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> {quality.get('w3_nan_pct', 0):.1f}%</div>
                         </div>
                         <div class="overview-desc">% of readings missing per phase</div>
                     </div>
                     <div class="overview-item">
-                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">Max Gap</div>
-                        <div class="overview-value">{coverage.get('max_gap_minutes', 0):.0f} min</div>
-                        <div class="overview-desc">Longest gap between consecutive timestamps in the raw data</div>
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">Max NaN Gap</div>
+                        <div class="phase-list">
+                            <div class="phase-row"><span class="phase-name">w1:</span> {coverage.get('w1_max_nan_gap_minutes', 0):,} min</div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> {coverage.get('w2_max_nan_gap_minutes', 0):,} min</div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> {coverage.get('w3_max_nan_gap_minutes', 0):,} min</div>
+                        </div>
+                        <div class="overview-desc">Longest consecutive NaN streak per phase</div>
                     </div>
                 </div>
             </div>
@@ -852,24 +857,20 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     <div class="overview-item">
                         <div class="overview-value">{power.get('total_mean', 0):,.0f}W</div>
                         <div class="overview-label">Average Power</div>
-                        <div class="phase-values" style="margin-top: 4px;">
-                            <span class="phase-val">w1: {power.get('phase_w1_mean', 0):,.0f}W</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w2: {power.get('phase_w2_mean', 0):,.0f}W</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w3: {power.get('phase_w3_mean', 0):,.0f}W</span>
+                        <div class="phase-list" style="margin-top: 4px;">
+                            <div class="phase-row"><span class="phase-name">w1:</span> {power.get('phase_w1_mean', 0):,.0f}W</div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> {power.get('phase_w2_mean', 0):,.0f}W</div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> {power.get('phase_w3_mean', 0):,.0f}W</div>
                         </div>
                         <div class="overview-desc">Average of sum across phases</div>
                     </div>
                     <div class="overview-item">
                         <div class="overview-value">{power.get('total_max', 0):,.0f}W</div>
                         <div class="overview-label">Max Power</div>
-                        <div class="phase-values" style="margin-top: 4px;">
-                            <span class="phase-val">w1: {power.get('phase_w1_max', 0):,.0f}W</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w2: {power.get('phase_w2_max', 0):,.0f}W</span>
-                            <span class="phase-sep">|</span>
-                            <span class="phase-val">w3: {power.get('phase_w3_max', 0):,.0f}W</span>
+                        <div class="phase-list" style="margin-top: 4px;">
+                            <div class="phase-row"><span class="phase-name">w1:</span> {power.get('phase_w1_max', 0):,.0f}W</div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> {power.get('phase_w2_max', 0):,.0f}W</div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> {power.get('phase_w3_max', 0):,.0f}W</div>
                         </div>
                         <div class="overview-desc">Peak of sum across phases</div>
                     </div>
