@@ -48,9 +48,9 @@ def _format_pre_quality(pre_quality) -> str:
     """Format pre-quality score as colored HTML."""
     if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
         _faulty_labels = {
-            'faulty_dead_phase': ('Dead Phase', 'Phase with <1% power'),
-            'faulty_high_nan': ('High NaN', 'Phase with >=20% NaN values'),
-            'faulty_both': ('Both', 'Dead phase + high NaN'),
+            'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
+            'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
+            'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
         }
         _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
         return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
@@ -398,7 +398,7 @@ def _build_house_html(
         <section>
             <h2>Power Breakdown by Phase</h2>
             <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
-                Per-phase (w1, w2, w3) decomposition into Explained, Background, and Unmatched.
+                Per-phase (w1, w2, w3) decomposition into Explained, Background, Unmatched, and Sub-threshold.
             </p>
             {breakdown_html}
             {phase_detail}
@@ -407,7 +407,7 @@ def _build_house_html(
         <section>
             <h2>Detection Efficiency by Phase</h2>
             <p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">
-                Fraction of targetable power (total &minus; background) matched to device events per phase.
+                Fraction of detectable power (Explained + Unmatched) matched to device events per phase.
             </p>
             {efficiency_html}
         </section>
@@ -495,7 +495,9 @@ def _build_phase_detail_table(phases: Dict[str, Dict]) -> str:
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;">{ph.get('total_kwh', 0)} kWh</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #28a745;">{ph.get('explained_kwh', 0)} kWh ({ph.get('explained_pct', 0):.1f}%)</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;">{ph.get('background_kwh', 0)} kWh ({ph.get('background_pct', 0):.1f}%)</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;">{ph.get('improvable_kwh', 0)} kWh ({ph.get('improvable_pct', 0):.1f}%)</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;">{ph.get('above_th_kwh', 0)} kWh ({ph.get('above_th_pct', 0):.1f}%)</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #b8860b;">{ph.get('sub_threshold_kwh', 0)} kWh ({ph.get('sub_threshold_pct', 0):.1f}%)</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;">{ph.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;">{ph.get('efficiency', 0):.1f}%</td>
         </tr>
         '''
@@ -507,9 +509,11 @@ def _build_phase_detail_table(phases: Dict[str, Dict]) -> str:
                 <th style="padding: 10px 15px; text-align: left;">Phase</th>
                 <th style="padding: 10px 15px; text-align: right;" title="Total original power consumption">Total</th>
                 <th style="padding: 10px 15px; text-align: right; color: #28a745;" title="Power attributed to detected device activations">Explained</th>
-                <th style="padding: 10px 15px; text-align: right; color: #6c757d;" title="Baseline power (5th percentile) - always-on devices like fridge, standby">Background</th>
-                <th style="padding: 10px 15px; text-align: right; color: #fd7e14;" title="Power above background not matched to any device — includes sub-threshold events, complex-pattern appliances, and noise">Unmatched</th>
-                <th style="padding: 10px 15px; text-align: right;" title="Explained / (Total - Background) - how well we detect non-background devices">Efficiency</th>
+                <th style="padding: 10px 15px; text-align: right; color: #6c757d;" title="Baseline power (5th percentile) - always-on devices">Background</th>
+                <th style="padding: 10px 15px; text-align: right; color: #fd7e14;" title="Above minimum threshold, not matched to any device">Unmatched</th>
+                <th style="padding: 10px 15px; text-align: right; color: #b8860b;" title="Between background and minimum threshold — undetectable by design">Sub-threshold</th>
+                <th style="padding: 10px 15px; text-align: right; color: #6f42c1;" title="% of time with no power reading (NaN)">No Data</th>
+                <th style="padding: 10px 15px; text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power">Efficiency</th>
             </tr>
         </thead>
         <tbody>
@@ -536,13 +540,17 @@ def _build_aggregate_html(
     efficiencies = [m['totals']['efficiency'] for m in valid]
     explained_pcts = [m['totals']['explained_pct'] for m in valid]
     background_pcts = [m['totals']['background_pct'] for m in valid]
-    improvable_pcts = [m['totals']['improvable_pct'] for m in valid]
+    above_th_pcts = [m['totals'].get('above_th_pct', 0) for m in valid]
+    sub_threshold_pcts = [m['totals'].get('sub_threshold_pct', 0) for m in valid]
+    no_data_pcts = [m['totals'].get('no_data_pct', 0) for m in valid]
 
     import numpy as np
     avg_eff = np.mean(efficiencies)
     avg_explained = np.mean(explained_pcts)
     avg_background = np.mean(background_pcts)
-    avg_improvable = np.mean(improvable_pcts)
+    avg_above_th = np.mean(above_th_pcts)
+    avg_sub_threshold = np.mean(sub_threshold_pcts)
+    avg_no_data = np.mean(no_data_pcts)
 
     # Link prefix for per-house reports
     link_prefix = f"{house_reports_subdir}/" if house_reports_subdir else ""
@@ -565,19 +573,24 @@ def _build_aggregate_html(
             eff_color = '#fd7e14'
 
         pq_html = _format_pre_quality(pre_quality)
+        days = m.get('data_period', {}).get('days', 0)
 
         house_rows += f'''
         <tr data-tier="{tier}" data-continuity="{nan_cont}"
             data-explained="{t.get('explained_pct', 0):.1f}" data-background="{t.get('background_pct', 0):.1f}"
-            data-improvable="{t.get('improvable_pct', 0):.1f}" data-efficiency="{eff:.1f}">
+            data-aboveth="{t.get('above_th_pct', 0):.1f}" data-subth="{t.get('sub_threshold_pct', 0):.1f}"
+            data-nodata="{t.get('no_data_pct', 0):.1f}" data-efficiency="{eff:.1f}">
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee;">
                 <a href="{link_prefix}dynamic_report_{hid}.html" style="color: #667eea; text-decoration: none;">{hid}</a>
             </td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{days}">{days}</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;">{pq_html}</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right;" data-value="{t.get('total_kwh', 0)}">{t.get('total_kwh', 0)} kWh</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #28a745;" data-value="{t.get('explained_pct', 0):.1f}">{t.get('explained_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;" data-value="{t.get('background_pct', 0):.1f}">{t.get('background_pct', 0):.1f}%</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;" data-value="{t.get('improvable_pct', 0):.1f}">{t.get('improvable_pct', 0):.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #fd7e14;" data-value="{t.get('above_th_pct', 0):.1f}">{t.get('above_th_pct', 0):.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #b8860b;" data-value="{t.get('sub_threshold_pct', 0):.1f}">{t.get('sub_threshold_pct', 0):.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;" data-value="{t.get('no_data_pct', 0):.1f}">{t.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; font-weight: bold; color: {eff_color};" data-value="{eff:.1f}">{eff:.1f}%</td>
         </tr>
         '''
@@ -752,26 +765,38 @@ def _build_aggregate_html(
 
         <section>
             <h2>Summary</h2>
-            <div class="summary-grid">
-                <div class="summary-card" title="Total number of houses with valid data">
-                    <div class="summary-number" id="value-houses">{n_houses}</div>
-                    <div class="summary-label">Houses</div>
+            <div style="border: 2px solid #dee2e6; border-radius: 10px; padding: 15px; margin-bottom: 15px;">
+                <div style="font-size: 0.82em; font-weight: 600; color: #555; margin-bottom: 10px;">
+                    Power Decomposition (= 100%) &mdash; {n_houses} houses
                 </div>
-                <div class="summary-card" title="Average % of total power attributed to detected device activations">
-                    <div class="summary-number" id="value-explained" style="color: #28a745;">{avg_explained:.1f}%</div>
-                    <div class="summary-label">Avg Explained</div>
+                <div class="summary-grid">
+                    <div class="summary-card" title="Average % of total power attributed to detected device activations">
+                        <div class="summary-number" id="value-explained" style="color: #28a745;">{avg_explained:.1f}%</div>
+                        <div class="summary-label">Avg Explained</div>
+                    </div>
+                    <div class="summary-card" title="Average baseline power (5th percentile) - always-on devices">
+                        <div class="summary-number" id="value-background" style="color: #6c757d;">{avg_background:.1f}%</div>
+                        <div class="summary-label">Avg Background</div>
+                    </div>
+                    <div class="summary-card" title="Average above-threshold power not matched to any device">
+                        <div class="summary-number" id="value-aboveth" style="color: #fd7e14;">{avg_above_th:.1f}%</div>
+                        <div class="summary-label">Avg Unmatched</div>
+                    </div>
+                    <div class="summary-card" title="Average sub-threshold power — below detection threshold, undetectable by design">
+                        <div class="summary-number" id="value-subth" style="color: #b8860b;">{avg_sub_threshold:.1f}%</div>
+                        <div class="summary-label">Avg Sub-threshold</div>
+                    </div>
+                    <div class="summary-card" title="Average % of time with no power reading (NaN). Not included in any calculation.">
+                        <div class="summary-number" id="value-nodata" style="color: #6f42c1;">{avg_no_data:.1f}%</div>
+                        <div class="summary-label">Avg No Data</div>
+                    </div>
                 </div>
-                <div class="summary-card" title="Average baseline power (5th percentile) - always-on devices like fridge, standby, etc.">
-                    <div class="summary-number" id="value-background" style="color: #6c757d;">{avg_background:.1f}%</div>
-                    <div class="summary-label">Avg Background</div>
-                </div>
-                <div class="summary-card" title="Average power above background not matched to any device — includes sub-threshold events, complex-pattern appliances, and noise">
-                    <div class="summary-number" id="value-improvable" style="color: #fd7e14;">{avg_improvable:.1f}%</div>
-                    <div class="summary-label">Avg Unmatched</div>
-                </div>
-                <div class="summary-card" title="Explained / (Total - Background) - measures how well the algorithm detects non-background device activations">
+            </div>
+            <div class="summary-grid" style="grid-template-columns: 1fr;">
+                <div class="summary-card" title="Explained / (Explained + Unmatched) — only above-threshold power in scope">
                     <div class="summary-number" id="value-efficiency" style="color: #667eea;">{avg_eff:.1f}%</div>
-                    <div class="summary-label">Avg Efficiency</div>
+                    <div class="summary-label">Avg Detection Efficiency</div>
+                    <div style="font-size: 0.78em; color: #888; margin-top: 4px;">Explained / (Explained + Unmatched) &mdash; background and sub-threshold excluded</div>
                 </div>
             </div>
         </section>
@@ -791,12 +816,15 @@ def _build_aggregate_html(
                 <thead>
                     <tr>
                         <th onclick="sortTable(0, 'str')" title="House identifier">House ID <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(1, 'quality')" style="text-align: center;" title="Pre-analysis data quality score (0-100). Based on sharp entry rate, device signatures, power profile, variability, data volume, and data integrity.">Pre-Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(2, 'num')" style="text-align: right;" title="Total original power consumption across all phases">Total <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(3, 'num')" style="text-align: right;" title="% of total power attributed to detected ON/OFF device activations">Explained <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(4, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of power above background not matched — includes sub-threshold events, complex-pattern appliances, and noise">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="Explained / (Total - Background) - detection rate excluding always-on baseline">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(1, 'num')" style="text-align: center;" title="Number of days in the data period">Days <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(2, 'quality')" style="text-align: center;" title="Pre-analysis data quality score (0-100). Based on sharp entry rate, device signatures, power profile, variability, data volume, and data integrity.">Pre-Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(3, 'num')" style="text-align: right;" title="Total original power consumption across all phases">Total <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(4, 'num')" style="text-align: right;" title="% of total power attributed to detected ON/OFF device activations">Explained <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="% of above-threshold power not matched to any device">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of power between background and min threshold — undetectable by design">Sub-threshold <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(8, 'num')" style="text-align: right;" title="% of time with no power reading (NaN) — not included in any calculation">No Data <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(9, 'num')" style="text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power in scope">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -881,7 +909,7 @@ def _build_aggregate_html(
         var table = document.getElementById('houses-table');
         var rows = table.querySelectorAll('tbody tr');
         var visible = 0;
-        var sumExpl = 0, sumBg = 0, sumImp = 0, sumEff = 0;
+        var sumExpl = 0, sumBg = 0, sumAbove = 0, sumSub = 0, sumNoData = 0, sumEff = 0;
 
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier');
@@ -891,7 +919,9 @@ def _build_aggregate_html(
                 visible++;
                 sumExpl += parseFloat(row.getAttribute('data-explained')) || 0;
                 sumBg += parseFloat(row.getAttribute('data-background')) || 0;
-                sumImp += parseFloat(row.getAttribute('data-improvable')) || 0;
+                sumAbove += parseFloat(row.getAttribute('data-aboveth')) || 0;
+                sumSub += parseFloat(row.getAttribute('data-subth')) || 0;
+                sumNoData += parseFloat(row.getAttribute('data-nodata')) || 0;
                 sumEff += parseFloat(row.getAttribute('data-efficiency')) || 0;
             }} else {{
                 row.classList.add('hidden');
@@ -899,10 +929,11 @@ def _build_aggregate_html(
         }});
 
         // Update summary cards
-        document.getElementById('value-houses').textContent = visible;
         document.getElementById('value-explained').textContent = (visible > 0 ? (sumExpl / visible).toFixed(1) : '0.0') + '%';
         document.getElementById('value-background').textContent = (visible > 0 ? (sumBg / visible).toFixed(1) : '0.0') + '%';
-        document.getElementById('value-improvable').textContent = (visible > 0 ? (sumImp / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-aboveth').textContent = (visible > 0 ? (sumAbove / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-subth').textContent = (visible > 0 ? (sumSub / visible).toFixed(1) : '0.0') + '%';
+        document.getElementById('value-nodata').textContent = (visible > 0 ? (sumNoData / visible).toFixed(1) : '0.0') + '%';
         document.getElementById('value-efficiency').textContent = (visible > 0 ? (sumEff / visible).toFixed(1) : '0.0') + '%';
 
         var status = document.getElementById('filter-status');

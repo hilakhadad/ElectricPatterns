@@ -28,22 +28,24 @@ LIGHT_PURPLE = '#e8daf0'
 
 def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     """
-    Create summary section with full explanations.
+    Create summary section with decomposition box and efficiency card.
 
-    Shows Detection Efficiency hero card, 3 decomposition boxes,
-    an equation bar, and a plain-language explanation block.
+    Decomposition box (bordered): Explained + Background + Unmatched + Sub-threshold [+ No Data] = 100%
+    Efficiency card (separate): Explained / (Explained + Unmatched) — only detectable power.
     """
     totals = metrics.get('totals', {})
     phases = metrics.get('phases', {})
     explained_pct = totals.get('explained_pct', 0)
     background_pct = totals.get('background_pct', 0)
-    improvable_pct = totals.get('improvable_pct', 0)
+    above_th_pct = totals.get('above_th_pct', 0)
+    sub_threshold_pct = totals.get('sub_threshold_pct', 0)
     no_data_pct = totals.get('no_data_pct', 0)
     efficiency = totals.get('efficiency', 0)
 
     explained_kwh = totals.get('explained_kwh', 0)
     background_kwh = totals.get('background_kwh', 0)
-    improvable_kwh = totals.get('improvable_kwh', 0)
+    above_th_kwh = totals.get('above_th_kwh', 0)
+    sub_threshold_kwh = totals.get('sub_threshold_kwh', 0)
     total_kwh = totals.get('total_kwh', 0)
 
     has_no_data = no_data_pct >= 0.1
@@ -51,6 +53,8 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     # Average background per minute across phases (watts)
     bg_per_min = [phases.get(p, {}).get('background_per_minute', 0) for p in ['w1', 'w2', 'w3']]
     avg_bg_watts = round(sum(bg_per_min) / 3) if bg_per_min else 0
+
+    min_threshold = metrics.get('threshold_schedule', [800])[-1]
 
     # Efficiency color
     if efficiency >= 70:
@@ -71,44 +75,13 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         eff_bg = '#fff3e0'
         eff_border = ORANGE
 
-    # Explained color: higher is better
-    if explained_pct >= 40:
-        exp_color, exp_border, exp_bg, exp_label_color = GREEN, GREEN, LIGHT_GREEN, '#155724'
-    elif explained_pct >= 20:
-        exp_color, exp_border, exp_bg, exp_label_color = YELLOW, YELLOW, '#fff8e1', '#856404'
-    else:
-        exp_color, exp_border, exp_bg, exp_label_color = ORANGE, ORANGE, LIGHT_ORANGE, '#856404'
+    # Card count for grid (4 or 5 columns depending on No Data)
+    grid_cols = 5 if has_no_data else 4
+    total_sum = explained_pct + background_pct + above_th_pct + sub_threshold_pct + no_data_pct
 
-    # Background color: lower is typical; very high = notable
-    if background_pct <= 40:
-        bg_color, bg_border, bg_bg, bg_label_color = GRAY, GRAY, LIGHT_GRAY, '#495057'
-    elif background_pct <= 60:
-        bg_color, bg_border, bg_bg, bg_label_color = YELLOW, YELLOW, '#fff8e1', '#856404'
-    else:
-        bg_color, bg_border, bg_bg, bg_label_color = ORANGE, ORANGE, LIGHT_ORANGE, '#856404'
-
-    # Improvable color: lower is better
-    if improvable_pct <= 20:
-        imp_color, imp_border, imp_bg, imp_label_color = GREEN, GREEN, LIGHT_GREEN, '#155724'
-    elif improvable_pct <= 40:
-        imp_color, imp_border, imp_bg, imp_label_color = YELLOW, YELLOW, '#fff8e1', '#856404'
-    else:
-        imp_color, imp_border, imp_bg, imp_label_color = ORANGE, ORANGE, LIGHT_ORANGE, '#856404'
-
-    # Measured percentages (before coverage scaling) — for efficiency formula display
-    coverage = totals.get('coverage', 1.0)
-    explained_pct_m = explained_pct / coverage if coverage > 0 else explained_pct
-    background_pct_m = background_pct / coverage if coverage > 0 else background_pct
-    targetable_pct = 100 - background_pct_m
-
-    min_threshold = metrics.get('threshold_schedule', [800])[-1]
-
-    # Build No Data card + formula terms (pre-built for Python 3.9 compat)
-    grid_cols = 4 if has_no_data else 3
+    # Build No Data card (pre-built for Python 3.9 compat)
     no_data_card_html = ''
     no_data_formula_html = ''
-    of_measured_html = ''
-    total_sum = explained_pct + background_pct + improvable_pct + no_data_pct
     if has_no_data:
         no_data_card_html = (
             '<div style="background:' + LIGHT_PURPLE + '; border-left: 4px solid ' + PURPLE
@@ -122,68 +95,79 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             '</div></div>'
         )
         no_data_formula_html = (
-            '+ <span style="color:' + PURPLE + ';">No Data ('
+            ' + <span style="color:' + PURPLE + ';">No Data ('
             + str(round(no_data_pct, 1)) + '%)</span>'
         )
-        of_measured_html = '<em>(of measured)</em>'
 
     return f'''
     <p style="color: #555; margin-bottom: 15px; line-height: 1.5; font-size: 0.88em;">
         Total consumption ({total_kwh} kWh) = <strong>Explained</strong> (detected devices)
         + <strong>Background</strong> (always-on baseload)
-        + <strong>Unmatched</strong> (remaining above baseline, not matched).
+        + <strong>Unmatched</strong> (above {min_threshold}W, not matched)
+        + <strong>Sub-threshold</strong> (below {min_threshold}W, undetectable by design).
     </p>
 
-    <div style="background: {eff_bg}; border: 2px solid {eff_border}; border-radius: 12px; padding: 15px 20px; text-align: center; margin-bottom: 18px;">
+    <div style="border: 2px solid #dee2e6; border-radius: 12px; padding: 18px; margin-bottom: 18px;">
+        <div style="font-size: 0.82em; font-weight: 600; color: #555; margin-bottom: 12px;">
+            Power Decomposition (= 100%)
+        </div>
+        <div style="display: grid; grid-template-columns: repeat({grid_cols}, 1fr); gap: 12px; margin-bottom: 12px;">
+            <div style="background: {LIGHT_GREEN}; border-left: 4px solid {GREEN}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: {GREEN};">{explained_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #155724; font-weight: 600;">Explained</div>
+                <div style="font-size: 0.8em; color: #666;">{explained_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Matched ON&rarr;OFF events (boilers, ACs, high-power devices).<br>
+                    <em>Per-minute difference: original &minus; remaining.</em>
+                </div>
+            </div>
+            <div style="background: {LIGHT_GRAY}; border-left: 4px solid {GRAY}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: {GRAY};">{background_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #495057; font-weight: 600;">Background</div>
+                <div style="font-size: 0.8em; color: #666;">{background_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Always-on baseload (~{avg_bg_watts}W avg/phase).<br>
+                    <em>P5 (5th percentile) &times; measured minutes.</em>
+                </div>
+            </div>
+            <div style="background: {LIGHT_ORANGE}; border-left: 4px solid {ORANGE}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: {ORANGE};">{above_th_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #856404; font-weight: 600;">Unmatched</div>
+                <div style="font-size: 0.8em; color: #666;">{above_th_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Above {min_threshold}W, not matched. Includes complex-pattern<br>
+                    devices not targeted for detection.
+                </div>
+            </div>
+            <div style="background: #fff8e1; border-left: 4px solid {YELLOW}; border-radius: 8px; padding: 14px; text-align: center;">
+                <div style="font-size: 1.8em; font-weight: bold; color: #b8860b;">{sub_threshold_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #856404; font-weight: 600;">Sub-threshold</div>
+                <div style="font-size: 0.8em; color: #666;">{sub_threshold_kwh} kWh</div>
+                <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
+                    Between background and {min_threshold}W.<br>
+                    Below detection threshold &mdash; undetectable by design.
+                </div>
+            </div>
+            {no_data_card_html}
+        </div>
+        <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; text-align: center; font-size: 0.82em; color: #555;">
+            <span style="color:{GREEN};">Explained ({explained_pct:.1f}%)</span> +
+            <span style="color:{GRAY};">Background ({background_pct:.1f}%)</span> +
+            <span style="color:{ORANGE};">Unmatched ({above_th_pct:.1f}%)</span> +
+            <span style="color:#b8860b;">Sub-threshold ({sub_threshold_pct:.1f}%)</span>
+            {no_data_formula_html}
+            = {total_sum:.1f}%
+        </div>
+    </div>
+
+    <div style="background: {eff_bg}; border: 2px solid {eff_border}; border-radius: 12px; padding: 15px 20px; text-align: center; margin-bottom: 8px;">
         <div style="font-size: 2.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
         <div style="font-size: 1em; font-weight: 700; color: #333;">Detection Efficiency</div>
         <div style="font-size: 0.82em; color: #555; margin-top: 4px; line-height: 1.5;">
-            Of non-background power ({targetable_pct:.1f}%), <strong>{efficiency:.1f}%</strong> matched to devices.<br>
-            <em>Efficiency = Explained / (Total &minus; Background)</em>
+            <strong>Efficiency</strong> = {explained_kwh} / ({explained_kwh} + {above_th_kwh}) kWh
+            = <strong style="color:{eff_color};">{efficiency:.1f}%</strong><br>
+            <em>Scope: only above-threshold (&ge;{min_threshold}W) power. Background and sub-threshold excluded.</em>
         </div>
-    </div>
-
-    <div style="display: grid; grid-template-columns: repeat({grid_cols}, 1fr); gap: 15px; margin-bottom: 12px;">
-        <div style="background: {exp_bg}; border-left: 4px solid {exp_border}; border-radius: 8px; padding: 14px; text-align: center;">
-            <div style="font-size: 1.8em; font-weight: bold; color: {exp_color};">{explained_pct:.1f}%</div>
-            <div style="font-size: 0.9em; color: {exp_label_color}; font-weight: 600;">Explained</div>
-            <div style="font-size: 0.8em; color: #666;">{explained_kwh} kWh</div>
-            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Matched ON&rarr;OFF events (boilers, ACs, high-power devices).<br>
-                <em>Per-minute difference: original &minus; remaining, summed across all minutes.</em>
-            </div>
-        </div>
-        <div style="background: {bg_bg}; border-left: 4px solid {bg_border}; border-radius: 8px; padding: 14px; text-align: center;">
-            <div style="font-size: 1.8em; font-weight: bold; color: {bg_color};">{background_pct:.1f}%</div>
-            <div style="font-size: 0.9em; color: {bg_label_color}; font-weight: 600;">Background</div>
-            <div style="font-size: 0.8em; color: #666;">{background_kwh} kWh</div>
-            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Always-on baseload (~{avg_bg_watts}W avg/phase). Not targetable.<br>
-                <em>P5 (5th percentile of original power) &times; measured minutes.</em>
-            </div>
-        </div>
-        <div style="background: {imp_bg}; border-left: 4px solid {imp_border}; border-radius: 8px; padding: 14px; text-align: center;">
-            <div style="font-size: 1.8em; font-weight: bold; color: {imp_color};">{improvable_pct:.1f}%</div>
-            <div style="font-size: 0.9em; color: {imp_label_color}; font-weight: 600;">Unmatched</div>
-            <div style="font-size: 0.8em; color: #666;">{improvable_kwh} kWh</div>
-            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
-                Sub-threshold events (&lt;{min_threshold}W), complex appliances, noise.<br>
-                <em>Remaining power &minus; Background. What the algorithm could not match.</em>
-            </div>
-        </div>
-        {no_data_card_html}
-    </div>
-
-    <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; margin-bottom: 8px; text-align: center; font-size: 0.82em; color: #555;">
-        <span style="color:{exp_color};">Explained ({explained_pct:.1f}%)</span> +
-        <span style="color:{bg_color};">Background ({background_pct:.1f}%)</span> +
-        <span style="color:{imp_color};">Unmatched ({improvable_pct:.1f}%)</span>
-        {no_data_formula_html}
-        = {total_sum:.1f}%
-        &nbsp;|&nbsp;
-        <strong>Efficiency</strong> = {explained_kwh} / ({total_kwh} &minus; {background_kwh}) kWh
-        {of_measured_html}
-        = <strong style="color:{eff_color};">{efficiency:.1f}%</strong>
     </div>
     '''
 
@@ -200,88 +184,75 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     phase_labels = ['w1', 'w2', 'w3']
     explained_vals = []
     background_vals = []
-    improvable_vals = []
+    above_th_vals = []
+    sub_th_vals = []
     no_data_vals = []
-    hover_texts_explained = []
-    hover_texts_bg = []
-    hover_texts_imp = []
-    hover_texts_nd = []
+    hover_explained = []
+    hover_bg = []
+    hover_above = []
+    hover_sub = []
+    hover_nd = []
 
     for p in phase_labels:
         ph = phases.get(p, {})
         explained_vals.append(ph.get('explained_pct', 0))
         background_vals.append(ph.get('background_pct', 0))
-        improvable_vals.append(ph.get('improvable_pct', 0))
+        above_th_vals.append(ph.get('above_th_pct', 0))
+        sub_th_vals.append(ph.get('sub_threshold_pct', 0))
         no_data_vals.append(ph.get('no_data_pct', 0))
-        hover_texts_explained.append(
+        hover_explained.append(
             f"{p}: {ph.get('explained_kwh', 0)} kWh ({ph.get('explained_pct', 0):.1f}%)"
         )
-        hover_texts_bg.append(
+        hover_bg.append(
             f"{p}: {ph.get('background_kwh', 0)} kWh ({ph.get('background_pct', 0):.1f}%)"
         )
-        hover_texts_imp.append(
-            f"{p}: {ph.get('improvable_kwh', 0)} kWh ({ph.get('improvable_pct', 0):.1f}%)"
+        hover_above.append(
+            f"{p}: {ph.get('above_th_kwh', 0)} kWh ({ph.get('above_th_pct', 0):.1f}%)"
+        )
+        hover_sub.append(
+            f"{p}: {ph.get('sub_threshold_kwh', 0)} kWh ({ph.get('sub_threshold_pct', 0):.1f}%)"
         )
         nan_min = ph.get('nan_minutes', 0)
-        hover_texts_nd.append(
+        hover_nd.append(
             f"{p}: {nan_min:,} NaN minutes ({ph.get('no_data_pct', 0):.1f}%)"
         )
 
     has_no_data = any(v >= 0.1 for v in no_data_vals)
 
     trace_explained = {
-        'y': phase_labels,
-        'x': explained_vals,
-        'name': 'Explained',
-        'type': 'bar',
-        'orientation': 'h',
-        'marker': {'color': GREEN},
-        'text': [f'{v:.1f}%' for v in explained_vals],
-        'textposition': 'inside',
-        'hovertext': hover_texts_explained,
-        'hoverinfo': 'text',
+        'y': phase_labels, 'x': explained_vals, 'name': 'Explained',
+        'type': 'bar', 'orientation': 'h', 'marker': {'color': GREEN},
+        'text': [f'{v:.1f}%' for v in explained_vals], 'textposition': 'inside',
+        'hovertext': hover_explained, 'hoverinfo': 'text',
     }
-
     trace_background = {
-        'y': phase_labels,
-        'x': background_vals,
-        'name': 'Background',
-        'type': 'bar',
-        'orientation': 'h',
-        'marker': {'color': GRAY},
-        'text': [f'{v:.1f}%' for v in background_vals],
-        'textposition': 'inside',
-        'hovertext': hover_texts_bg,
-        'hoverinfo': 'text',
+        'y': phase_labels, 'x': background_vals, 'name': 'Background',
+        'type': 'bar', 'orientation': 'h', 'marker': {'color': GRAY},
+        'text': [f'{v:.1f}%' for v in background_vals], 'textposition': 'inside',
+        'hovertext': hover_bg, 'hoverinfo': 'text',
+    }
+    trace_above_th = {
+        'y': phase_labels, 'x': above_th_vals, 'name': 'Unmatched',
+        'type': 'bar', 'orientation': 'h', 'marker': {'color': ORANGE},
+        'text': [f'{v:.1f}%' for v in above_th_vals], 'textposition': 'inside',
+        'hovertext': hover_above, 'hoverinfo': 'text',
+    }
+    trace_sub_th = {
+        'y': phase_labels, 'x': sub_th_vals, 'name': 'Sub-threshold',
+        'type': 'bar', 'orientation': 'h', 'marker': {'color': YELLOW},
+        'text': [f'{v:.1f}%' for v in sub_th_vals], 'textposition': 'inside',
+        'hovertext': hover_sub, 'hoverinfo': 'text',
     }
 
-    trace_improvable = {
-        'y': phase_labels,
-        'x': improvable_vals,
-        'name': 'Unmatched',
-        'type': 'bar',
-        'orientation': 'h',
-        'marker': {'color': ORANGE},
-        'text': [f'{v:.1f}%' for v in improvable_vals],
-        'textposition': 'inside',
-        'hovertext': hover_texts_imp,
-        'hoverinfo': 'text',
-    }
-
-    traces = [trace_explained, trace_background, trace_improvable]
+    traces = [trace_explained, trace_background, trace_above_th, trace_sub_th]
 
     if has_no_data:
         trace_no_data = {
-            'y': phase_labels,
-            'x': no_data_vals,
-            'name': 'No Data',
-            'type': 'bar',
-            'orientation': 'h',
-            'marker': {'color': PURPLE},
+            'y': phase_labels, 'x': no_data_vals, 'name': 'No Data',
+            'type': 'bar', 'orientation': 'h', 'marker': {'color': PURPLE},
             'text': [f'{v:.1f}%' if v >= 1 else '' for v in no_data_vals],
             'textposition': 'inside',
-            'hovertext': hover_texts_nd,
-            'hoverinfo': 'text',
+            'hovertext': hover_nd, 'hoverinfo': 'text',
         }
         traces.append(trace_no_data)
 

@@ -58,10 +58,11 @@ def calculate_dynamic_report_metrics(
         return _empty_metrics(house_id)
 
     # Per-phase power decomposition
+    min_threshold = threshold_schedule[-1] if threshold_schedule else 800
     phases = {}
     for phase in ['w1', 'w2', 'w3']:
         phases[phase] = _compute_phase_decomposition(
-            baseline_data, final_data, phase
+            baseline_data, final_data, phase, min_threshold=min_threshold
         )
 
     # Totals across all phases
@@ -136,6 +137,7 @@ def _compute_phase_decomposition(
     baseline: pd.DataFrame,
     final: pd.DataFrame,
     phase: str,
+    min_threshold: int = 800,
 ) -> Dict[str, Any]:
     """
     Compute 3-bucket power decomposition for a single phase.
@@ -179,6 +181,12 @@ def _compute_phase_decomposition(
     # Improvable: what's left after subtracting background from remaining
     improvable_power = max(0, remaining.sum() - background_power)
 
+    # Split improvable into above-threshold (detectable) and sub-threshold
+    above_base = (remaining - p5).clip(lower=0)
+    above_th_mask = above_base > min_threshold
+    above_th_power = float(above_base[above_th_mask].sum())
+    sub_threshold_power = float(above_base[~above_th_mask].sum())
+
     # Coverage: fraction of total period with real measurements
     coverage = minutes / all_minutes if all_minutes > 0 else 1.0
     no_data_pct = (1 - coverage) * 100
@@ -187,15 +195,19 @@ def _compute_phase_decomposition(
     explained_pct_measured = (explained_power / total_power * 100) if total_power > 0 else 0
     background_pct_measured = (background_power / total_power * 100) if total_power > 0 else 0
     improvable_pct_measured = (improvable_power / total_power * 100) if total_power > 0 else 0
+    above_th_pct_measured = (above_th_power / total_power * 100) if total_power > 0 else 0
+    sub_threshold_pct_measured = (sub_threshold_power / total_power * 100) if total_power > 0 else 0
 
-    # Display percentages: scaled by coverage so all 4 categories sum to 100%
+    # Display percentages: scaled by coverage so all categories sum to 100%
     explained_pct = explained_pct_measured * coverage
     background_pct = background_pct_measured * coverage
     improvable_pct = improvable_pct_measured * coverage
+    above_th_pct = above_th_pct_measured * coverage
+    sub_threshold_pct = sub_threshold_pct_measured * coverage
 
-    # Detection efficiency: explained / targetable (based on measured data only)
-    targetable = total_power - background_power
-    efficiency = (explained_power / targetable * 100) if targetable > 0 else 0
+    # Detection efficiency: explained / (explained + above_th) — only detectable power
+    detectable = explained_power + above_th_power
+    efficiency = (explained_power / detectable * 100) if detectable > 0 else 100
 
     # kWh conversions (watts * minutes / 60 / 1000)
     to_kwh = lambda w: round(w / 60 / 1000, 2)
@@ -216,6 +228,12 @@ def _compute_phase_decomposition(
         'improvable_power': round(improvable_power, 1),
         'improvable_kwh': to_kwh(improvable_power),
         'improvable_pct': round(improvable_pct, 1),
+        'above_th_power': round(above_th_power, 1),
+        'above_th_kwh': to_kwh(above_th_power),
+        'above_th_pct': round(above_th_pct, 1),
+        'sub_threshold_power': round(sub_threshold_power, 1),
+        'sub_threshold_kwh': to_kwh(sub_threshold_power),
+        'sub_threshold_pct': round(sub_threshold_pct, 1),
         'no_data_pct': round(no_data_pct, 1),
         'efficiency': round(efficiency, 1),
         'minutes': minutes,
@@ -232,6 +250,8 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
     explained_power = sum(p.get('explained_power', 0) for p in phases.values())
     background_power = sum(p.get('background_power', 0) for p in phases.values())
     improvable_power = sum(p.get('improvable_power', 0) for p in phases.values())
+    above_th_power = sum(p.get('above_th_power', 0) for p in phases.values())
+    sub_threshold_power = sum(p.get('sub_threshold_power', 0) for p in phases.values())
 
     total_minutes = sum(p.get('minutes', 0) for p in phases.values())
     total_all_minutes = sum(p.get('all_minutes', 0) for p in phases.values())
@@ -242,14 +262,19 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
     explained_pct_m = (explained_power / total_power * 100) if total_power > 0 else 0
     background_pct_m = (background_power / total_power * 100) if total_power > 0 else 0
     improvable_pct_m = (improvable_power / total_power * 100) if total_power > 0 else 0
+    above_th_pct_m = (above_th_power / total_power * 100) if total_power > 0 else 0
+    sub_threshold_pct_m = (sub_threshold_power / total_power * 100) if total_power > 0 else 0
 
     # Display percentages: scaled by coverage
     explained_pct = explained_pct_m * coverage
     background_pct = background_pct_m * coverage
     improvable_pct = improvable_pct_m * coverage
+    above_th_pct = above_th_pct_m * coverage
+    sub_threshold_pct = sub_threshold_pct_m * coverage
 
-    targetable = total_power - background_power
-    efficiency = (explained_power / targetable * 100) if targetable > 0 else 0
+    # Efficiency: explained / (explained + above_threshold) — only detectable power
+    detectable = explained_power + above_th_power
+    efficiency = (explained_power / detectable * 100) if detectable > 0 else 100
 
     to_kwh = lambda w: round(w / 60 / 1000, 2)
 
@@ -265,6 +290,12 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
         'improvable_power': round(improvable_power, 1),
         'improvable_kwh': to_kwh(improvable_power),
         'improvable_pct': round(improvable_pct, 1),
+        'above_th_power': round(above_th_power, 1),
+        'above_th_kwh': to_kwh(above_th_power),
+        'above_th_pct': round(above_th_pct, 1),
+        'sub_threshold_power': round(sub_threshold_power, 1),
+        'sub_threshold_kwh': to_kwh(sub_threshold_power),
+        'sub_threshold_pct': round(sub_threshold_pct, 1),
         'no_data_pct': round(no_data_pct, 1),
         'efficiency': round(efficiency, 1),
         'coverage': round(coverage, 4),
@@ -547,7 +578,11 @@ def _empty_phase() -> Dict[str, Any]:
         'background_power': 0, 'background_kwh': 0, 'background_pct': 0,
         'background_per_minute': 0,
         'improvable_power': 0, 'improvable_kwh': 0, 'improvable_pct': 0,
-        'efficiency': 0, 'minutes': 0, 'negative_minutes': 0,
+        'above_th_power': 0, 'above_th_kwh': 0, 'above_th_pct': 0,
+        'sub_threshold_power': 0, 'sub_threshold_kwh': 0, 'sub_threshold_pct': 0,
+        'no_data_pct': 0,
+        'efficiency': 0, 'minutes': 0, 'nan_minutes': 0, 'all_minutes': 0,
+        'coverage': 1.0, 'negative_minutes': 0,
     }
 
 
@@ -563,7 +598,9 @@ def _empty_metrics(house_id: str) -> Dict[str, Any]:
             'explained_power': 0, 'explained_kwh': 0, 'explained_pct': 0,
             'background_power': 0, 'background_kwh': 0, 'background_pct': 0,
             'improvable_power': 0, 'improvable_kwh': 0, 'improvable_pct': 0,
-            'efficiency': 0,
+            'above_th_power': 0, 'above_th_kwh': 0, 'above_th_pct': 0,
+            'sub_threshold_power': 0, 'sub_threshold_kwh': 0, 'sub_threshold_pct': 0,
+            'no_data_pct': 0, 'efficiency': 0, 'coverage': 1.0,
         },
         'per_threshold': [],
         'remaining_classification': {
