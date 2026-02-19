@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional, Callable
 from metrics.dynamic_report_metrics import calculate_dynamic_report_metrics
 from metrics.classification_quality import calculate_classification_quality
 from metrics.confidence_scoring import calculate_confidence_scores
+from metrics.population_statistics import compute_population_statistics
 
 try:
     from tqdm import tqdm as _tqdm
@@ -35,6 +36,126 @@ from visualization.dynamic_report_charts import (
 from visualization.classification_charts import create_quality_section
 
 logger = logging.getLogger(__name__)
+
+
+def _format_class_quality(value) -> str:
+    """Format classification quality score as colored HTML."""
+    if value is None:
+        return '<span style="color: #aaa;">-</span>'
+    if value >= 0.7:
+        color = '#28a745'
+    elif value >= 0.4:
+        color = '#eab308'
+    else:
+        color = '#e67e22'
+    return f'<span style="color: {color}; font-weight: 600;">{value:.2f}</span>'
+
+
+def _format_avg_confidence(value) -> str:
+    """Format average confidence score as colored HTML."""
+    if value is None:
+        return '<span style="color: #aaa;">-</span>'
+    if value >= 0.7:
+        color = '#28a745'
+    elif value >= 0.4:
+        color = '#eab308'
+    else:
+        color = '#e67e22'
+    return f'<span style="color: {color}; font-weight: 600;">{value:.2f}</span>'
+
+
+def _build_population_stats_section(population_stats: Dict[str, Any]) -> str:
+    """Build HTML section for population-level classification quality statistics."""
+    if not population_stats or population_stats.get('houses_analyzed', 0) == 0:
+        return ''
+
+    n = population_stats['houses_analyzed']
+    q_dist = population_stats.get('quality_distribution', {})
+    c_dist = population_stats.get('confidence_distribution', {})
+    outliers = population_stats.get('outlier_houses', [])
+    rates = population_stats.get('classification_rates', {})
+    per_device = population_stats.get('per_device_type', {})
+
+    # Quality score stats
+    q_median = q_dist.get('median', 0)
+    q_min = q_dist.get('min', 0)
+    q_max = q_dist.get('max', 0)
+
+    # Confidence stats
+    c_median = c_dist.get('median', 0)
+    c_min = c_dist.get('min', 0)
+    c_max = c_dist.get('max', 0)
+
+    # High-confidence rates
+    high_conf = rates.get('high_conf_rates', {})
+    weighted = rates.get('weighted_rates', {})
+
+    # Device type cards
+    device_cards = ''
+    device_labels = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC'}
+    for dtype in ['boiler', 'central_ac', 'regular_ac']:
+        if dtype not in per_device:
+            continue
+        d = per_device[dtype]
+        count_dist = d.get('count', {})
+        cv_dist = d.get('cv', {})
+        if count_dist.get('n', 0) == 0:
+            continue
+        device_cards += f'''
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; text-align: center;">
+                <div style="font-weight: 600; margin-bottom: 8px;">{device_labels.get(dtype, dtype)}</div>
+                <div style="font-size: 0.85em; color: #555;">
+                    Detected in <b>{count_dist['n']}</b> houses<br>
+                    Median count: <b>{count_dist.get('median', 0):.0f}</b><br>
+                    Magnitude CV: <b>{cv_dist.get('median', 0):.2f}</b>
+                </div>
+            </div>'''
+
+    # Outlier list
+    outlier_html = ''
+    if outliers:
+        items = ', '.join(f"<b>{o['house_id']}</b>" for o in outliers[:10])
+        if len(outliers) > 10:
+            items += f', +{len(outliers) - 10} more'
+        outlier_html = f'''
+            <div style="margin-top: 15px; padding: 12px 15px; background: #fff3cd; border-radius: 8px; font-size: 0.9em;">
+                <b>Outlier houses ({len(outliers)}):</b> {items}
+                <div style="color: #856404; font-size: 0.85em; margin-top: 4px;">
+                    Houses with unusual classification patterns (|z-score| &gt; 3.0 or 3+ warnings)
+                </div>
+            </div>'''
+
+    return f'''
+        <section>
+            <h2>Classification Quality Overview</h2>
+            <div class="summary-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                <div class="summary-card">
+                    <div class="summary-number" style="color: #667eea;">{n}</div>
+                    <div class="summary-label">Houses Analyzed</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-number" style="color: #28a745;">{q_median:.2f}</div>
+                    <div class="summary-label">Median Quality Score</div>
+                    <div style="font-size: 0.78em; color: #888; margin-top: 4px;">Range: {q_min:.2f} — {q_max:.2f}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-number" style="color: #17a2b8;">{c_median:.2f}</div>
+                    <div class="summary-label">Median Confidence</div>
+                    <div style="font-size: 0.78em; color: #888; margin-top: 4px;">Range: {c_min:.2f} — {c_max:.2f}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-number" style="color: {'#e67e22' if len(outliers) > 0 else '#28a745'};">{len(outliers)}</div>
+                    <div class="summary-label">Outlier Houses</div>
+                </div>
+            </div>
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 1em; color: #555; margin-bottom: 12px;">Device Type Summary</h3>
+                <div class="summary-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                    {device_cards}
+                </div>
+            </div>
+            {outlier_html}
+        </section>'''
 
 
 def _assign_tier(pre_quality) -> str:
@@ -211,6 +332,10 @@ def generate_dynamic_aggregate_report(
     # Track cumulative timing per step (for summary)
     cumulative_timing = {}
 
+    # Collect classification quality and confidence per house for population stats
+    all_quality = []
+    all_confidence = []
+
     for house_id in houses_iter:
         metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
 
@@ -238,6 +363,20 @@ def generate_dynamic_aggregate_report(
                 metrics['pre_quality'] = house_pre
                 metrics['nan_continuity'] = 'unknown'
                 metrics['max_nan_pct'] = 0
+
+        # Classification quality and confidence (for population stats)
+        try:
+            quality = calculate_classification_quality(experiment_dir, house_id)
+            confidence = calculate_confidence_scores(experiment_dir, house_id)
+            metrics['class_quality'] = quality.get('overall_quality')
+            metrics['avg_confidence'] = confidence.get('confidence_summary', {}).get('mean')
+            all_quality.append(quality)
+            all_confidence.append(confidence)
+        except Exception as e:
+            logger.debug(f"Classification quality unavailable for {house_id}: {e}")
+            metrics['class_quality'] = None
+            metrics['avg_confidence'] = None
+
         all_metrics.append(metrics)
 
     # Print timing summary
@@ -248,6 +387,9 @@ def generate_dynamic_aggregate_report(
             pct = secs / total_t * 100 if total_t > 0 else 0
             print(f"    {step:20s} {secs:7.1f}s  ({pct:.0f}%)", flush=True)
 
+    # Compute population-level statistics
+    population_stats = compute_population_statistics(all_quality, all_confidence) if all_quality else None
+
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     html = _build_aggregate_html(
@@ -255,6 +397,7 @@ def generate_dynamic_aggregate_report(
         generated_at=generated_at,
         experiment_dir=str(experiment_dir),
         house_reports_subdir=house_reports_subdir,
+        population_stats=population_stats,
     )
 
     if output_path is None:
@@ -582,6 +725,7 @@ def _build_aggregate_html(
     generated_at: str,
     experiment_dir: str,
     house_reports_subdir: Optional[str] = None,
+    population_stats: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build aggregate report for multiple houses."""
     # Compute aggregate stats
@@ -646,6 +790,8 @@ def _build_aggregate_html(
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;" data-value="{t.get('background_pct', 0):.1f}">{t.get('background_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;" data-value="{t.get('no_data_pct', 0):.1f}">{t.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; font-weight: bold; color: {eff_color};" data-value="{eff:.1f}">{eff:.1f}%</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{m.get('class_quality') or 0:.2f}">{_format_class_quality(m.get('class_quality'))}</td>
+            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{m.get('avg_confidence') or 0:.2f}">{_format_avg_confidence(m.get('avg_confidence'))}</td>
         </tr>
         '''
 
@@ -689,6 +835,9 @@ def _build_aggregate_html(
 
     # Build filter bar
     filter_bar = _build_filter_bar(tier_counts, continuity_counts)
+
+    # Build population statistics section
+    pop_section = _build_population_stats_section(population_stats) if population_stats else ''
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -863,6 +1012,8 @@ def _build_aggregate_html(
             </script>
         </section>
 
+        {pop_section}
+
         <section>
             <h2>Per-House Results</h2>
             {filter_bar}
@@ -879,6 +1030,8 @@ def _build_aggregate_html(
                         <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(8, 'num')" style="text-align: right;" title="% of time with no power reading (NaN) — not included in any calculation">No Data <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(9, 'num')" style="text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power in scope">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(10, 'num')" style="text-align: center;" title="Classification quality score (0-1) — how consistent are the detected device patterns">Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(11, 'num')" style="text-align: center;" title="Average confidence score across all device activations (0-1)">Confidence <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                     </tr>
                 </thead>
                 <tbody>
