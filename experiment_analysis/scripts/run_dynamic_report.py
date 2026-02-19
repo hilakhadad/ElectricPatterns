@@ -340,6 +340,7 @@ def main():
                 str(experiment_dir), agg_house_ids, agg_path,
                 pre_analysis_scores=pre_analysis_scores,
                 house_reports_subdir=house_reports_subdir,
+                show_progress=True,
             )
             print(f"Aggregate report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

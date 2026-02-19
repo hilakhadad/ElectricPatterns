@@ -11,6 +11,7 @@ remaining power classification, and device summary.
 """
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -46,12 +47,18 @@ def calculate_dynamic_report_metrics(
         remaining_classification, devices, data_period
     """
     experiment_dir = Path(experiment_dir)
+    timing = {}
+
+    t0 = time.time()
     threshold_schedule = _load_threshold_schedule(experiment_dir)
+    timing['config'] = time.time() - t0
 
     # Load baseline (run_0) and final run summarized data
+    t0 = time.time()
     baseline_data, final_data = _load_baseline_and_final(
         experiment_dir, house_id, threshold_schedule
     )
+    timing['load_pkl'] = time.time() - t0
 
     if baseline_data is None or final_data is None:
         logger.error(f"Could not load summarized data for house {house_id}")
@@ -64,6 +71,7 @@ def calculate_dynamic_report_metrics(
     ts = baseline_data['timestamp']
     expected_minutes = int((ts.max() - ts.min()).total_seconds() / 60) + 1
 
+    t0 = time.time()
     phases = {}
     for phase in ['w1', 'w2', 'w3']:
         phases[phase] = _compute_phase_decomposition(
@@ -74,19 +82,26 @@ def calculate_dynamic_report_metrics(
 
     # Totals across all phases
     totals = _compute_totals(phases)
+    timing['decomposition'] = time.time() - t0
 
     # Per-threshold contribution from dynamic_evaluation_summary
+    t0 = time.time()
     per_threshold = _load_per_threshold_contribution(
         experiment_dir, house_id, threshold_schedule
     )
+    timing['per_threshold'] = time.time() - t0
 
     # Remaining power classification
+    t0 = time.time()
     remaining_classification = _classify_remaining_power(
         baseline_data, final_data, phases
     )
+    timing['remaining'] = time.time() - t0
 
     # Device summary from device_activations JSON
+    t0 = time.time()
     devices = _load_device_summary(experiment_dir, house_id)
+    timing['devices'] = time.time() - t0
 
     # Data period info
     data_period = _get_data_period(baseline_data)
@@ -100,6 +115,7 @@ def calculate_dynamic_report_metrics(
         'remaining_classification': remaining_classification,
         'devices': devices,
         'data_period': data_period,
+        '_timing': timing,
     }
 
 

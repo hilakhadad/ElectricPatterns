@@ -12,9 +12,15 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 
 from metrics.dynamic_report_metrics import calculate_dynamic_report_metrics
+
+try:
+    from tqdm import tqdm as _tqdm
+    _HAS_TQDM = True
+except ImportError:
+    _HAS_TQDM = False
 from visualization.dynamic_report_charts import (
     create_summary_boxes,
     create_power_breakdown_bar,
@@ -165,6 +171,7 @@ def generate_dynamic_aggregate_report(
     output_path: Optional[str] = None,
     pre_analysis_scores: Optional[Dict[str, Any]] = None,
     house_reports_subdir: Optional[str] = None,
+    show_progress: bool = False,
 ) -> str:
     """
     Generate aggregate report across multiple houses.
@@ -175,6 +182,7 @@ def generate_dynamic_aggregate_report(
         output_path: Where to save (optional)
         pre_analysis_scores: Dict mapping house_id -> quality score
         house_reports_subdir: Subdirectory name for per-house report links
+        show_progress: Show tqdm progress bar for metrics calculation
 
     Returns:
         Path to generated HTML file
@@ -182,8 +190,30 @@ def generate_dynamic_aggregate_report(
     experiment_dir = Path(experiment_dir)
 
     all_metrics = []
-    for house_id in house_ids:
+    houses_iter = house_ids
+    use_tqdm = show_progress and _HAS_TQDM
+    if use_tqdm:
+        houses_iter = _tqdm(house_ids, desc="Aggregate metrics", unit="house")
+
+    # Track cumulative timing per step (for summary)
+    cumulative_timing = {}
+
+    for house_id in houses_iter:
         metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
+
+        # Update tqdm postfix with per-house timing breakdown
+        timing = metrics.pop('_timing', None)
+        if timing:
+            for step, secs in timing.items():
+                cumulative_timing[step] = cumulative_timing.get(step, 0) + secs
+            if use_tqdm:
+                # Show slowest step for this house
+                slowest = max(timing, key=timing.get)
+                houses_iter.set_postfix(
+                    house=house_id,
+                    slowest=f"{slowest}={timing[slowest]:.1f}s",
+                )
+
         if pre_analysis_scores:
             house_pre = pre_analysis_scores.get(house_id, {})
             if isinstance(house_pre, dict):
@@ -196,6 +226,14 @@ def generate_dynamic_aggregate_report(
                 metrics['nan_continuity'] = 'unknown'
                 metrics['max_nan_pct'] = 0
         all_metrics.append(metrics)
+
+    # Print timing summary
+    if show_progress and cumulative_timing:
+        total_t = sum(cumulative_timing.values())
+        print(f"  Metrics timing breakdown ({total_t:.1f}s total):", flush=True)
+        for step, secs in sorted(cumulative_timing.items(), key=lambda x: -x[1]):
+            pct = secs / total_t * 100 if total_t > 0 else 0
+            print(f"    {step:20s} {secs:7.1f}s  ({pct:.0f}%)", flush=True)
 
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
 
