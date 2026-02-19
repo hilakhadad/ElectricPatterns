@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
 from metrics.dynamic_report_metrics import calculate_dynamic_report_metrics
+from metrics.classification_quality import calculate_classification_quality
+from metrics.confidence_scoring import calculate_confidence_scores
 
 try:
     from tqdm import tqdm as _tqdm
@@ -30,6 +32,7 @@ from visualization.dynamic_report_charts import (
     create_device_summary_table,
     create_device_activations_detail,
 )
+from visualization.classification_charts import create_quality_section
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,15 @@ def generate_dynamic_house_report(
     remaining_html = create_remaining_analysis_chart(metrics)
     devices_html = create_device_summary_table(metrics)
 
+    # Classification quality metrics (Module 2)
+    try:
+        quality = calculate_classification_quality(experiment_dir, house_id)
+        confidence = calculate_confidence_scores(experiment_dir, house_id)
+        quality_html = create_quality_section(quality, confidence)
+    except Exception as e:
+        logger.warning(f"Classification quality computation failed for house {house_id}: {e}")
+        quality_html = ''
+
     # Load device activations for detailed table
     if skip_activations_detail:
         activations_detail_html = ''
@@ -130,6 +142,7 @@ def generate_dynamic_house_report(
         waterfall_html=waterfall_html,
         remaining_html=remaining_html,
         devices_html=devices_html,
+        quality_html=quality_html,
         activations_detail_html=activations_detail_html,
         metrics=metrics,
         pre_quality=pre_quality,
@@ -266,8 +279,9 @@ def _build_house_html(
     waterfall_html: str,
     remaining_html: str,
     devices_html: str,
-    activations_detail_html: str,
-    metrics: Dict[str, Any],
+    quality_html: str = '',
+    activations_detail_html: str = '',
+    metrics: Dict[str, Any] = None,
     pre_quality=None,
 ) -> str:
     """Build complete HTML document for a single house."""
@@ -475,6 +489,8 @@ def _build_house_html(
                 {devices_html}
             </section>
         </div>
+
+        {quality_html}
 
         {activations_section_html}
 
