@@ -100,6 +100,11 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         # Load power data for this month
         data = load_power_data(data_files[data_file_key])
 
+        # Pre-compute numpy timestamps once — avoids repeated .astype('datetime64[ns]')
+        # conversion inside validator (called ~43K times/house). The validator checks for
+        # this column and uses it directly instead of re-converting each call.
+        data['_np_ts'] = data['timestamp'].values.astype('datetime64[ns]')
+
         # Pre-compute diff columns
         for phase in phases:
             data[f"{phase}_diff"] = data[phase].diff()

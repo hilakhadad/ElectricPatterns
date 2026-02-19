@@ -59,27 +59,34 @@ def find_partial_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFr
     window_steps_minutes = [15, 30, 60, 120, 240, max_time_diff * 60]
     candidates_logged = False
 
+    # Pre-filter by invariant conditions (phase, chronological order, magnitude range)
+    # Stage 3 is the OPPOSITE of Stage 1/2: we WANT large magnitude differences (> threshold)
+    base_candidates = off_events[
+        (off_events['phase'] == phase) &
+        (off_events['start'] > on_end) &
+        (abs(abs(off_events['magnitude']) - on_magnitude) > max_magnitude_diff)
+    ]
+
+    if base_candidates.empty:
+        return None, None, None, 0
+
+    # Pre-compute derived columns once on the base set
+    base_candidates = base_candidates.assign(
+        magnitude_diff=abs(abs(base_candidates['magnitude']) - on_magnitude),
+        time_diff=(base_candidates['start'] - on_end)
+    ).sort_values(by=['time_diff', 'magnitude_diff'])
+
     for window_minutes in window_steps_minutes:
         if window_minutes > max_time_diff * 60:
             break
 
-        # Pre-filter by phase, time, AND magnitude difference > threshold
-        # This is the OPPOSITE of Stage 1/2 - we WANT large magnitude differences
-        candidates = off_events[
-            (off_events['phase'] == phase) &
-            (off_events['start'] > on_end) &
-            (off_events['start'] - on_end <= pd.Timedelta(minutes=window_minutes)) &
-            (abs(abs(off_events['magnitude']) - on_magnitude) > max_magnitude_diff)
+        # Only filter by time window — phase/magnitude/chronological already applied
+        candidates = base_candidates[
+            base_candidates['time_diff'] <= pd.Timedelta(minutes=window_minutes)
         ]
 
         if candidates.empty:
             continue
-
-        # Use .assign() to add columns without explicit copy
-        candidates = candidates.assign(
-            magnitude_diff=abs(abs(candidates['magnitude']) - on_magnitude),
-            time_diff=(candidates['start'] - on_end).abs()
-        ).sort_values(by=['time_diff', 'magnitude_diff'])
 
         # Log candidates on first window that has them
         if not candidates_logged:

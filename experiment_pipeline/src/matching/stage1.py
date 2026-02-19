@@ -66,26 +66,35 @@ def find_match(data: pd.DataFrame, on_event: dict, off_events: pd.DataFrame,
     on_magnitude = abs(on_event['magnitude'])
     candidates_logged = False
 
+    # Pre-filter by invariant conditions (phase, chronological order, magnitude range)
+    # These don't change across window sizes, so compute once instead of 6x per ON event
+    base_candidates = off_events[
+        (off_events['phase'] == phase) &
+        (off_events['start'] > on_end) &
+        (abs(abs(off_events['magnitude']) - on_magnitude) <= MAX_MAGNITUDE_DIFF_FILTER)
+    ]
+
+    if base_candidates.empty:
+        logger.info(f"[Stage 1] No match for {on_id}({on_magnitude:.0f}W)")
+        return None, None, 0
+
+    # Pre-compute derived columns once on the base set
+    base_candidates = base_candidates.assign(
+        magnitude_diff=abs(abs(base_candidates['magnitude']) - on_magnitude),
+        time_diff=(base_candidates['start'] - on_end)
+    ).sort_values(by=['magnitude_diff', 'time_diff'])
+
     for window_minutes in window_steps_minutes:
         if window_minutes > max_time_diff * 60:
             break
 
-        # Pre-filter by phase, time, AND magnitude similarity
-        candidates = off_events[
-            (off_events['phase'] == phase) &
-            (off_events['start'] > on_end) &
-            (off_events['start'] - on_end <= pd.Timedelta(minutes=window_minutes)) &
-            (abs(abs(off_events['magnitude']) - on_magnitude) <= MAX_MAGNITUDE_DIFF_FILTER)
+        # Only filter by time window — phase/magnitude/chronological already applied
+        candidates = base_candidates[
+            base_candidates['time_diff'] <= pd.Timedelta(minutes=window_minutes)
         ]
 
         if candidates.empty:
             continue
-
-        # Use .assign() to add columns without explicit copy
-        candidates = candidates.assign(
-            magnitude_diff=abs(abs(candidates['magnitude']) - on_magnitude),
-            time_diff=(candidates['start'] - on_end).abs()
-        ).sort_values(by=['magnitude_diff', 'time_diff'])
 
         # Log candidates summary on first window that has candidates
         if not candidates_logged:

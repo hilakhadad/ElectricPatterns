@@ -155,7 +155,12 @@ def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, 
         return False, 0
 
     # Get timestamps as numpy datetime64 array for searchsorted
-    timestamps = data['timestamp'].values.astype('datetime64[ns]')
+    # Use pre-computed array if available (set by pipeline/matching.py) to avoid
+    # repeated .astype() conversion on every validator call (~43K calls/house)
+    if '_np_ts' in data.columns:
+        timestamps = data['_np_ts'].values
+    else:
+        timestamps = data['timestamp'].values.astype('datetime64[ns]')
 
     # Convert event timestamps to numpy datetime64 for comparison
     on_start = np.datetime64(on_event['start'])
@@ -338,7 +343,11 @@ def is_valid_partial_removal(data: pd.DataFrame, on_event: dict, off_event, matc
     diff_col = f"{phase}_diff"
 
     # Get timestamps as numpy datetime64 array for searchsorted
-    timestamps = data['timestamp'].values.astype('datetime64[ns]')
+    # Use pre-computed array if available (set by pipeline/matching.py)
+    if '_np_ts' in data.columns:
+        timestamps = data['_np_ts'].values
+    else:
+        timestamps = data['timestamp'].values.astype('datetime64[ns]')
 
     # Convert event timestamps to numpy datetime64 for comparison
     on_start_np = np.datetime64(on_event['start'])
