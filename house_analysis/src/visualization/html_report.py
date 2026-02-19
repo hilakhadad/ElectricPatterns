@@ -10,9 +10,8 @@ import pandas as pd
 
 from visualization.charts import (
     create_quality_distribution_chart,
-    create_day_night_scatter,
+    create_phase_balance_chart,
     create_issues_heatmap,
-    create_tier_score_comparison_chart,
     create_hourly_pattern_chart,
     create_phase_power_chart,
     create_monthly_pattern_chart,
@@ -354,11 +353,10 @@ def _build_filter_bar(tier_counts: Dict[str, int],
 
 
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
-    """Generate all charts HTML (4 charts: quality distribution, tier scores, day/night, issues)."""
+    """Generate all charts HTML (3 charts: quality distribution, phase balance, issues)."""
     charts = [
         create_quality_distribution_chart(analyses),
-        create_tier_score_comparison_chart(analyses),
-        create_day_night_scatter(analyses),
+        create_phase_balance_chart(analyses),
         create_issues_heatmap(analyses),
     ]
 
@@ -1391,7 +1389,7 @@ def _build_html_document(title: str, summary: str, filter_bar: str,
         /* Quality tiers - score boxes */
         .tiers-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            grid-template-columns: repeat(3, 1fr);
             gap: 15px;
         }}
 
@@ -1467,8 +1465,6 @@ def _build_html_document(title: str, summary: str, filter_bar: str,
             font-size: 0.75em;
             color: #888;
             word-break: break-word;
-            max-height: 50px;
-            overflow-y: auto;
             border-top: 1px solid rgba(0,0,0,0.08);
             padding-top: 8px;
         }}
