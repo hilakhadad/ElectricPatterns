@@ -1303,12 +1303,15 @@
                             (clean &rarr; noisy &rarr; partial) gets much higher accuracy when the large device is already gone.
                         </p>
                         <svg viewBox="0 0 340 100" xmlns="http://www.w3.org/2000/svg" style="max-width:340px; margin-top:8px;">
-                            <!-- Before: messy signal -->
+                            <!-- Before: AC cycles on top of boiler rectangle -->
                             <rect x="5" y="5" width="155" height="85" fill="#fafbfc" rx="4" stroke="#e2e8f0"/>
                             <text x="82" y="18" fill="#718096" font-size="7" font-weight="bold" text-anchor="middle">Before (combined)</text>
-                            <polyline points="15,70 30,70 35,35 50,25 65,35 80,25 95,35 110,35 115,70 140,70"
+                            <!-- Boiler rectangle (constant 2000W base) -->
+                            <rect x="30" y="50" width="100" height="20" fill="#fce4e4" stroke="#dc3545" stroke-width="0.8" rx="1"/>
+                            <text x="80" y="63" fill="#dc3545" font-size="5.5" text-anchor="middle">boiler</text>
+                            <!-- AC cycles riding on top of boiler -->
+                            <polyline points="15,70 30,70 30,50 35,50 40,28 55,28 60,50 65,50 70,28 85,28 90,50 95,50 100,28 115,28 120,50 130,50 130,70 140,70"
                                       fill="none" stroke="#2d3748" stroke-width="1.8" stroke-linejoin="round"/>
-                            <text x="75" y="50" fill="#dc3545" font-size="6" text-anchor="middle">boiler+AC mixed</text>
                             <text x="82" y="82" fill="#dc3545" font-size="6" text-anchor="middle">hard to match</text>
 
                             <!-- Arrow -->

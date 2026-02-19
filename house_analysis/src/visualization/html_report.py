@@ -23,7 +23,6 @@ from visualization.charts import (
     create_power_heatmap_chart,
     create_power_histogram,
     create_score_breakdown_chart,
-    create_quality_flags_chart,
     create_mini_hourly_chart,
     create_year_hourly_chart,
     create_year_heatmap,
@@ -442,7 +441,6 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     heatmap_chart = create_power_heatmap_chart(analysis)
     histogram_chart = create_power_histogram(analysis)
     score_breakdown_chart = create_score_breakdown_chart(analysis)
-    quality_flags_chart = create_quality_flags_chart(analysis)
 
     # Generate year tabs
     year_tabs_html = '<button class="tab-btn active" onclick="showTab(\'all\')">All Data</button>'
@@ -527,6 +525,12 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
             <div class="card">
                 <h2>Monthly Details</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 12px;">
+                    Each card shows one month's daily-average hourly pattern.
+                    The chart plots the average total power (sum of all 3 phases)
+                    for each hour of the day, averaged across all days in that month.
+                    This reveals seasonal shifts in consumption patterns (e.g., AC usage in summer).
+                </p>
                 <button class="expand-btn" onclick="toggleMonths('{year}')">
                     Show Monthly Details
                 </button>
@@ -682,6 +686,88 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             border-radius: 4px;
             padding: 5px;
         }}
+
+        /* Hero card */
+        .hero-card {{
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }}
+        .hero-score {{
+            font-size: 3.2em;
+            font-weight: bold;
+            color: inherit;
+        }}
+        .hero-max {{
+            font-size: 0.4em;
+            opacity: 0.7;
+        }}
+        .hero-badge {{
+            margin: 8px 0 12px 0;
+        }}
+        .hero-subtitle {{
+            font-size: 0.85em;
+            opacity: 0.8;
+        }}
+        .hero-badge-green {{ background: #d4edda; color: #155724; }}
+        .hero-badge-blue {{ background: #cce5ff; color: #004085; }}
+        .hero-badge-orange {{ background: #fff3cd; color: #856404; }}
+        .hero-badge-red {{ background: #f8d7da; color: #721c24; }}
+        .hero-badge-purple {{ background: #e2d5f1; color: #6f42c1; }}
+        .hero-badge-purple-light {{ background: #d4c5e2; color: #5a3d7a; }}
+        .hero-badge-purple-dark {{ background: #c9a3d4; color: #4a0e6b; }}
+
+        /* Overview grid */
+        .overview-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }}
+        @media (max-width: 900px) {{
+            .overview-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        }}
+        .overview-item {{
+            padding: 15px;
+            text-align: center;
+        }}
+        .overview-value {{
+            font-size: 1.6em;
+            font-weight: bold;
+            color: #333;
+        }}
+        .overview-label {{
+            color: #555;
+            font-size: 0.9em;
+            font-weight: 600;
+            margin-top: 2px;
+        }}
+        .overview-desc {{
+            color: #999;
+            font-size: 0.78em;
+            margin-top: 4px;
+            line-height: 1.3;
+        }}
+        .two-col-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }}
+        @media (max-width: 600px) {{
+            .two-col-grid {{ grid-template-columns: 1fr; }}
+        }}
+        .phase-values {{
+            font-size: 0.88em;
+            color: #555;
+        }}
+        .phase-val {{
+            font-weight: 500;
+        }}
+        .phase-sep {{
+            color: #ccc;
+            margin: 0 6px;
+        }}
     </style>
 </head>
 <body>
@@ -701,62 +787,106 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
         <!-- All Data Tab -->
         <div id="tab-all" class="tab-content active">
+            <!-- Quality Score Hero -->
+            <div class="hero-card hero-{badge_class}">
+                <div class="hero-score">{score:.0f}<span class="hero-max">/100</span></div>
+                <div class="hero-badge"><span class="badge {badge_class}">{badge_text}</span>{nan_badge_html}</div>
+                <div class="hero-subtitle">
+                    Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity
+                </div>
+            </div>
+
+            <!-- Data Overview -->
             <div class="card">
-                <h2>Coverage & Quality</h2>
-                <div class="metrics-grid">
-                    <div class="metric">
-                        <div class="metric-value">{coverage.get('days_span', 0)}</div>
-                        <div class="metric-label">Days of Data</div>
+                <h2>Data Overview</h2>
+                <div class="overview-grid">
+                    <div class="overview-item">
+                        <div class="overview-value">{coverage.get('days_span', 0)}</div>
+                        <div class="overview-label">Days of Data</div>
+                        <div class="overview-desc">Total calendar days from first to last reading</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{coverage.get('coverage_ratio', 0):.1%}</div>
-                        <div class="metric-label">Coverage Ratio</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{coverage.get('coverage_ratio', 0):.1%}</div>
+                        <div class="overview-label">Coverage Ratio</div>
+                        <div class="overview-desc">Fraction of expected 1-min readings that exist</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{quality.get('quality_score', 0):.0f}</div>
-                        <div class="metric-label">Quality Score</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{quality.get('sharp_entry_rate', 0):.0%}</div>
+                        <div class="overview-label">Sharp Entry Rate</div>
+                        <div class="overview-desc">% of threshold crossings from single-minute jumps. Higher = better for algorithm</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{coverage.get('avg_nan_pct', 0):.1f}%</div>
-                        <div class="metric-label">Avg NaN %</div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-value">{coverage.get('max_gap_minutes', 0):.0f}</div>
-                        <div class="metric-label">Max Gap (min)</div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-value">{coverage.get('duplicate_timestamps_count', 0):,}</div>
-                        <div class="metric-label">Duplicate TS</div>
-                    </div>
-                    <div class="metric">
-                        <div class="metric-value">{quality.get('sharp_entry_rate', 0):.0%}</div>
-                        <div class="metric-label">Sharp Entry Rate</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{coverage.get('duplicate_timestamps_count', 0):,}</div>
+                        <div class="overview-label">Duplicate Timestamps</div>
+                        <div class="overview-desc">Repeated timestamps in raw data</div>
                     </div>
                 </div>
             </div>
 
+            <!-- NaN % and Max Gap -->
+            <div class="card">
+                <div class="two-col-grid">
+                    <div class="overview-item">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN %</div>
+                        <div class="phase-values">
+                            <span class="phase-val">w1: {quality.get('w1_nan_pct', 0):.1f}%</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w2: {quality.get('w2_nan_pct', 0):.1f}%</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w3: {quality.get('w3_nan_pct', 0):.1f}%</span>
+                        </div>
+                        <div class="overview-desc">% of readings missing per phase</div>
+                    </div>
+                    <div class="overview-item">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">Max Gap</div>
+                        <div class="overview-value">{coverage.get('max_gap_minutes', 0):.0f} min</div>
+                        <div class="overview-desc">Longest gap between consecutive timestamps in the raw data</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Power Statistics -->
             <div class="card">
                 <h2>Power Statistics</h2>
-                <div class="metrics-grid">
-                    <div class="metric">
-                        <div class="metric-value">{power.get('total_mean', 0):.0f}W</div>
-                        <div class="metric-label">Average Power</div>
+                <div class="overview-grid">
+                    <div class="overview-item">
+                        <div class="overview-value">{power.get('total_mean', 0):,.0f}W</div>
+                        <div class="overview-label">Average Power</div>
+                        <div class="phase-values" style="margin-top: 4px;">
+                            <span class="phase-val">w1: {power.get('phase_w1_mean', 0):,.0f}W</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w2: {power.get('phase_w2_mean', 0):,.0f}W</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w3: {power.get('phase_w3_mean', 0):,.0f}W</span>
+                        </div>
+                        <div class="overview-desc">Average of sum across phases</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{power.get('total_max', 0):.0f}W</div>
-                        <div class="metric-label">Max Power</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{power.get('total_max', 0):,.0f}W</div>
+                        <div class="overview-label">Max Power</div>
+                        <div class="phase-values" style="margin-top: 4px;">
+                            <span class="phase-val">w1: {power.get('phase_w1_max', 0):,.0f}W</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w2: {power.get('phase_w2_max', 0):,.0f}W</span>
+                            <span class="phase-sep">|</span>
+                            <span class="phase-val">w3: {power.get('phase_w3_max', 0):,.0f}W</span>
+                        </div>
+                        <div class="overview-desc">Peak of sum across phases</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{power.get('phase_balance_ratio', 0):.2f}</div>
-                        <div class="metric-label">Phase Balance</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{power.get('phase_balance_ratio', 0):.2f}</div>
+                        <div class="overview-label">Phase Balance</div>
+                        <div class="overview-desc">Ratio of max to min phase average. Ideal = 1.0</div>
                     </div>
-                    <div class="metric">
-                        <div class="metric-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
-                        <div class="metric-label">Night/Day Ratio</div>
+                    <div class="overview-item">
+                        <div class="overview-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
+                        <div class="overview-label">Night/Day Ratio</div>
+                        <div class="overview-desc">Average night power / average day power</div>
                     </div>
                 </div>
             </div>
 
+            <!-- Charts -->
             <div class="card">
                 <h2>Power Patterns & Analysis</h2>
                 <div class="charts-grid">
@@ -775,20 +905,17 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     <div class="chart-card">
                         {monthly_chart}
                     </div>
-                    <div class="chart-card">
-                        {score_breakdown_chart}
-                        <div style="font-size: 0.82em; color: #555; padding: 8px 12px; background: #f8f9fa; border-radius: 6px; margin-top: 4px; line-height: 1.5;">
-                            <strong>Score components explained:</strong><br>
-                            <span style="color:#e74c3c;">&#9632;</span> <strong>Sharp Entry Rate</strong> &mdash; % of threshold crossings from single-minute sharp jumps (higher = easier for algorithm)<br>
-                            <span style="color:#e67e22;">&#9632;</span> <strong>Device Signature</strong> &mdash; Boiler patterns (sustained high power) + AC patterns (compressor cycles)<br>
-                            <span style="color:#f39c12;">&#9632;</span> <strong>Power Profile</strong> &mdash; Penalizes stuck 500-1000W range; rewards clear low-power baseline<br>
-                            <span style="color:#9b59b6;">&#9632;</span> <strong>Variability</strong> &mdash; CV of total power (higher = more device activity = better)<br>
-                            <span style="color:#3498db;">&#9632;</span> <strong>Data Volume</strong> &mdash; Days of data + monthly coverage balance<br>
-                            <span style="color:#2ecc71;">&#9632;</span> <strong>Data Integrity</strong> &mdash; NaN %, gap frequency, negative values
-                        </div>
-                    </div>
                     <div class="chart-card chart-full-width">
-                        {quality_flags_chart}
+                        {score_breakdown_chart}
+                        <div style="font-size: 0.82em; color: #555; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; margin-top: 6px; line-height: 1.7;">
+                            <strong>Score components explained:</strong><br>
+                            <span style="color:#e74c3c;">&#9632;</span> <strong>Sharp Entry Rate (20 pts)</strong> &mdash; Fraction of threshold (1300W) crossings from single-minute jumps. p50=32%. Higher = easier for algorithm. Score: 0-20.<br>
+                            <span style="color:#e67e22;">&#9632;</span> <strong>Device Signature (15 pts)</strong> &mdash; Boiler patterns (sustained &ge;2000W for &ge;20min) + AC compressor cycles (1300-3000W ON/OFF). Score: 0-15.<br>
+                            <span style="color:#f39c12;">&#9632;</span> <strong>Power Profile (20 pts)</strong> &mdash; Rewards clear low-power baseline (&lt;100W). Penalizes 500-1000W stuck range. Score: 0-20.<br>
+                            <span style="color:#9b59b6;">&#9632;</span> <strong>Variability (20 pts)</strong> &mdash; CV of total power (std/mean). Higher = more ON/OFF activity. p50=1.40. Score: 0-20.<br>
+                            <span style="color:#3498db;">&#9632;</span> <strong>Data Volume (15 pts)</strong> &mdash; Days of data (0-10pts) + monthly coverage balance (0-5pts). Score: 0-15.<br>
+                            <span style="color:#2ecc71;">&#9632;</span> <strong>Data Integrity (10 pts)</strong> &mdash; Penalties for NaN &gt;1%, frequent gaps &gt;5%, negative readings. Score: 0-10.
+                        </div>
                     </div>
                     <div class="chart-card chart-full-width">
                         {heatmap_chart}

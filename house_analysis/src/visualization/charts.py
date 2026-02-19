@@ -661,7 +661,7 @@ def create_weekly_pattern_chart(analysis: Dict[str, Any]) -> str:
     labels = [day_names[d] for d in days]
 
     # Highlight weekend (Friday-Saturday in Israel)
-    colors = ['#667eea' if d not in [4, 5] else '#e74c3c' for d in days]
+    colors = ['#667eea' if d not in [5, 6] else '#e74c3c' for d in days]
 
     fig = go.Figure()
 
