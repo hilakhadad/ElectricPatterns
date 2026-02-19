@@ -11,9 +11,9 @@ import os
 from pathlib import Path
 import core
 from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized
-from detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
-from detection.gradual import detect_gradual_events
-from detection.near_threshold import detect_near_threshold_events
+from disaggregation.detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
+from disaggregation.detection.gradual import detect_gradual_events
+from disaggregation.detection.near_threshold import detect_near_threshold_events
 
 
 def _calc_magnitude(df: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.Timestamp) -> float:
@@ -355,7 +355,7 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
 
     # Tail extension (OFF events only - devices have soft landing but sharp ON)
     if use_tail_extension:
-        from detection.tail_extension import extend_off_event_tails
+        from disaggregation.detection.tail_extension import extend_off_event_tails
         results_off = extend_off_event_tails(
             results_off, data_indexed, phase,
             max_minutes=tail_max_minutes, min_residual=tail_min_residual,

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import core
 from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
-from matching import find_match, find_noisy_match, find_partial_match
+from disaggregation.matching import find_match, find_noisy_match, find_partial_match
 
 
 def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD) -> None:

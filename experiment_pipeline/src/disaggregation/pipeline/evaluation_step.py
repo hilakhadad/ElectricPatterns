@@ -8,7 +8,7 @@ import os
 
 import core
 from core import setup_logging
-from segmentation.evaluation import calculate_phase_metrics, save_negative_values
+from disaggregation.segmentation.evaluation import calculate_phase_metrics, save_negative_values
 
 
 def process_evaluation(house_id: str, run_number: int, threshold: int, actual_threshold: int = None) -> dict:

@@ -11,8 +11,8 @@ from typing import Optional, Dict, Any
 
 import core
 from core import setup_logging, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
-from segmentation import process_phase_segmentation, summarize_segmentation, log_negative_values
-from segmentation.restore import restore_skipped_to_unmatched
+from disaggregation.segmentation import process_phase_segmentation, summarize_segmentation, log_negative_values
+from disaggregation.segmentation.restore import restore_skipped_to_unmatched
 
 
 def process_segmentation(

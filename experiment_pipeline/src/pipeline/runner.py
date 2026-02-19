@@ -59,25 +59,22 @@ def _setup_paths_and_modules(output_path: str, input_path: str):
     import core
     importlib.reload(core)
 
-    import pipeline
-    importlib.reload(pipeline)
+    import disaggregation.pipeline.detection_step
+    import disaggregation.pipeline.matching_step
+    import disaggregation.pipeline.segmentation_step
+    import disaggregation.pipeline.evaluation_step
+    import disaggregation.pipeline.visualization_step
+    importlib.reload(disaggregation.pipeline.detection_step)
+    importlib.reload(disaggregation.pipeline.matching_step)
+    importlib.reload(disaggregation.pipeline.segmentation_step)
+    importlib.reload(disaggregation.pipeline.evaluation_step)
+    importlib.reload(disaggregation.pipeline.visualization_step)
 
-    import pipeline.detection
-    import pipeline.matching
-    import pipeline.segmentation
-    import pipeline.evaluation
-    import pipeline.visualization
-    importlib.reload(pipeline.detection)
-    importlib.reload(pipeline.matching)
-    importlib.reload(pipeline.segmentation)
-    importlib.reload(pipeline.evaluation)
-    importlib.reload(pipeline.visualization)
-
-    process_detection = pipeline.detection.process_detection
-    process_matching = pipeline.matching.process_matching
-    process_segmentation = pipeline.segmentation.process_segmentation
-    process_evaluation = pipeline.evaluation.process_evaluation
-    process_visualization = pipeline.visualization.process_visualization
+    process_detection = disaggregation.pipeline.detection_step.process_detection
+    process_matching = disaggregation.pipeline.matching_step.process_matching
+    process_segmentation = disaggregation.pipeline.segmentation_step.process_segmentation
+    process_evaluation = disaggregation.pipeline.evaluation_step.process_evaluation
+    process_visualization = disaggregation.pipeline.visualization_step.process_visualization
 
     from core import get_experiment, save_experiment_metadata, find_house_data_path, find_previous_run_summarized
 
@@ -191,7 +188,7 @@ def run_pipeline(
 
     # Import classification functions only for dynamic mode
     if is_dynamic:
-        from classification.device_classifier import classify_iteration_matches, generate_activation_list
+        from identification.classifier.device_classifier import classify_iteration_matches, generate_activation_list
 
     # Main iteration loop
     for run_number, threshold in iterations:
@@ -389,7 +386,7 @@ def _run_dynamic_post_pipeline(
 
     # 2. Generate threshold-independent evaluation summary
     try:
-        from pipeline.evaluation_summary import generate_dynamic_evaluation_summary
+        from disaggregation.pipeline.evaluation_summary import generate_dynamic_evaluation_summary
         generate_dynamic_evaluation_summary(
             output_path=output_path,
             house_id=house_id,
@@ -403,7 +400,7 @@ def _run_dynamic_post_pipeline(
 
     # 3. Build unified device activations JSON
     try:
-        from output.activation_builder import build_device_activations_json
+        from identification.output.activation_builder import build_device_activations_json
         json_path = build_device_activations_json(
             experiment_dir=Path(output_path),
             house_id=house_id,
@@ -418,7 +415,7 @@ def _run_dynamic_post_pipeline(
     # 4. Optional cleanup of intermediate files
     if minimal_output:
         try:
-            from pipeline.cleanup import cleanup_intermediate_files
+            from identification.cleanup import cleanup_intermediate_files
             cleanup_intermediate_files(Path(output_path), house_id, iterations_completed, logger)
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
