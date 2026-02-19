@@ -22,8 +22,8 @@ from visualization.charts import (
 
 def _assign_tier(pre_quality) -> str:
     """Assign quality tier based on pre-analysis quality score."""
-    if pre_quality == 'faulty':
-        return 'faulty'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
     elif pre_quality is None:
         return 'unknown'
     elif pre_quality >= 90:
@@ -91,6 +91,17 @@ def _extract_house_data(analyses: List[Dict[str, Any]]) -> list:
             'total_matches': matching.get('total_matches', 0) or 0,
             'flags': {k: bool(v) for k, v in flags.items()},
         })
+
+        # Classification data (dynamic threshold experiments only)
+        classification = a.get('classification', {})
+        if classification:
+            house_data[-1]['classified_rate'] = classification.get('classified_rate', 0)
+            house_data[-1]['device_power_pct'] = classification.get('device_power_pct', 0)
+            house_data[-1]['total_explained_power_pct'] = classification.get('total_explained_power_pct', 0)
+            house_data[-1]['device_breakdown'] = classification.get('device_breakdown', {})
+            house_data[-1]['has_classification'] = True
+        else:
+            house_data[-1]['has_classification'] = False
 
     return house_data
 
@@ -167,6 +178,30 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     # Color for threshold explanation rate
     th_color = '#28a745' if avg_th_expl >= 0.8 else '#ffc107' if avg_th_expl >= 0.5 else '#dc3545'
 
+    # Classification metrics (dynamic threshold experiments only)
+    classification_houses = [a for a in valid if a.get('classification')]
+    has_classification = len(classification_houses) > 0
+    classification_cards = ''
+    if has_classification:
+        classified_rates = [a['classification'].get('classified_rate', 0) for a in classification_houses]
+        device_power_pcts = [a['classification'].get('device_power_pct', 0) for a in classification_houses]
+        avg_classified = np.mean(classified_rates) if classified_rates else 0
+        avg_device_power = np.mean(device_power_pcts) if device_power_pcts else 0
+        cls_color = '#28a745' if avg_classified >= 0.7 else '#ffc107' if avg_classified >= 0.4 else '#dc3545'
+        dev_color = '#28a745' if avg_device_power >= 0.5 else '#ffc107' if avg_device_power >= 0.3 else '#dc3545'
+        classification_cards = f"""
+        <div class="summary-card" style="border: 2px solid {cls_color}; background: linear-gradient(135deg, #fff 0%, {cls_color}22 100%);">
+            <div class="summary-number" style="color: {cls_color};">{avg_classified:.1%}</div>
+            <div class="summary-label">Classification Rate</div>
+            <div style="font-size: 0.7em; color: #888;">classified / total matches</div>
+        </div>
+        <div class="summary-card" style="border: 2px solid {dev_color}; background: linear-gradient(135deg, #fff 0%, {dev_color}22 100%);">
+            <div class="summary-number" style="color: {dev_color};">{avg_device_power:.1%}</div>
+            <div class="summary-label">Device Power Explained</div>
+            <div style="font-size: 0.7em; color: #888;">classified device W / total W</div>
+        </div>
+        """
+
     return f"""
     <div class="summary-grid" id="summary-cards">
         <div class="summary-card">
@@ -178,6 +213,7 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
             <div class="summary-label">High-Power Energy Explained</div>
             <div id="summary-th-std" style="font-size: 0.8em; color: #666;">(&gt;1300W) \u00b1{std_th_expl:.1%} std</div>
         </div>
+        {classification_cards}
         <div class="summary-card">
             <div class="summary-number" id="summary-overall-score">{avg_overall:.0f}</div>
             <div class="summary-label">Avg Overall Score</div>
@@ -218,6 +254,9 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
 def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
     """Generate sortable comparison table HTML."""
     rows = []
+
+    # Check if any house has classification data
+    has_classification = any(a.get('classification') for a in analyses if a.get('status') != 'no_data')
 
     for a in analyses:
         if a.get('status') == 'no_data':
@@ -295,13 +334,36 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         # Pre-analysis quality score (from house_analysis)
         pre_quality = a.get('pre_analysis_quality_score', None)
         tier = _assign_tier(pre_quality)
-        if pre_quality == 'faulty':
-            pre_quality_html = '<span style="color: #dc3545; font-weight: bold;" title="Phase with ≥20% NaN values">Faulty</span>'
+        if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+            _faulty_labels = {
+                'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
+                'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
+                'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
+            }
+            _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
+            pre_quality_html = f'<span style="color: #6f42c1; font-weight: bold;" title="{_ft}">{_fl}</span>'
         elif pre_quality is not None:
             pre_q_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
             pre_quality_html = f'<span style="color: {pre_q_color}; font-weight: bold;">{pre_quality:.0f}</span>'
         else:
             pre_quality_html = '<span style="color: #999;">-</span>'
+
+        # Classification columns (dynamic threshold experiments only)
+        classification_cells = ''
+        if has_classification:
+            cls = a.get('classification', {})
+            if cls:
+                cls_rate = cls.get('classified_rate', 0)
+                dev_pwr = cls.get('device_power_pct', 0)
+                cls_color = '#28a745' if cls_rate >= 0.7 else '#ffc107' if cls_rate >= 0.4 else '#dc3545'
+                dev_color = '#28a745' if dev_pwr >= 0.5 else '#ffc107' if dev_pwr >= 0.3 else '#dc3545'
+                classification_cells = f"""
+            <td style="color: {cls_color}; font-weight: bold;">{cls_rate:.1%}</td>
+            <td style="color: {dev_color}; font-weight: bold;">{dev_pwr:.1%}</td>"""
+            else:
+                classification_cells = """
+            <td style="color: #999;">-</td>
+            <td style="color: #999;">-</td>"""
 
         rows.append(f"""
         <tr data-tier="{tier}">
@@ -311,12 +373,32 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
             <td>{(iterations.get('first_iter_matching_rate', 0) or 0):.1%}</td>
             <td>{(seg.get('segmentation_ratio', 0) or 0):.1%}</td>
             <td>{minutes_seg_ratio:.2%}</td>
-            <td style="color: {th_color}; font-weight: bold;">{th_explanation_rate:.1%}</td>
+            <td style="color: {th_color}; font-weight: bold;">{th_explanation_rate:.1%}</td>{classification_cells}
             <td style="font-size: 1.2em;">{devices}</td>
             <td>{score:.0f} {badge}</td>
             <td style="font-size: 1.2em;">{flags_display}</td>
         </tr>
         """)
+
+    # Classification header columns
+    classification_legend = ''
+    classification_headers = ''
+    if has_classification:
+        col_offset = 7  # classification columns start after column index 6 (High-Power Explained)
+        classification_legend = """
+        <strong>Classified</strong> = classified matches / total matches |
+        <strong>Device Power</strong> = classified device watts / total watts |"""
+        classification_headers = f"""
+                <th onclick="sortTable({col_offset})">Classified<br><small>(rate)</small></th>
+                <th onclick="sortTable({col_offset + 1})">Device Power<br><small>(explained)</small></th>"""
+        # Adjust sort indices for columns after classification
+        devices_idx = col_offset + 2
+        score_idx = col_offset + 3
+        flags_idx = col_offset + 4
+    else:
+        devices_idx = 7
+        score_idx = 8
+        flags_idx = 9
 
     return f"""
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
@@ -324,7 +406,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         <strong>Match Rate</strong> = matched events / total events |
         <strong>Seg (power)</strong> = segregated watts / original watts |
         <strong>Seg (minutes)</strong> = matched minutes / total data minutes |
-        <strong>High-Power Explained</strong> = % of minutes &gt;1300W where segregation brought remaining below threshold |
+        <strong>High-Power Explained</strong> = % of minutes &gt;1300W where segregation brought remaining below threshold |{classification_legend}
         <strong>Exp Score</strong> = 70% match + 30% seg (3-phase avg, damaged=0)
     </p>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
@@ -340,10 +422,10 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
                 <th onclick="sortTable(3)">Match Rate<br><small>(events)</small></th>
                 <th onclick="sortTable(4)">Segmentation<br><small>(power)</small></th>
                 <th onclick="sortTable(5)">Segmentation<br><small>(minutes)</small></th>
-                <th onclick="sortTable(6)">High-Power<br><small>Explained</small></th>
-                <th onclick="sortTable(7)">Devices</th>
-                <th onclick="sortTable(8)">Exp Score</th>
-                <th onclick="sortTable(9)">Flags</th>
+                <th onclick="sortTable(6)">High-Power<br><small>Explained</small></th>{classification_headers}
+                <th onclick="sortTable({devices_idx})">Devices</th>
+                <th onclick="sortTable({score_idx})">Exp Score</th>
+                <th onclick="sortTable({flags_idx})">Flags</th>
             </tr>
         </thead>
         <tbody>
@@ -353,13 +435,64 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
     """
 
 
+def _create_classification_overview_chart(classification_houses: List[Dict[str, Any]]) -> str:
+    """Create a stacked bar chart showing device classification breakdown per house."""
+    house_ids = []
+    boiler_counts = []
+    central_ac_counts = []
+    regular_ac_counts = []
+    unclassified_counts = []
+
+    for a in classification_houses:
+        house_id = str(a.get('house_id', 'unknown'))
+        cls = a.get('classification', {})
+        breakdown = cls.get('device_breakdown', {})
+
+        house_ids.append(house_id)
+        boiler_counts.append((breakdown.get('boiler', {}) or {}).get('count', 0))
+        central_ac_counts.append((breakdown.get('central_ac', {}) or {}).get('count', 0))
+        regular_ac_counts.append((breakdown.get('regular_ac', {}) or {}).get('count', 0))
+        unclassified_counts.append((breakdown.get('unclassified', {}) or {}).get('count', 0))
+
+    if not house_ids:
+        return ''
+
+    chart_id = 'classification-overview-chart'
+    traces = [
+        {'x': house_ids, 'y': boiler_counts, 'name': 'Boiler', 'type': 'bar',
+         'marker': {'color': '#dc3545'}},
+        {'x': house_ids, 'y': central_ac_counts, 'name': 'Central AC', 'type': 'bar',
+         'marker': {'color': '#007bff'}},
+        {'x': house_ids, 'y': regular_ac_counts, 'name': 'Regular AC', 'type': 'bar',
+         'marker': {'color': '#28a745'}},
+        {'x': house_ids, 'y': unclassified_counts, 'name': 'Unclassified', 'type': 'bar',
+         'marker': {'color': '#6c757d'}},
+    ]
+
+    layout = {
+        'title': 'Device Classification per House',
+        'barmode': 'stack',
+        'xaxis': {'title': 'House ID', 'type': 'category'},
+        'yaxis': {'title': 'Number of Matches'},
+        'legend': {'orientation': 'h', 'y': -0.2},
+        'height': 400,
+    }
+
+    return f'''
+    <div id="{chart_id}" style="width:100%;height:400px;"></div>
+    <script>
+        Plotly.newPlot('{chart_id}', {json.dumps(traces)}, {json.dumps(layout)});
+    </script>
+    '''
+
+
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate all charts HTML."""
 
     # Start with summary table (most important)
     summary_table = create_experiment_summary_table(analyses)
 
-    # Organize charts by category (5 charts total)
+    # Organize charts by category (5 charts total + conditional classification)
     charts_by_category = {
         'Matching & Segmentation': [
             create_matching_rate_distribution_chart(analyses),
@@ -373,6 +506,13 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
             create_device_detection_chart(analyses),
         ],
     }
+
+    # Add classification chart if any house has classification data
+    classification_houses = [a for a in analyses if a.get('classification') and a.get('status') != 'no_data']
+    if classification_houses:
+        cls_chart = _create_classification_overview_chart(classification_houses)
+        if cls_chart:
+            charts_by_category['Device Classification'] = [cls_chart]
 
     html_parts = []
 
@@ -510,7 +650,9 @@ def _build_html_document(title: str, summary: str, table: str,
         .filter-checkbox.tier-good {{ background: #cce5ff; color: #004085; }}
         .filter-checkbox.tier-fair {{ background: #fff3cd; color: #856404; }}
         .filter-checkbox.tier-poor {{ background: #f8d7da; color: #721c24; }}
-        .filter-checkbox.tier-faulty {{ background: #e2d5f0; color: #6f42c1; }}
+        .filter-checkbox.tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
+        .filter-checkbox.tier-faulty_high_nan {{ background: #e2d5f0; color: #6f42c1; }}
+        .filter-checkbox.tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .filter-checkbox.tier-unknown {{ background: #e9ecef; color: #495057; }}
 
         .filter-checkbox.unchecked {{
@@ -719,8 +861,14 @@ def _build_html_document(title: str, summary: str, table: str,
             <span class="filter-checkbox tier-poor">
                 <input type="checkbox" value="poor" checked onchange="updateFilter()"> Poor <span class="tier-count-label" id="count-poor"></span>
             </span>
-            <span class="filter-checkbox tier-faulty">
-                <input type="checkbox" value="faulty" checked onchange="updateFilter()"> Faulty <span class="tier-count-label" id="count-faulty"></span>
+            <span class="filter-checkbox tier-faulty_dead_phase">
+                <input type="checkbox" value="faulty_dead_phase" checked onchange="updateFilter()"> Dead Phase <span class="tier-count-label" id="count-faulty_dead_phase"></span>
+            </span>
+            <span class="filter-checkbox tier-faulty_high_nan">
+                <input type="checkbox" value="faulty_high_nan" checked onchange="updateFilter()"> High NaN <span class="tier-count-label" id="count-faulty_high_nan"></span>
+            </span>
+            <span class="filter-checkbox tier-faulty_both">
+                <input type="checkbox" value="faulty_both" checked onchange="updateFilter()"> Both <span class="tier-count-label" id="count-faulty_both"></span>
             </span>
             <span class="filter-checkbox tier-unknown">
                 <input type="checkbox" value="unknown" checked onchange="updateFilter()"> Unknown <span class="tier-count-label" id="count-unknown"></span>
@@ -759,7 +907,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
         // Count houses per tier and show in filter bar
         function initFilterCounts() {{
-            const tiers = ['excellent', 'good', 'fair', 'poor', 'faulty', 'unknown'];
+            const tiers = ['excellent', 'good', 'fair', 'poor', 'faulty_dead_phase', 'faulty_high_nan', 'faulty_both', 'unknown'];
             tiers.forEach(function(tier) {{
                 const count = houseData.filter(function(h) {{ return h.tier === tier; }}).length;
                 const el = document.getElementById('count-' + tier);
@@ -800,7 +948,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
         function allExceptFaulty() {{
             document.querySelectorAll('#filter-bar input[type=checkbox]').forEach(function(cb) {{
-                cb.checked = (cb.value !== 'faulty');
+                cb.checked = !cb.value.startsWith('faulty');
             }});
             updateFilter();
         }}
@@ -1262,9 +1410,14 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     pre_quality = analysis.get('pre_analysis_quality_score', None)
 
     # Pre-quality display values (computed outside f-string to avoid format issues)
-    if pre_quality == 'faulty':
-        pre_quality_display = 'Faulty'
-        pre_quality_color = '#dc3545'
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        _faulty_displays = {
+            'faulty_dead_phase': 'Dead Phase',
+            'faulty_high_nan': 'High NaN',
+            'faulty_both': 'Both',
+        }
+        pre_quality_display = _faulty_displays.get(pre_quality, 'Faulty')
+        pre_quality_color = '#6f42c1'
     elif pre_quality is not None:
         pre_quality_display = f'{pre_quality:.0f}'
         pre_quality_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
@@ -1298,7 +1451,50 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     # Calculate minutes segmented ratio
     total_minutes = matching.get('total_matched_minutes', 0) or 0
 
+    # Classification highlight (dynamic threshold experiments only)
+    classification = analysis.get('classification', {})
+    classification_html = ''
+    if classification:
+        cls_rate = classification.get('classified_rate', 0)
+        dev_pwr = classification.get('device_power_pct', 0)
+        breakdown = classification.get('device_breakdown', {})
+        boiler_count = (breakdown.get('boiler', {}) or {}).get('count', 0)
+        central_ac_count = (breakdown.get('central_ac', {}) or {}).get('count', 0)
+        regular_ac_count = (breakdown.get('regular_ac', {}) or {}).get('count', 0)
+        unclassified_count = (breakdown.get('unclassified', {}) or {}).get('count', 0)
+        cls_color = '#28a745' if cls_rate >= 0.7 else '#ffc107' if cls_rate >= 0.4 else '#dc3545'
+        dev_color = '#28a745' if dev_pwr >= 0.5 else '#ffc107' if dev_pwr >= 0.3 else '#dc3545'
+        classification_html = f"""
+    <div style="background: linear-gradient(135deg, #fff 0%, {cls_color}22 100%); border: 2px solid {cls_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
+        <h3 style="margin: 0 0 10px 0; color: #333;">Device Classification (Dynamic Threshold)</h3>
+        <div style="display: flex; justify-content: center; gap: 40px; flex-wrap: wrap;">
+            <div>
+                <div style="font-size: 2.5em; font-weight: bold; color: {cls_color};">{cls_rate:.1%}</div>
+                <div style="color: #666;">Classification Rate</div>
+            </div>
+            <div>
+                <div style="font-size: 2.5em; font-weight: bold; color: {dev_color};">{dev_pwr:.1%}</div>
+                <div style="color: #666;">Device Power Explained</div>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: center; gap: 30px; margin-top: 15px; flex-wrap: wrap;">
+            <div style="padding: 8px 16px; background: #dc354522; border-radius: 8px;">
+                <strong style="color: #dc3545;">{boiler_count}</strong> <span style="color: #666;">Boiler</span>
+            </div>
+            <div style="padding: 8px 16px; background: #007bff22; border-radius: 8px;">
+                <strong style="color: #007bff;">{central_ac_count}</strong> <span style="color: #666;">Central AC</span>
+            </div>
+            <div style="padding: 8px 16px; background: #28a74522; border-radius: 8px;">
+                <strong style="color: #28a745;">{regular_ac_count}</strong> <span style="color: #666;">Regular AC</span>
+            </div>
+            <div style="padding: 8px 16px; background: #6c757d22; border-radius: 8px;">
+                <strong style="color: #6c757d;">{unclassified_count}</strong> <span style="color: #666;">Unclassified</span>
+            </div>
+        </div>
+    </div>"""
+
     return f"""
+    {classification_html}
     <div class="th-explanation-highlight" style="background: linear-gradient(135deg, #fff 0%, {th_color}22 100%); border: 2px solid {th_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
         <h3 style="margin: 0 0 10px 0; color: #333;">High-Power Energy Explained (&gt;1300W)</h3>
         <div style="display: flex; justify-content: center; gap: 50px; flex-wrap: wrap;">
@@ -2847,6 +3043,57 @@ def _generate_house_charts(analysis: Dict[str, Any]) -> str:
             </script>
         </div>
         ''')
+
+    # Device Classification pie chart (dynamic threshold experiments only)
+    classification = analysis.get('classification', {})
+    if classification:
+        breakdown = classification.get('device_breakdown', {})
+        device_types = []
+        device_counts = []
+        device_colors = []
+        color_map = {'boiler': '#dc3545', 'central_ac': '#007bff', 'regular_ac': '#28a745', 'unclassified': '#6c757d'}
+        label_map = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC', 'unclassified': 'Unclassified'}
+        for dtype in ['boiler', 'central_ac', 'regular_ac', 'unclassified']:
+            info = breakdown.get(dtype, {}) or {}
+            count = info.get('count', 0)
+            if count > 0:
+                device_types.append(label_map.get(dtype, dtype))
+                device_counts.append(count)
+                device_colors.append(color_map.get(dtype, '#6c757d'))
+
+        if device_counts:
+            chart_id = 'classification-pie-chart'
+            total_cls = sum(device_counts)
+            labels_with_counts = [f'{dt}<br>{cnt} ({cnt/total_cls*100:.1f}%)' for dt, cnt in zip(device_types, device_counts)]
+
+            data = {
+                'values': device_counts,
+                'labels': labels_with_counts,
+                'type': 'pie',
+                'marker': {'colors': device_colors},
+                'textinfo': 'label',
+                'textposition': 'inside',
+                'hole': 0.4,
+            }
+
+            layout = {
+                'title': 'Device Classification Breakdown',
+                'annotations': [{
+                    'text': f'{total_cls}<br>Matches',
+                    'x': 0.5, 'y': 0.5,
+                    'font': {'size': 14, 'color': '#333'},
+                    'showarrow': False
+                }]
+            }
+
+            charts_html.append(f'''
+            <div class="chart-container">
+                <div id="{chart_id}" style="width:100%;height:350px;"></div>
+                <script>
+                    Plotly.newPlot('{chart_id}', [{json.dumps(data)}], {json.dumps(layout)});
+                </script>
+            </div>
+            ''')
 
     return '\n'.join(charts_html) if charts_html else '<p>No chart data available.</p>'
 

@@ -41,6 +41,7 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
 
         # Mean power (used by phase balance chart, phase power chart)
         metrics[f'{prefix}_mean'] = phase_data.mean()
+        metrics[f'{prefix}_max'] = phase_data.max()
 
         # Power range distribution (used by power distribution chart, histogram)
         total = len(phase_data)

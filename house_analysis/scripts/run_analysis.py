@@ -122,7 +122,7 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
     """Run analysis on all houses and generate aggregate report."""
     from reports import (
         analyze_single_house, generate_house_report, load_house_data,
-        aggregate_all_houses, generate_summary_report, create_comparison_table
+        aggregate_all_houses,
     )
     from visualization import generate_html_report
 
@@ -161,19 +161,8 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
         # Aggregate
         aggregate = aggregate_all_houses(all_analyses)
 
-        # Save reports - aggregate dir is inside run folder
-        aggregate_dir = run_output_dir / "aggregate"
-        output_paths = generate_summary_report(aggregate, str(aggregate_dir))
-
-        print(f"Aggregate report saved to: {output_paths.get('json', aggregate_dir)}")
-
-        # Create comparison table
-        comparison_path = aggregate_dir / 'comparison_table.csv'
-        comparison_df = create_comparison_table(all_analyses, str(comparison_path))
-        print(f"Comparison table saved to: {comparison_path}")
-
-        # Generate HTML report
-        html_path = aggregate_dir / 'report.html'
+        # Generate HTML report directly in the run folder
+        html_path = run_output_dir / 'report.html'
         generate_html_report(all_analyses, str(html_path))
         print(f"HTML report saved to: {html_path}")
 

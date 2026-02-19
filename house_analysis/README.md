@@ -80,7 +80,7 @@ Composite score based on 5 components:
 | Low Noise | 15 | Reasonable hourly variability (CV 0.3-0.8 = optimal) |
 
 ### Faulty Phase Detection
-- Phase with >= 20% NaN values is marked as **faulty** (תקולה)
+- Phase with >= 20% NaN values is marked as **faulty** 
 - Houses with faulty phases get `quality_label='faulty'` instead of a numeric score
 - Dead phase detection: phase with < 1% of max phase power
 

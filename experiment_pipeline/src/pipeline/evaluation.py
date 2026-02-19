@@ -11,14 +11,15 @@ from core import setup_logging
 from segmentation.evaluation import calculate_phase_metrics, save_negative_values
 
 
-def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
+def process_evaluation(house_id: str, run_number: int, threshold: int, actual_threshold: int = None) -> dict:
     """
     Evaluate segmentation results - processes monthly files.
 
     Args:
         house_id: House identifier
         run_number: Current run number
-        threshold: Power threshold in watts
+        threshold: Power threshold in watts (evaluation denominator — fixed across iterations)
+        actual_threshold: Detection threshold actually used in this iteration (for reporting)
 
     Returns:
         dict: Evaluation results per phase
@@ -176,6 +177,7 @@ def process_evaluation(house_id: str, run_number: int, threshold: int) -> dict:
             'house_id': house_id,
             'run_number': run_number,
             'threshold': threshold,
+            'actual_threshold': actual_threshold if actual_threshold is not None else threshold,
             'phase': phase,
             'duplicate_timestamps': current_duplicates,
             **metrics

@@ -53,6 +53,9 @@ agents/
 
 # Analysis scripts (generated, not part of pipeline)
 analyze_*.py
+
+# Investigation/debug scripts (one-off, not part of pipeline)
+investigations/
 nul
 
 # Data files

@@ -165,54 +165,10 @@ def generate_summary_report(aggregate: Dict[str, Any], output_dir: str) -> Dict[
         Dictionary with paths to generated files
     """
     os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    output_paths = {}
-
-    # Save full JSON report
-    json_path = os.path.join(output_dir, f'aggregate_report_{timestamp}.json')
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(aggregate, f, indent=2, ensure_ascii=False, default=str)
-    output_paths['json'] = json_path
-
-    # Save summary CSV (one row per house with key metrics)
-    # This will be filled from per-house reports
-
-    # Save flags summary CSV
-    if 'flag_counts' in aggregate:
-        flags_df = pd.DataFrame([
-            {'flag': k, 'count': v, 'percentage': aggregate['flag_percentages'].get(k, 0)}
-            for k, v in aggregate['flag_counts'].items()
-        ])
-        flags_path = os.path.join(output_dir, f'flags_summary_{timestamp}.csv')
-        flags_df.to_csv(flags_path, index=False)
-        output_paths['flags_csv'] = flags_path
-
-    # Save quality tiers CSV
-    if 'quality_tiers' in aggregate:
-        tiers_rows = []
-        for tier, info in aggregate['quality_tiers'].items():
-            for house_id in info['houses']:
-                tiers_rows.append({'house_id': house_id, 'quality_tier': tier})
-        if tiers_rows:
-            tiers_df = pd.DataFrame(tiers_rows)
-            tiers_path = os.path.join(output_dir, f'quality_tiers_{timestamp}.csv')
-            tiers_df.to_csv(tiers_path, index=False)
-            output_paths['tiers_csv'] = tiers_path
-
-    # Save issues summary
-    if 'issues' in aggregate:
-        issues_rows = []
-        for issue_type, house_ids in aggregate['issues'].items():
-            for house_id in house_ids:
-                issues_rows.append({'house_id': house_id, 'issue': issue_type})
-        if issues_rows:
-            issues_df = pd.DataFrame(issues_rows)
-            issues_path = os.path.join(output_dir, f'issues_{timestamp}.csv')
-            issues_df.to_csv(issues_path, index=False)
-            output_paths['issues_csv'] = issues_path
-
-    return output_paths
+    # All aggregate data is already embedded in the HTML report.
+    # No separate JSON/CSV files needed.
+    return {}
 
 
 def create_comparison_table(house_analyses: List[Dict[str, Any]],

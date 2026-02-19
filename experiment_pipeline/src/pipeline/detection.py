@@ -77,13 +77,14 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         use_near_threshold = getattr(config, 'use_near_threshold_detection', False)
         near_threshold_min_factor = getattr(config, 'near_threshold_min_factor', 0.85)
         near_threshold_max_extend = getattr(config, 'near_threshold_max_extend', 3)
+        use_nan_imputation = getattr(config, 'use_nan_imputation', False)
         use_tail_extension = getattr(config, 'use_tail_extension', False)
         tail_max_minutes = getattr(config, 'tail_max_extension_minutes', 10)
         tail_min_residual = getattr(config, 'tail_min_residual', 100)
         tail_noise_tolerance = getattr(config, 'tail_noise_tolerance', 30)
         tail_min_gain = getattr(config, 'tail_min_gain', 100)
         tail_min_residual_fraction = getattr(config, 'tail_min_residual_fraction', 0.05)
-        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}")
+        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}, nan_imputation={use_nan_imputation}")
     else:
         off_threshold_factor = 1.0
         use_gradual = True
@@ -92,6 +93,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         use_near_threshold = False
         near_threshold_min_factor = 0.85
         near_threshold_max_extend = 3
+        use_nan_imputation = False
         use_tail_extension = False
         tail_max_minutes = 10
         tail_min_residual = 100
@@ -156,6 +158,12 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             continue
 
         data = data.sort_values('timestamp').reset_index(drop=True)
+
+        # NaN imputation — fill short gaps to prevent false diff() jumps
+        if use_nan_imputation:
+            from core.nan_imputation import impute_nan_gaps
+            data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
+
         data_indexed = data.set_index('timestamp')
 
         month_results = pd.DataFrame()

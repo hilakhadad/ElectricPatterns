@@ -7,6 +7,7 @@ Modular structure:
 - segmentation/: Power segmentation and evaluation
 - visualization/: Interactive and static plots
 - pipeline/: Orchestration functions (process_*)
+- output/: Unified output format builders
 - legacy/: Original code backup
 """
 
@@ -16,6 +17,7 @@ from . import matching
 from . import segmentation
 from . import visualization
 from . import pipeline
+from . import output
 
 __all__ = [
     'core',
@@ -24,4 +26,5 @@ __all__ = [
     'segmentation',
     'visualization',
     'pipeline',
+    'output',
 ]
