@@ -14,13 +14,16 @@ Usage:
     python run_dynamic_report.py --experiment <path>          # Specific experiment directory
     python run_dynamic_report.py --houses 305,1234            # Specific houses only
     python run_dynamic_report.py --pre-analysis <path>        # Specify house_analysis output
+    python run_dynamic_report.py --resume <analysis_dir>      # Resume: only process new houses
 
 Examples:
     python run_dynamic_report.py --experiment ../experiment_pipeline/OUTPUT/experiments/exp010_dynamic_threshold_20260215
     python run_dynamic_report.py --houses 305
+    python run_dynamic_report.py --resume ../OUTPUT/analysis_exp010_20260218_120000
 """
 import sys
 import os
+import json
 import time
 from pathlib import Path
 from datetime import datetime
@@ -130,7 +133,40 @@ def main():
         dest="output_dir",
         help="Output directory (flat: all HTML files go here directly)"
     )
+    parser.add_argument(
+        "--resume", type=str, default=None,
+        help="Path to existing analysis output dir — only process new houses, regenerate aggregate"
+    )
     args = parser.parse_args()
+
+    # ── Resume mode: load metadata from previous run ────────────
+    resume_mode = False
+    existing_houses = set()
+
+    if args.resume:
+        resume_dir = Path(args.resume)
+        if not resume_dir.exists():
+            print(f"ERROR: Resume directory not found: {resume_dir}")
+            sys.exit(1)
+
+        resume_mode = True
+        metadata_file = resume_dir / "_metadata.json"
+
+        # Load experiment_dir from metadata (unless --experiment overrides)
+        if not args.experiment and metadata_file.exists():
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            args.experiment = metadata.get('experiment_dir')
+            if not args.pre_analysis and metadata.get('pre_analysis_path'):
+                args.pre_analysis = metadata['pre_analysis_path']
+
+        # Detect existing house reports
+        reports_subdir = resume_dir / "house_reports"
+        scan_dir = reports_subdir if reports_subdir.exists() else resume_dir
+        for html_file in scan_dir.glob("dynamic_report_*.html"):
+            house_id = html_file.stem.replace("dynamic_report_", "")
+            if house_id != "aggregate":
+                existing_houses.add(house_id)
 
     # Find experiment directory
     if args.experiment:
@@ -155,7 +191,16 @@ def main():
         print("ERROR: No houses found in experiment directory.")
         sys.exit(1)
 
-    print(f"Houses to analyze: {', '.join(house_ids)}", flush=True)
+    # In resume mode, filter out already-processed houses
+    all_house_ids = list(house_ids)  # keep full list for aggregate
+    if resume_mode:
+        new_houses = [h for h in house_ids if h not in existing_houses]
+        print(f"Resume mode: {len(existing_houses)} existing reports, "
+              f"{len(new_houses)} new houses to process", flush=True)
+        house_ids = new_houses
+
+    if not resume_mode:
+        print(f"Houses to analyze: {len(all_house_ids)}", flush=True)
 
     # Load pre-analysis quality scores
     pre_analysis_scores = {}
@@ -176,7 +221,16 @@ def main():
     print(flush=True)
 
     # Output directory
-    if args.output_dir:
+    if resume_mode:
+        output_dir = Path(args.resume)
+        reports_subdir = output_dir / "house_reports"
+        if reports_subdir.exists():
+            house_reports_dir = reports_subdir
+            house_reports_subdir = "house_reports"
+        else:
+            house_reports_dir = output_dir
+            house_reports_subdir = None
+    elif args.output_dir:
         output_dir = Path(args.output_dir)
         house_reports_dir = output_dir  # Flat: per-house reports go directly here
         house_reports_subdir = None     # No subdirectory in aggregate links
@@ -188,6 +242,16 @@ def main():
         house_reports_subdir = "house_reports"
 
     os.makedirs(house_reports_dir, exist_ok=True)
+
+    # Save metadata for future --resume
+    metadata_file = output_dir / "_metadata.json"
+    metadata = {
+        'experiment_dir': str(experiment_dir),
+        'created': datetime.now().isoformat(),
+        'pre_analysis_path': str(pre_analysis_path) if pre_analysis_path else None,
+    }
+    with open(metadata_file, 'w') as f:
+        json.dump(metadata, f, indent=2)
 
     print(f"Output directory: {output_dir}", flush=True)
     print(flush=True)
@@ -241,13 +305,15 @@ def main():
         print(flush=True)
 
     # ── Phase 2: Aggregate report ───────────────────────────────────
-    if len(house_ids) > 1 and successful > 0:
+    # Use all_house_ids (old + new) so aggregate covers everything
+    agg_house_ids = all_house_ids if resume_mode else house_ids
+    if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
         try:
             agg_path = str(output_dir / "dynamic_report_aggregate.html")
-            print("Generating aggregate report...", flush=True)
+            print(f"Generating aggregate report ({len(agg_house_ids)} houses)...", flush=True)
             agg_start = time.time()
             generate_dynamic_aggregate_report(
-                str(experiment_dir), house_ids, agg_path,
+                str(experiment_dir), agg_house_ids, agg_path,
                 pre_analysis_scores=pre_analysis_scores,
                 house_reports_subdir=house_reports_subdir,
             )
@@ -257,7 +323,13 @@ def main():
 
     # ── Summary ─────────────────────────────────────────────────────
     elapsed = time.time() - start_time
-    print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f}min). {successful} reports generated, {failed} failed.")
+    if resume_mode:
+        total_reports = len(existing_houses) + successful
+        print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f}min). "
+              f"{successful} new + {len(existing_houses)} existing = {total_reports} total reports. "
+              f"{failed} failed.")
+    else:
+        print(f"\nDone in {elapsed:.1f}s ({elapsed/60:.1f}min). {successful} reports generated, {failed} failed.")
     print(f"Reports saved to: {output_dir}", flush=True)
 
 
