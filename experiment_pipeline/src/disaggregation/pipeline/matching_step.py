@@ -14,7 +14,7 @@ from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_d
 from disaggregation.matching import find_match, find_noisy_match, find_partial_match
 
 
-def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD) -> None:
+def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, month_filter: str = None) -> None:
     """
     Match ON events to OFF events for a house - processes month by month.
 
@@ -22,6 +22,7 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         house_id: House identifier
         run_number: Current run number
         threshold: Detection threshold in watts
+        month_filter: Optional month to process, e.g. '07_2021' (processes all if None)
     """
     logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Matching process for house {house_id}, run {run_number}")
@@ -53,6 +54,8 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
         return
 
     on_off_files = sorted(on_off_dir.glob(f"on_off_{threshold}_*.pkl"))
+    if month_filter:
+        on_off_files = [f for f in on_off_files if f.stem.endswith(f"_{month_filter}")]
     if not on_off_files:
         logger.error(f"No on_off files found in {on_off_dir}")
         return

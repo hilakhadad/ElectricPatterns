@@ -22,6 +22,7 @@ def process_segmentation(
     skip_large_file: bool = True,
     capture_device_profiles: bool = False,
     use_nan_imputation: bool = False,
+    month_filter: str = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Process segmentation for a house - processes month by month.
@@ -31,6 +32,7 @@ def process_segmentation(
         run_number: Current run number
         skip_large_file: If True, skip writing the large segmented_{id}.csv file
         capture_device_profiles: If True, capture per-device power profiles (default: False)
+        month_filter: Optional month to process, e.g. '07_2021' (processes all if None)
 
     Returns:
         Dict mapping on_event_id -> {timestamps, values} if capture_device_profiles=True, else None
@@ -65,6 +67,8 @@ def process_segmentation(
     # Get list of matches monthly files (may be empty)
     if matches_dir.is_dir():
         matches_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
+        if month_filter:
+            matches_files = [f for f in matches_files if f.stem.endswith(f"_{month_filter}")]
         if not matches_files:
             logger.info(f"No matches files found - creating passthrough summaries")
     else:
@@ -194,6 +198,10 @@ def process_segmentation(
         else:
             continue
 
+        # Skip months not matching month_filter (for month-level parallelism)
+        if month_filter and f"{month:02d}_{year}" != month_filter:
+            continue
+
         summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
         if summary_file.exists():
             continue
@@ -218,6 +226,9 @@ def process_segmentation(
             if not prev_summarized_dir.is_dir():
                 continue
             for prev_file in prev_summarized_dir.glob(f"summarized_{house_id}_*.pkl"):
+                # Skip months not matching month_filter
+                if month_filter and not prev_file.stem.endswith(f"_{month_filter}"):
+                    continue
                 target_file = summarized_dir / prev_file.name
                 if not target_file.exists():
                     shutil.copy2(prev_file, target_file)

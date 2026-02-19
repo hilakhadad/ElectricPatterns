@@ -54,7 +54,7 @@ def _add_nearby_value(events, data_indexed, phase, event_type):
     return events
 
 
-def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, config=None, input_file: str = None) -> None:
+def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, config=None, input_file: str = None, month_filter: str = None) -> None:
     """
     Detect ON/OFF events for a house - processes month by month.
 
@@ -64,6 +64,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         threshold: Detection threshold in watts
         config: Optional ExperimentConfig with advanced parameters
         input_file: Optional specific file to process (processes all files if None)
+        month_filter: Optional month to process, e.g. '07_2021' (processes all if None)
     """
     logger = setup_logging(house_id, run_number, core.LOGS_DIRECTORY)
     logger.info(f"Detection process for house {house_id}, run {run_number}, threshold {threshold}W")
@@ -129,6 +130,10 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         monthly_files = sorted(data_path.glob("*.pkl"))
     else:
         monthly_files = [data_path]
+
+    # Filter to a single month if requested (for month-level parallelism)
+    if month_filter and not input_file:
+        monthly_files = [f for f in monthly_files if f.stem.endswith(f"_{month_filter}")]
 
     phases = ['w1', 'w2', 'w3']
     partial_threshold = threshold
