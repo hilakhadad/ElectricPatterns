@@ -57,6 +57,7 @@ def build_session_json(
                 flat = dict(event)
                 flat['device_type'] = device_type
                 flat['session_id'] = session_entry['session_id']
+                flat['confidence'] = session_entry.get('confidence', 0)
                 flat['match_type'] = 'matched'
                 all_events_flat.append(flat)
 
@@ -126,19 +127,23 @@ def _build_session_entry(cs: ClassifiedSession, device_profiles=None) -> dict:
     for ev in sorted(events, key=lambda e: str(e.get('on_start', ''))):
         constituent.append(_serialize_event(ev, device_profiles))
 
-    return {
+    entry = {
         'session_id': session.session_id,
         'device_type': cs.device_type,
+        'confidence': cs.confidence,
+        'confidence_breakdown': cs.confidence_breakdown,
         'classification_reason': cs.reason,
         'start': _ts(start),
         'end': _ts(end),
         'duration_minutes': round(total_dur, 1),
         'phases': phases,
+        'phase_presence': {p: 'V' if p in phases else 'X' for p in ['w1', 'w2', 'w3']},
         'cycle_count': cycle_count,
         'avg_cycle_magnitude_w': round(avg_mag, 1),
         'phase_magnitudes': {k: round(v, 1) for k, v in magnitudes.items()},
         'constituent_events': constituent,
     }
+    return entry
 
 
 def _serialize_event(ev: dict, device_profiles=None) -> dict:

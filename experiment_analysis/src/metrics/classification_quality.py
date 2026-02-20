@@ -179,7 +179,8 @@ def _metric_magnitude_stability(
         if not activations:
             continue
 
-        magnitudes = [abs(a['magnitude']) for a in activations if 'magnitude' in a]
+        magnitudes = [abs(a.get('on_magnitude') or a.get('magnitude') or 0) for a in activations
+                      if a.get('on_magnitude') or a.get('magnitude')]
         if len(magnitudes) < 2:
             result[dtype] = {
                 'mean': round(magnitudes[0], 1) if magnitudes else 0,

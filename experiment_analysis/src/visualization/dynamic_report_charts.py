@@ -560,11 +560,14 @@ def _parse_activation_row(act: Dict[str, Any]) -> Dict[str, Any]:
     dur_str = f'{duration / 60:.1f} hr' if duration >= 60 else f'{duration:.0f} min'
     magnitude = abs(act.get('on_magnitude', 0) or 0)
 
+    confidence = act.get('confidence', 0) or 0
+
     return {
         'date': date_str, 'start': on_time_str, 'end': off_time_str,
         'duration': duration, 'dur_str': dur_str,
         'magnitude': magnitude, 'phase': act.get('phase', ''),
         'tag': act.get('tag', ''), 'device_type': act.get('device_type') or 'unclassified',
+        'confidence': confidence,
     }
 
 
@@ -652,6 +655,9 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         for i, r in enumerate(events, 1):
             if r['date'] and r['start']:
                 copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            conf_val = r.get('confidence', 0)
+            conf_pct = f'{conf_val:.0%}' if conf_val else '-'
+            conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
             rows += f'''
             <tr>
                 <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
@@ -661,6 +667,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                 <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
                 <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
                 <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['phase']}</td>
+                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
             </tr>'''
 
         copyable_text = ', '.join(copyable_dates)
@@ -684,6 +691,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                             <th style="padding: 5px 8px; text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
                             <th style="padding: 5px 8px; text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
                             <th style="padding: 5px 8px; text-align: center;">Phase</th>
+                            <th style="padding: 5px 8px; text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>
                     </thead>
                     <tbody>
