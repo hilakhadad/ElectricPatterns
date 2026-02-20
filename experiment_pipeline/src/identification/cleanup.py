@@ -1,8 +1,11 @@
 """
 Post-pipeline cleanup for minimal output mode.
 
-Removes intermediate pkl files after unified JSON is built,
-keeping only run_0 and last-run summarized data.
+Removes only unmatched_on/ and unmatched_off/ pkl directories
+(derivable from on_off minus matches).
+
+Preserves on_off/, matches/, and summarized/ for ALL iterations
+to ensure full visibility into every pipeline step.
 """
 import shutil
 from pathlib import Path
@@ -15,14 +18,15 @@ def cleanup_intermediate_files(
     logger,
 ) -> None:
     """
-    Delete intermediate pkl files after unified JSON is built.
+    Delete derivable intermediate pkl files after unified JSON is built.
 
     Deletes:
-    - on_off/, matches/, unmatched_on/, unmatched_off/ (all runs)
-    - summarized/ for intermediate runs (keep run_0 + last run)
+    - unmatched_on/, unmatched_off/ (all runs) — derivable from on_off minus matches
 
     Keeps:
-    - summarized/ for run_0 (baseline for evaluation) and last run (final remaining)
+    - on_off/ (detected events per iteration)
+    - matches/ (matched pairs per iteration)
+    - summarized/ (segmentation results per iteration)
     - evaluation CSV files, logs, device_sessions JSON, device_activations JSON
     """
     logger.info("Starting cleanup of intermediate files...")
@@ -36,18 +40,11 @@ def cleanup_intermediate_files(
         if not house_dir.exists():
             continue
 
-        # Always delete event-level pkl directories
-        for subdir in ['on_off', 'matches', 'unmatched_on', 'unmatched_off']:
+        # Only delete derivable unmatched directories
+        for subdir in ['unmatched_on', 'unmatched_off']:
             dir_path = house_dir / subdir
             if dir_path.exists():
                 shutil.rmtree(dir_path)
                 logger.info(f"  Deleted {dir_path.relative_to(experiment_dir)}")
-
-        # Delete intermediate summarized dirs (keep run_0 and last run)
-        if 0 < run_number < iterations_completed - 1:
-            summarized_dir = house_dir / "summarized"
-            if summarized_dir.exists():
-                shutil.rmtree(summarized_dir)
-                logger.info(f"  Deleted intermediate {summarized_dir.relative_to(experiment_dir)}")
 
     logger.info("Cleanup completed")
