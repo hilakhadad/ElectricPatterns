@@ -34,8 +34,7 @@ from .segmentation.evaluation import calculate_phase_metrics
 from .segmentation.restore import restore_skipped_to_unmatched
 
 # Note: Pipeline orchestration steps (process_detection, process_matching, etc.)
-# still live at pipeline/ and will be moved here in Phase 3.
-# They are NOT re-exported here to avoid circular imports with shims.
+# live at disaggregation/pipeline/*_step.py and are re-exported from pipeline/__init__.py.
 
 __all__ = [
     # Detection

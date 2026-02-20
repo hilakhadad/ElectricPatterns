@@ -70,119 +70,11 @@ class ExperimentConfig:
         return cls(**data)
 
 
-# Experiment definitions
+# ============================================================================
+# Active experiments
+# ============================================================================
+
 EXPERIMENTS = {
-    'exp000_baseline': ExperimentConfig(
-        exp_id='exp000',
-        description='Baseline: Original detection with 1600W threshold, 80% for off events',
-        threshold=1600,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.05,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=False,
-    ),
-
-    'exp001_gradual_detection': ExperimentConfig(
-        exp_id='exp001',
-        description='Add smart gradual detection (80-130% range, ±2min window)',
-        threshold=1600,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.05,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=False,
-    ),
-
-    'exp002_lower_TH': ExperimentConfig(
-        exp_id='exp002',
-        description='Lower threshold to 1500W with gradual detection',
-        threshold=1500,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.05,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=False,
-    ),
-
-    'exp003_progressive_search': ExperimentConfig(
-        exp_id='exp003',
-        description='Progressive window search: try 1min, then 2min, then 3min windows',
-        threshold=1500,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.05,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-    ),
-
-    'exp004_noisy_matching': ExperimentConfig(
-        exp_id='exp004',
-        description='Stage 2 noisy matching: match events with noise between ON/OFF using clipped cumsum segregation',
-        threshold=1500,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.05,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-    ),
-
-    'exp005_asymmetric_windows': ExperimentConfig(
-        exp_id='exp005',
-        description='Improved gradual ON/OFF detection: asymmetric window search (symmetric, before-only, after-only) to capture events near max_threshold boundary that were previously missed.',
-        threshold=1500,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.2,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-    ),
-
-    'exp006_partial_matching': ExperimentConfig(
-        exp_id='exp006',
-        description='Stage 3 partial matching: when ON/OFF magnitudes differ >350W, match using min magnitude and create remainder event for next iteration',
-        threshold=1500,
-        off_threshold_factor=0.8,
-        expand_event_factor=0.2,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-    ),
-
-    'exp007_symmetric_threshold': ExperimentConfig(
-        exp_id='exp007',
-        description='Lower threshold to 1300W with symmetric ON/OFF detection (factor=1.0) to catch more boilers and AC units',
-        threshold=1300,
-        off_threshold_factor=1.0,
-        expand_event_factor=0.2,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-        use_near_threshold_detection=True,
-    ),
-
-    'exp008_tail_extension': ExperimentConfig(
-        exp_id='exp008',
-        description='Tail extension: extend OFF events through residual power decay (monotonic, max 10min) to capture full magnitude',
-        threshold=1300,
-        off_threshold_factor=1.0,
-        expand_event_factor=0.2,
-        use_gradual_detection=True,
-        gradual_window_minutes=3,
-        gradual_direction_consistency=0.7,
-        progressive_window_search=True,
-        use_near_threshold_detection=True,
-        use_tail_extension=True,
-    ),
-
     'exp010_dynamic_threshold': ExperimentConfig(
         exp_id='exp010',
         description='Dynamic threshold: 2000->1500->1100->800W per iteration, targeting boilers->strong AC->medium AC->small AC',
@@ -215,17 +107,87 @@ EXPERIMENTS = {
     ),
 }
 
+# ============================================================================
+# Legacy experiments (exp000-exp008) — kept for backward compatibility.
+# These document the evolution from baseline to dynamic threshold.
+# Use get_experiment() with include_legacy=True to access them.
+# ============================================================================
+
+LEGACY_EXPERIMENTS = {
+    'exp000_baseline': ExperimentConfig(
+        exp_id='exp000',
+        description='Baseline: Original detection with 1600W threshold, 80% for off events',
+        threshold=1600, off_threshold_factor=0.8, expand_event_factor=0.05,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+    ),
+    'exp001_gradual_detection': ExperimentConfig(
+        exp_id='exp001',
+        description='Add smart gradual detection (80-130% range, ±2min window)',
+        threshold=1600, off_threshold_factor=0.8, expand_event_factor=0.05,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+    ),
+    'exp002_lower_TH': ExperimentConfig(
+        exp_id='exp002',
+        description='Lower threshold to 1500W with gradual detection',
+        threshold=1500, off_threshold_factor=0.8, expand_event_factor=0.05,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+    ),
+    'exp003_progressive_search': ExperimentConfig(
+        exp_id='exp003',
+        description='Progressive window search: try 1min, then 2min, then 3min windows',
+        threshold=1500, off_threshold_factor=0.8, expand_event_factor=0.05,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
+    'exp004_noisy_matching': ExperimentConfig(
+        exp_id='exp004',
+        description='Stage 2 noisy matching: match events with noise between ON/OFF',
+        threshold=1500, off_threshold_factor=0.8, expand_event_factor=0.05,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
+    'exp005_asymmetric_windows': ExperimentConfig(
+        exp_id='exp005',
+        description='Asymmetric window search for gradual ON/OFF detection',
+        threshold=1500, off_threshold_factor=0.8, expand_event_factor=0.2,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
+    'exp006_partial_matching': ExperimentConfig(
+        exp_id='exp006',
+        description='Stage 3 partial matching: ON/OFF magnitude diff >350W creates remainder',
+        threshold=1500, off_threshold_factor=0.8, expand_event_factor=0.2,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+    ),
+    'exp007_symmetric_threshold': ExperimentConfig(
+        exp_id='exp007',
+        description='1300W symmetric ON/OFF detection (factor=1.0)',
+        threshold=1300, off_threshold_factor=1.0, expand_event_factor=0.2,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True, use_near_threshold_detection=True,
+    ),
+    'exp008_tail_extension': ExperimentConfig(
+        exp_id='exp008',
+        description='Tail extension: extend OFF events through residual power decay',
+        threshold=1300, off_threshold_factor=1.0, expand_event_factor=0.2,
+        use_gradual_detection=True, gradual_window_minutes=3, gradual_direction_consistency=0.7,
+        progressive_window_search=True, use_near_threshold_detection=True, use_tail_extension=True,
+    ),
+}
+
 
 # Default experiment — Dynamic Threshold (exp010) is the standard pipeline
 DEFAULT_EXPERIMENT = 'exp010_dynamic_threshold'
 
 
-def get_experiment(exp_name: str) -> ExperimentConfig:
+def get_experiment(exp_name: str, include_legacy: bool = True) -> ExperimentConfig:
     """
     Get experiment configuration by name.
 
     Args:
-        exp_name: Name of experiment (e.g., 'exp000_baseline' or 'exp000')
+        exp_name: Name of experiment (e.g., 'exp010_dynamic_threshold' or 'exp010')
+        include_legacy: If True, also search LEGACY_EXPERIMENTS (exp000-exp008)
 
     Returns:
         ExperimentConfig object
@@ -233,20 +195,38 @@ def get_experiment(exp_name: str) -> ExperimentConfig:
     Raises:
         KeyError: If experiment name not found
     """
+    # Search active experiments first
     if exp_name in EXPERIMENTS:
         return EXPERIMENTS[exp_name]
-
-    # Try with just exp ID (e.g., 'exp000')
     for key, config in EXPERIMENTS.items():
         if config.exp_id == exp_name:
             return config
 
-    raise KeyError(f"Experiment '{exp_name}' not found. Available: {list(EXPERIMENTS.keys())}")
+    # Search legacy experiments
+    if include_legacy:
+        if exp_name in LEGACY_EXPERIMENTS:
+            return LEGACY_EXPERIMENTS[exp_name]
+        for _, config in LEGACY_EXPERIMENTS.items():
+            if config.exp_id == exp_name:
+                return config
+
+    available = list(EXPERIMENTS.keys())
+    if include_legacy:
+        available += list(LEGACY_EXPERIMENTS.keys())
+    raise KeyError(f"Experiment '{exp_name}' not found. Available: {available}")
 
 
-def list_experiments() -> Dict[str, str]:
-    """List all available experiments with descriptions."""
-    return {name: config.description for name, config in EXPERIMENTS.items()}
+def list_experiments(include_legacy: bool = False) -> Dict[str, str]:
+    """List available experiments with descriptions.
+
+    Args:
+        include_legacy: If True, also include exp000-exp008.
+    """
+    result = {name: config.description for name, config in EXPERIMENTS.items()}
+    if include_legacy:
+        result.update({name: f"[LEGACY] {config.description}"
+                       for name, config in LEGACY_EXPERIMENTS.items()})
+    return result
 
 
 def save_experiment_metadata(exp_config: ExperimentConfig, output_dir: str, git_hash: str = None):

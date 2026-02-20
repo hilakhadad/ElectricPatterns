@@ -1,30 +1,24 @@
-# Source modules for experiment pipeline
 """
-Modular structure:
-- core/: Configuration, paths, logging
-- detection/: Event detection (sharp, gradual)
-- matching/: Event matching (stage1, stage2, noisy)
-- segmentation/: Power segmentation and evaluation
-- visualization/: Interactive and static plots
-- pipeline/: Orchestration functions (process_*)
-- output/: Unified output format builders
-- legacy/: Original code backup
+experiment_pipeline/src/ — Root package.
+
+Sub-packages:
+    core/           — Configuration, paths, data loading
+    disaggregation/ — Signal-level processing (detection, matching, segmentation)
+    identification/ — Session-level device classification
+    pipeline/       — Unified runner orchestrating disaggregation + identification
+    visualization/  — Interactive and static plots
 """
 
 from . import core
-from . import detection
-from . import matching
-from . import segmentation
-from . import visualization
+from . import disaggregation
+from . import identification
 from . import pipeline
-from . import output
+from . import visualization
 
 __all__ = [
     'core',
-    'detection',
-    'matching',
-    'segmentation',
-    'visualization',
+    'disaggregation',
+    'identification',
     'pipeline',
-    'output',
+    'visualization',
 ]
