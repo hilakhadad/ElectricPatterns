@@ -30,22 +30,28 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
 
     metrics = {}
 
-    # Date range
+    # Date range and span-based coverage
     if 'timestamp' in data.columns:
         data['timestamp'] = pd.to_datetime(data['timestamp'])
-        metrics['days_span'] = (data['timestamp'].max() - data['timestamp'].min()).days + 1
+        ts = data['timestamp']
+        metrics['days_span'] = (ts.max() - ts.min()).days + 1
 
-    # Coverage per phase and NaN tracking
-    phase_coverages = []
+        # Span-based coverage: actual data rows / expected minutes in time range
+        # Consistent with disaggregation_analysis dynamic report denominator
+        expected_minutes = int((ts.max() - ts.min()).total_seconds() / 60) + 1
+        actual_minutes = len(data)
+        metrics['expected_minutes'] = expected_minutes
+        metrics['actual_minutes'] = actual_minutes
+        metrics['coverage_ratio'] = min(actual_minutes / expected_minutes, 1.0) if expected_minutes > 0 else 1.0
+        metrics['no_data_pct'] = round((1 - metrics['coverage_ratio']) * 100, 1)
+
+    # NaN tracking per phase (within loaded rows)
     nan_pcts = []
     for col in phase_cols:
         if col in data.columns:
             total = len(data)
-            non_zero = (data[col] > 0).sum()
-            phase_coverages.append(non_zero / total if total > 0 else 0)
             nan_pcts.append(data[col].isna().sum() / total * 100 if total > 0 else 0)
 
-    metrics['coverage_ratio'] = np.mean(phase_coverages) if phase_coverages else 0
     metrics['avg_nan_pct'] = np.mean(nan_pcts) if nan_pcts else 0
 
     # Time gaps analysis

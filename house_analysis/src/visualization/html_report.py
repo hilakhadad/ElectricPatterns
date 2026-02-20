@@ -231,18 +231,18 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         house_link = f'{per_house_dir}/house_{house_id}.html'
 
         cov_ratio = coverage.get('coverage_ratio', 0)
-        nan_pct = coverage.get('avg_nan_pct', 0)
+        no_data_pct = coverage.get('no_data_pct', 0)
         days_span = coverage.get('days_span', 0)
 
         rows.append(f"""
         <tr data-tier="{tier_key}" data-continuity="{continuity}" data-house-id="{house_id}"
             data-excluded="false" data-score="{score:.1f}" data-coverage="{cov_ratio:.4f}"
-            data-nan="{nan_pct:.2f}" data-days="{days_span}"
+            data-nan="{no_data_pct:.2f}" data-days="{days_span}"
             onclick="toggleExcludeRow(event, this)">
             <td><a href="{house_link}" class="house-link"><strong>{house_id}</strong></a></td>
             <td>{days_span}</td>
             <td>{cov_ratio:.1%}</td>
-            <td>{nan_pct:.1f}%</td>
+            <td style="color: {'#6f42c1' if no_data_pct >= 10 else 'inherit'};">{no_data_pct:.1f}%</td>
             <td>{score:.0f} {badge}</td>
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
@@ -264,9 +264,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         </div>
     </div>
     <div class="column-legend" style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
-        <strong>Days</strong> = data duration |
-        <strong>Coverage</strong> = % of expected minutes present |
-        <strong>NaN %</strong> = avg missing values within existing rows |
+        <strong>Days</strong> = calendar days from first to last reading |
+        <strong>Coverage</strong> = minutes with data / total minutes in time span |
+        <strong>No Data</strong> = % of time span with no reading (gaps + disconnections) |
         <strong>Phase Balance</strong> = max(phases)/min(phases), ideal=1 |
         <strong>Night/Day</strong> = avg night power / avg day power
     </div>
@@ -277,7 +277,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 <th onclick="sortTable(0)">House ID</th>
                 <th onclick="sortTable(1)">Days<br><small>(duration)</small></th>
                 <th onclick="sortTable(2)">Coverage<br><small>(completeness)</small></th>
-                <th onclick="sortTable(3)">NaN %<br><small>(avg phases)</small></th>
+                <th onclick="sortTable(3)">No Data<br><small>(% of span)</small></th>
                 <th onclick="sortTable(4)">Quality<br><small>(0-100)</small></th>
                 <th onclick="sortTable(5)">Avg Power<br><small>(Watts)</small></th>
                 <th onclick="sortTable(6)">Phase Balance<br><small>(max/min)</small></th>
@@ -912,18 +912,18 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     </div>
                     <div class="overview-item">
                         <div class="overview-value">{coverage.get('coverage_ratio', 0):.1%}</div>
-                        <div class="overview-label">Coverage Ratio</div>
-                        <div class="overview-desc">Fraction of expected 1-min readings that exist</div>
+                        <div class="overview-label">Coverage</div>
+                        <div class="overview-desc">Minutes with data / total minutes in time span</div>
+                    </div>
+                    <div class="overview-item" style="{'background: #e8daf0;' if coverage.get('no_data_pct', 0) >= 5 else ''}">
+                        <div class="overview-value" style="color: #6f42c1;">{coverage.get('no_data_pct', 0):.1f}%</div>
+                        <div class="overview-label" style="color: #4a0e6b;">No Data</div>
+                        <div class="overview-desc">Minutes with no reading within the measurement period (gaps + disconnections)</div>
                     </div>
                     <div class="overview-item">
                         <div class="overview-value">{quality.get('sharp_entry_rate', 0):.0%}</div>
                         <div class="overview-label">Sharp Entry Rate</div>
                         <div class="overview-desc">% of threshold crossings from single-minute jumps. Higher = better for algorithm</div>
-                    </div>
-                    <div class="overview-item">
-                        <div class="overview-value">{coverage.get('duplicate_timestamps_count', 0):,}</div>
-                        <div class="overview-label">Duplicate Timestamps</div>
-                        <div class="overview-desc">Repeated timestamps in raw data</div>
                     </div>
                 </div>
             </div>
