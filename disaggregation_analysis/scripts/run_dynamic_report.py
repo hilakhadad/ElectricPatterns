@@ -1,8 +1,8 @@
 """
 Generate dynamic threshold HTML reports.
 
-Output structure (follows experiment_analysis conventions):
-    experiment_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
+Output structure (follows disaggregation_analysis conventions):
+    disaggregation_analysis/OUTPUT/analysis_{experiment_name}_{timestamp}/
     ├── dynamic_report_aggregate.html       # Aggregate report
     └── house_reports/                      # Per-house reports
         ├── dynamic_report_305.html
@@ -46,7 +46,7 @@ from visualization.dynamic_html_report import (
 )
 from reports.aggregate_report import load_pre_analysis_scores
 
-# Output base: experiment_analysis/OUTPUT/
+# Output base: disaggregation_analysis/OUTPUT/
 _ANALYSIS_OUTPUT_DIR = script_dir.parent / "OUTPUT"
 
 

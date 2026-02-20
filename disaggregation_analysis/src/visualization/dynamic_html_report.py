@@ -1,11 +1,14 @@
 """
-HTML report generator for dynamic threshold experiments.
+HTML report generator for dynamic threshold experiments (Module 1 — Disaggregation).
 
 Generates stand-alone HTML reports per house and aggregate reports.
 Follows the same patterns as html_report.py (inline CSS, Plotly CDN).
 
 Color scheme: Green (explained), Gray (background), Orange (unmatched).
 No red - avoids false impression of failure.
+
+Note: Device identification (Module 2) content has been moved to
+identification_analysis/src/visualization/identification_html_report.py
 """
 import os
 import json
@@ -15,9 +18,6 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
 from metrics.dynamic_report_metrics import calculate_dynamic_report_metrics
-from metrics.classification_quality import calculate_classification_quality
-from metrics.confidence_scoring import calculate_confidence_scores
-from metrics.population_statistics import compute_population_statistics
 
 try:
     from tqdm import tqdm as _tqdm
@@ -30,10 +30,7 @@ from visualization.dynamic_report_charts import (
     create_efficiency_gauge,
     create_threshold_waterfall,
     create_remaining_analysis_chart,
-    create_device_summary_table,
-    create_device_activations_detail,
 )
-from visualization.classification_charts import create_quality_section
 
 logger = logging.getLogger(__name__)
 
@@ -206,46 +203,29 @@ def generate_dynamic_house_report(
     skip_activations_detail: bool = False,
 ) -> str:
     """
-    Generate dynamic threshold HTML report for a single house.
+    Generate dynamic threshold HTML report for a single house (M1 disaggregation only).
 
     Args:
         experiment_dir: Root experiment output directory
         house_id: House ID
         output_path: Where to save the HTML file (optional, auto-generated if None)
         pre_quality: Pre-analysis quality score (float, 'faulty', or None)
-        skip_activations_detail: If True, omit the Device Activations Detail section
+        skip_activations_detail: Unused (kept for backward compatibility)
 
     Returns:
         Path to generated HTML file
     """
     experiment_dir = Path(experiment_dir)
 
-    # Calculate metrics
+    # Calculate M1 disaggregation metrics
     metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
 
-    # Generate chart sections
+    # Generate M1 chart sections
     summary_html = create_summary_boxes(metrics)
     breakdown_html = create_power_breakdown_bar(metrics)
     efficiency_html = create_efficiency_gauge(metrics)
     waterfall_html = create_threshold_waterfall(metrics)
     remaining_html = create_remaining_analysis_chart(metrics)
-    devices_html = create_device_summary_table(metrics)
-
-    # Classification quality metrics (Module 2)
-    try:
-        quality = calculate_classification_quality(experiment_dir, house_id)
-        confidence = calculate_confidence_scores(experiment_dir, house_id)
-        quality_html = create_quality_section(quality, confidence)
-    except Exception as e:
-        logger.warning(f"Classification quality computation failed for house {house_id}: {e}")
-        quality_html = ''
-
-    # Load device activations for detailed table
-    if skip_activations_detail:
-        activations_detail_html = ''
-    else:
-        activations = _load_device_activations(experiment_dir, house_id)
-        activations_detail_html = create_device_activations_detail(activations)
 
     # Build HTML document
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -262,9 +242,6 @@ def generate_dynamic_house_report(
         efficiency_html=efficiency_html,
         waterfall_html=waterfall_html,
         remaining_html=remaining_html,
-        devices_html=devices_html,
-        quality_html=quality_html,
-        activations_detail_html=activations_detail_html,
         metrics=metrics,
         pre_quality=pre_quality,
     )
@@ -332,10 +309,6 @@ def generate_dynamic_aggregate_report(
     # Track cumulative timing per step (for summary)
     cumulative_timing = {}
 
-    # Collect classification quality and confidence per house for population stats
-    all_quality = []
-    all_confidence = []
-
     for house_id in houses_iter:
         metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
 
@@ -345,7 +318,6 @@ def generate_dynamic_aggregate_report(
             for step, secs in timing.items():
                 cumulative_timing[step] = cumulative_timing.get(step, 0) + secs
             if use_tqdm:
-                # Show slowest step for this house
                 slowest = max(timing, key=timing.get)
                 houses_iter.set_postfix(
                     house=house_id,
@@ -359,23 +331,9 @@ def generate_dynamic_aggregate_report(
                 metrics['nan_continuity'] = house_pre.get('nan_continuity', 'unknown')
                 metrics['max_nan_pct'] = house_pre.get('max_nan_pct', 0)
             else:
-                # Backward compatibility: old format was scalar
                 metrics['pre_quality'] = house_pre
                 metrics['nan_continuity'] = 'unknown'
                 metrics['max_nan_pct'] = 0
-
-        # Classification quality and confidence (for population stats)
-        try:
-            quality = calculate_classification_quality(experiment_dir, house_id)
-            confidence = calculate_confidence_scores(experiment_dir, house_id)
-            metrics['class_quality'] = quality.get('overall_quality')
-            metrics['avg_confidence'] = confidence.get('confidence_summary', {}).get('mean')
-            all_quality.append(quality)
-            all_confidence.append(confidence)
-        except Exception as e:
-            logger.debug(f"Classification quality unavailable for {house_id}: {e}")
-            metrics['class_quality'] = None
-            metrics['avg_confidence'] = None
 
         all_metrics.append(metrics)
 
@@ -387,9 +345,6 @@ def generate_dynamic_aggregate_report(
             pct = secs / total_t * 100 if total_t > 0 else 0
             print(f"    {step:20s} {secs:7.1f}s  ({pct:.0f}%)", flush=True)
 
-    # Compute population-level statistics
-    population_stats = compute_population_statistics(all_quality, all_confidence) if all_quality else None
-
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     html = _build_aggregate_html(
@@ -397,7 +352,6 @@ def generate_dynamic_aggregate_report(
         generated_at=generated_at,
         experiment_dir=str(experiment_dir),
         house_reports_subdir=house_reports_subdir,
-        population_stats=population_stats,
     )
 
     if output_path is None:
@@ -421,13 +375,10 @@ def _build_house_html(
     efficiency_html: str,
     waterfall_html: str,
     remaining_html: str,
-    devices_html: str,
-    quality_html: str = '',
-    activations_detail_html: str = '',
     metrics: Dict[str, Any] = None,
     pre_quality=None,
 ) -> str:
-    """Build complete HTML document for a single house."""
+    """Build complete HTML document for a single house (M1 disaggregation only)."""
     th_str = ' -> '.join(f'{t}W' for t in threshold_schedule)
     period_str = f"{period.get('start', 'N/A')} to {period.get('end', 'N/A')} ({period.get('days', 0)} days)"
 
@@ -458,20 +409,6 @@ def _build_house_html(
             f'padding:8px 15px;margin-bottom:12px;font-size:0.82em;color:#4a0e6b;">'
             f'NaN minutes (shown as "No Data"): {", ".join(nan_parts)}'
             f'</div>'
-        )
-
-    # Build activations section (may be empty if skipped)
-    activations_section_html = ''
-    if activations_detail_html:
-        activations_section_html = (
-            '<section>'
-            '<h2>Device Activations Detail</h2>'
-            '<p style="color: #666; margin-bottom: 10px; font-size: 0.85em;">'
-            'Individual ON&rarr;OFF activations grouped by device type (high-confidence only). '
-            'Click column headers to sort. Use "Copy Dates" or "Copy All Dates" for external tools.'
-            '</p>'
-            f'{activations_detail_html}'
-            '</section>'
         )
 
     return f"""<!DOCTYPE html>
@@ -615,68 +552,21 @@ def _build_house_html(
             {waterfall_html}
         </section>
 
-        <div class="charts-grid">
-            <section>
-                <h2>Remaining Power Analysis</h2>
-                <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
-                    Unexplained power by magnitude: Noise (&lt;200W), Small Events (200-800W), Large Unmatched (&gt;800W).
-                </p>
-                {remaining_html}
-            </section>
-
-            <section>
-                <h2>Device Summary</h2>
-                <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
-                    Classified by power, duration, and phase patterns.
-                </p>
-                {devices_html}
-            </section>
-        </div>
-
-        {quality_html}
-
-        {activations_section_html}
+        <section>
+            <h2>Remaining Power Analysis</h2>
+            <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
+                Unexplained power by magnitude: Noise (&lt;200W), Small Events (200-800W), Large Unmatched (&gt;800W).
+            </p>
+            {remaining_html}
+        </section>
 
         <footer>
-            ElectricPatterns - Dynamic Threshold Experiment Report
+            ElectricPatterns - Module 1: Disaggregation Report
+            <div style="font-size: 0.85em; margin-top: 4px; color: #aaa;">
+                Device identification analysis available in the separate M2 report.
+            </div>
         </footer>
     </div>
-
-    <script>
-    // Sort device activations tables by column
-    var deviceSortState = {{}};
-    function sortDeviceTable(tableId, colIdx, type) {{
-        var table = document.getElementById(tableId);
-        if (!table) return;
-        var tbody = table.querySelector('tbody');
-        var rows = Array.from(tbody.querySelectorAll('tr'));
-        var key = tableId + '-' + colIdx;
-        var asc = deviceSortState[key] === undefined ? true : !deviceSortState[key];
-        deviceSortState[key] = asc;
-
-        rows.sort(function(a, b) {{
-            var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
-            var vA, vB;
-            if (type === 'num') {{
-                vA = parseFloat(cellA.getAttribute('data-value') || cellA.textContent.replace(/[^0-9.-]/g, '')) || 0;
-                vB = parseFloat(cellB.getAttribute('data-value') || cellB.textContent.replace(/[^0-9.-]/g, '')) || 0;
-            }} else {{
-                vA = (cellA.getAttribute('data-value') || cellA.textContent).trim();
-                vB = (cellB.getAttribute('data-value') || cellB.textContent).trim();
-                if (vA < vB) return asc ? -1 : 1;
-                if (vA > vB) return asc ? 1 : -1;
-                return 0;
-            }}
-            return asc ? (vA - vB) : (vB - vA);
-        }});
-
-        // Re-number rows
-        rows.forEach(function(row, i) {{
-            row.cells[0].textContent = i + 1;
-            tbody.appendChild(row);
-        }});
-    }}
-    </script>
 </body>
 </html>"""
 
@@ -725,9 +615,8 @@ def _build_aggregate_html(
     generated_at: str,
     experiment_dir: str,
     house_reports_subdir: Optional[str] = None,
-    population_stats: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Build aggregate report for multiple houses."""
+    """Build aggregate report for multiple houses (M1 disaggregation only)."""
     # Compute aggregate stats
     valid = [m for m in all_metrics if m.get('totals', {}).get('total_power', 0) > 0]
     n_houses = len(valid)
@@ -790,8 +679,6 @@ def _build_aggregate_html(
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6c757d;" data-value="{t.get('background_pct', 0):.1f}">{t.get('background_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; color: #6f42c1;" data-value="{t.get('no_data_pct', 0):.1f}">{t.get('no_data_pct', 0):.1f}%</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: right; font-weight: bold; color: {eff_color};" data-value="{eff:.1f}">{eff:.1f}%</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{m.get('class_quality') or 0:.2f}">{_format_class_quality(m.get('class_quality'))}</td>
-            <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{m.get('avg_confidence') or 0:.2f}">{_format_avg_confidence(m.get('avg_confidence'))}</td>
         </tr>
         '''
 
@@ -835,9 +722,6 @@ def _build_aggregate_html(
 
     # Build filter bar
     filter_bar = _build_filter_bar(tier_counts, continuity_counts)
-
-    # Build population statistics section
-    pop_section = _build_population_stats_section(population_stats) if population_stats else ''
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1012,8 +896,6 @@ def _build_aggregate_html(
             </script>
         </section>
 
-        {pop_section}
-
         <section>
             <h2>Per-House Results</h2>
             {filter_bar}
@@ -1022,16 +904,14 @@ def _build_aggregate_html(
                     <tr>
                         <th onclick="sortTable(0, 'str')" title="House identifier">House ID <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(1, 'num')" style="text-align: center;" title="Number of days in the data period">Days <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(2, 'quality')" style="text-align: center;" title="Pre-analysis data quality score (0-100). Based on sharp entry rate, device signatures, power profile, variability, data volume, and data integrity.">Pre-Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(2, 'quality')" style="text-align: center;" title="Pre-analysis data quality score (0-100)">Pre-Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(3, 'num')" style="text-align: right;" title="Total original power consumption across all phases">Total <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(4, 'num')" style="text-align: right;" title="% of total power attributed to detected ON/OFF device activations">Explained <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                         <th onclick="sortTable(5, 'num')" style="text-align: right;" title="% of above-threshold power not matched to any device">Unmatched <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="% of power between background and min threshold — undetectable by design">Sub-threshold <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile) - always-on loads">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(8, 'num')" style="text-align: right;" title="% of time with no power reading (NaN) — not included in any calculation">No Data <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(9, 'num')" style="text-align: right;" title="Explained / (Explained + Unmatched) — only detectable power in scope">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(10, 'num')" style="text-align: center;" title="Classification quality score (0-1) — how consistent are the detected device patterns">Quality <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
-                        <th onclick="sortTable(11, 'num')" style="text-align: center;" title="Average confidence score across all device activations (0-1)">Confidence <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(6, 'num')" style="text-align: right;" title="% of power between background and min threshold">Sub-threshold <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(7, 'num')" style="text-align: right;" title="% of total power that is baseline (5th percentile)">Background <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(8, 'num')" style="text-align: right;" title="% of time with no power reading (NaN)">No Data <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
+                        <th onclick="sortTable(9, 'num')" style="text-align: right;" title="Explained / (Explained + Unmatched)">Efficiency <span class="sort-arrow">&#x25B4;&#x25BE;</span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1041,7 +921,10 @@ def _build_aggregate_html(
         </section>
 
         <footer>
-            ElectricPatterns - Dynamic Threshold Aggregate Report
+            ElectricPatterns - Module 1: Disaggregation Aggregate Report
+            <div style="font-size: 0.85em; margin-top: 4px; color: #aaa;">
+                Device identification analysis available in the separate M2 report.
+            </div>
         </footer>
     </div>
 
