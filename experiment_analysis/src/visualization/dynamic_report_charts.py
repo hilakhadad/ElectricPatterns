@@ -568,7 +568,98 @@ def _parse_activation_row(act: Dict[str, Any]) -> Dict[str, Any]:
         'magnitude': magnitude, 'phase': act.get('phase', ''),
         'tag': act.get('tag', ''), 'device_type': act.get('device_type') or 'unclassified',
         'confidence': confidence,
+        'session_id': act.get('session_id', ''),
+        'on_start_iso': str(on_start_raw) if on_start_raw else '',
+        'off_end_iso': str(off_end_raw) if off_end_raw else '',
     }
+
+
+def _group_central_ac_for_display(events: List[Dict]) -> List[Dict]:
+    """Group central AC events into session-level rows with V/X per phase."""
+    has_session_id = any(e.get('session_id') for e in events)
+
+    if has_session_id:
+        groups: Dict[str, list] = {}
+        for e in events:
+            sid = e['session_id']
+            groups.setdefault(sid, []).append(e)
+        session_groups = list(groups.values())
+    else:
+        # Fallback: group by time proximity (within 10 min)
+        sorted_events = sorted(events, key=lambda e: e['on_start_iso'] or e['date'] + e['start'])
+        session_groups = [[sorted_events[0]]]
+        for e in sorted_events[1:]:
+            last = session_groups[-1][-1]
+            try:
+                t1 = datetime.fromisoformat(last['on_start_iso'])
+                t2 = datetime.fromisoformat(e['on_start_iso'])
+                if abs((t2 - t1).total_seconds()) / 60 <= 10:
+                    session_groups[-1].append(e)
+                    continue
+            except (ValueError, TypeError):
+                pass
+            session_groups.append([e])
+
+    result = []
+    for group in session_groups:
+        phases_present = set(e['phase'] for e in group if e.get('phase'))
+
+        iso_starts = [e['on_start_iso'] for e in group if e['on_start_iso']]
+        iso_ends = [e['off_end_iso'] for e in group if e['off_end_iso']]
+
+        date_str = start_str = end_str = ''
+        session_dur = max((e['duration'] for e in group), default=0)
+
+        if iso_starts:
+            earliest = min(iso_starts)
+            try:
+                dt = datetime.fromisoformat(earliest)
+                date_str = dt.strftime('%Y-%m-%d')
+                start_str = dt.strftime('%H:%M')
+            except (ValueError, TypeError):
+                date_str = earliest[:10]
+                start_str = earliest[11:16] if len(earliest) > 16 else ''
+
+        if iso_ends:
+            latest = max(iso_ends)
+            try:
+                dt = datetime.fromisoformat(latest)
+                end_str = dt.strftime('%H:%M')
+            except (ValueError, TypeError):
+                end_str = latest[11:16] if len(latest) > 16 else ''
+
+        if iso_starts and iso_ends:
+            try:
+                t_start = datetime.fromisoformat(min(iso_starts))
+                t_end = datetime.fromisoformat(max(iso_ends))
+                session_dur = (t_end - t_start).total_seconds() / 60
+            except (ValueError, TypeError):
+                pass
+
+        if not date_str:
+            date_str = group[0].get('date', '')
+        if not start_str:
+            start_str = group[0].get('start', '')
+        if not end_str:
+            end_str = group[0].get('end', '')
+
+        dur_str = f'{session_dur / 60:.1f} hr' if session_dur >= 60 else f'{session_dur:.0f} min'
+        avg_mag = sum(e['magnitude'] for e in group) / len(group) if group else 0
+        conf_val = max((e.get('confidence', 0) for e in group), default=0)
+
+        result.append({
+            'date': date_str, 'start': start_str, 'end': end_str,
+            'duration': session_dur, 'dur_str': dur_str,
+            'magnitude': avg_mag,
+            'w1': 'V' if 'w1' in phases_present else 'X',
+            'w2': 'V' if 'w2' in phases_present else 'X',
+            'w3': 'V' if 'w3' in phases_present else 'X',
+            'cycle_count': len(group),
+            'confidence': conf_val,
+        })
+
+    result.sort(key=lambda r: r['date'] + r['start'])
+    return result
 
 
 def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
@@ -641,34 +732,89 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         if not events:
             continue
 
-        events.sort(key=lambda r: r['date'] + r['start'])
-
         name = display_names.get(dtype, dtype)
-        count = len(events)
         min_dur = MIN_DURATION.get(dtype, 0)
         filter_note = f' (≥{min_dur} min)' if min_dur > 0 else ''
         section_id = f'device-detail-{section_idx}'
         section_idx += 1
 
+        _cell = 'padding: 5px 8px; border-bottom: 1px solid #eee;'
+        _th = 'padding: 5px 8px;'
         rows = ''
         copyable_dates = []
-        for i, r in enumerate(events, 1):
-            if r['date'] and r['start']:
-                copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
-            conf_val = r.get('confidence', 0)
-            conf_pct = f'{conf_val:.0%}' if conf_val else '-'
-            conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
-            rows += f'''
+
+        if dtype == 'central_ac':
+            # --- Central AC: one row per session with V/X per phase ---
+            session_rows = _group_central_ac_for_display(events)
+            count = len(session_rows)
+            for i, r in enumerate(session_rows, 1):
+                if r['date'] and r['start']:
+                    copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+                conf_val = r.get('confidence', 0)
+                conf_pct = f'{conf_val:.0%}' if conf_val else '-'
+                conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                rows += f'''
             <tr>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee;" data-value="{r['date']}">{r['date']}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['start']}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['end']}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center;">{r['phase']}</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #eee; text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
+                <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
+                <td style="{_cell} text-align: center;">{r['start']}</td>
+                <td style="{_cell} text-align: center;">{r['end']}</td>
+                <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w1"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w1"]=="V" else "normal"};">{r['w1']}</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w2"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w2"]=="V" else "normal"};">{r['w2']}</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w3"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w3"]=="V" else "normal"};">{r['w3']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
+                <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
             </tr>'''
+
+            table_header = f'''
+                        <tr style="background: #f8f9fa;">
+                            <th style="{_th} text-align: center; width: 35px;">#</th>
+                            <th style="{_th} text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Start</th>
+                            <th style="{_th} text-align: center;">End</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Avg Power &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">w1</th>
+                            <th style="{_th} text-align: center;">w2</th>
+                            <th style="{_th} text-align: center;">w3</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 10, 'num')">Confidence &#x25B4;&#x25BE;</th>
+                        </tr>'''
+        else:
+            # --- Standard table: one row per event ---
+            events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(events)
+            for i, r in enumerate(events, 1):
+                if r['date'] and r['start']:
+                    copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+                conf_val = r.get('confidence', 0)
+                conf_pct = f'{conf_val:.0%}' if conf_val else '-'
+                conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                rows += f'''
+            <tr>
+                <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
+                <td style="{_cell} text-align: center;">{r['start']}</td>
+                <td style="{_cell} text-align: center;">{r['end']}</td>
+                <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="{_cell} text-align: center;">{r['phase']}</td>
+                <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
+            </tr>'''
+
+            table_header = f'''
+                        <tr style="background: #f8f9fa;">
+                            <th style="{_th} text-align: center; width: 35px;">#</th>
+                            <th style="{_th} text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Start</th>
+                            <th style="{_th} text-align: center;">End</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Phase</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Confidence &#x25B4;&#x25BE;</th>
+                        </tr>'''
 
         copyable_text = ', '.join(copyable_dates)
 
@@ -683,16 +829,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
             <div id="{section_id}">
                 <table style="width: 100%; border-collapse: collapse; font-size: 0.85em;" id="{section_id}-table">
                     <thead>
-                        <tr style="background: #f8f9fa;">
-                            <th style="padding: 5px 8px; text-align: center; width: 35px;">#</th>
-                            <th style="padding: 5px 8px; text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
-                            <th style="padding: 5px 8px; text-align: center;">Start</th>
-                            <th style="padding: 5px 8px; text-align: center;">End</th>
-                            <th style="padding: 5px 8px; text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
-                            <th style="padding: 5px 8px; text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
-                            <th style="padding: 5px 8px; text-align: center;">Phase</th>
-                            <th style="padding: 5px 8px; text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Confidence &#x25B4;&#x25BE;</th>
-                        </tr>
+                        {table_header}
                     </thead>
                     <tbody>
                         {rows}
