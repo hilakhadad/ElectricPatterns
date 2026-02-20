@@ -62,7 +62,7 @@ def main():
 
     from identification import (
         load_all_matches,
-        deduplicate_cross_iteration,
+        filter_transient_events,
         group_into_sessions,
         classify_sessions,
         build_session_json,
@@ -73,15 +73,16 @@ def main():
         logger.error("No match files found. Ensure disaggregation has been run first.")
         sys.exit(1)
 
-    deduped = deduplicate_cross_iteration(all_matches)
-    sessions = group_into_sessions(deduped, gap_minutes=args.session_gap)
-    classified = classify_sessions(sessions, deduped)
+    filtered, spike_stats = filter_transient_events(all_matches)
+    sessions = group_into_sessions(filtered, gap_minutes=args.session_gap)
+    classified = classify_sessions(sessions, filtered)
     json_path = build_session_json(
         classified_sessions=classified,
         house_id=args.house_id,
         threshold_schedule=threshold_schedule,
         experiment_dir=experiment_dir,
         session_gap_minutes=args.session_gap,
+        spike_stats=spike_stats,
     )
 
     # Print summary

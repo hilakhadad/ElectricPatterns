@@ -8,10 +8,11 @@ from dataclasses import dataclass, field
 from typing import List
 
 # ============================================================================
-# Cross-iteration deduplication
+# Transient event filtering (pre-identification)
 # ============================================================================
-DEDUP_TIME_TOLERANCE_MINUTES = 2
-DEDUP_MAGNITUDE_TOLERANCE_W = 50
+MIN_EVENT_DURATION_MINUTES = 3      # events shorter than this are transient noise
+                                     # (aligns with AC_MIN_CYCLE_DURATION — the
+                                     # shortest classifiable event is 3 min)
 
 # ============================================================================
 # Session grouping

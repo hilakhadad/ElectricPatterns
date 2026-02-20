@@ -29,6 +29,7 @@ def build_session_json(
     experiment_dir: Path,
     device_profiles: Optional[Dict[int, Dict[str, Any]]] = None,
     session_gap_minutes: int = 30,
+    spike_stats: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Build and save session-level + backward-compatible JSON output.
 
@@ -78,6 +79,7 @@ def build_session_json(
         'threshold_schedule': threshold_schedule,
         'session_gap_minutes': session_gap_minutes,
         'summary': summary,
+        'spike_filter': spike_stats or {},
         'sessions': sessions_list,
     }
 

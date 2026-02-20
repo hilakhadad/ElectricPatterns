@@ -1,6 +1,6 @@
 """
-Session grouper — loads matched events from all iterations, deduplicates
-cross-iteration duplicates, and groups events into device usage sessions.
+Session grouper — loads matched events from all iterations, filters
+transient noise, and groups events into device usage sessions.
 
 A *session* is a contiguous cluster of matched ON→OFF pairs on the same
 phase that are separated by less than ``session_gap`` minutes.  For
@@ -17,8 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .config import (
-    DEDUP_TIME_TOLERANCE_MINUTES,
-    DEDUP_MAGNITUDE_TOLERANCE_W,
+    MIN_EVENT_DURATION_MINUTES,
     DEFAULT_SESSION_GAP_MINUTES,
     CENTRAL_AC_SYNC_TOLERANCE,
     PHASES,
@@ -104,70 +103,107 @@ def load_all_matches(
     return combined
 
 
-def deduplicate_cross_iteration(all_matches: pd.DataFrame) -> pd.DataFrame:
-    """Remove events detected at multiple threshold levels.
+def filter_transient_events(
+    all_matches: pd.DataFrame,
+    min_duration: float = MIN_EVENT_DURATION_MINUTES,
+) -> tuple:
+    """Filter out transient (spike) events that are too short to classify.
 
-    Strategy:
-    - Group by (phase, approximate on_start ±2 min, approximate on_magnitude ±50W)
-    - Keep the version from the *highest* iteration (lowest threshold = most refined)
-    - Add ``detected_at_thresholds`` column listing all thresholds where found
+    Events shorter than ``min_duration`` minutes cannot be classified as any
+    known device type (boiler ≥25 min, AC cycle ≥3 min) and represent
+    transient noise from appliances not targeted by identification (microwave,
+    oven, washing machine motor starts, etc.).
+
+    This replaces the former ``deduplicate_cross_iteration`` which made
+    assumptions about which events are "the same physical event".
+
+    Returns:
+        (filtered_df, spike_stats) — filtered matches and statistics about
+        the removed transient events.
     """
     if all_matches.empty:
-        return all_matches
+        return all_matches, _empty_spike_stats()
 
-    # Ensure on_start is Timestamp
-    if not pd.api.types.is_datetime64_any_dtype(all_matches['on_start']):
-        all_matches['on_start'] = pd.to_datetime(all_matches['on_start'])
+    has_duration = 'duration' in all_matches.columns
+    if has_duration:
+        spike_mask = all_matches['duration'] < min_duration
+    else:
+        logger.warning("No 'duration' column — skipping transient filter")
+        return all_matches, _empty_spike_stats()
 
-    # Sort by phase, on_start for efficient grouping
-    df = all_matches.sort_values(['phase', 'on_start']).reset_index(drop=True)
+    spikes = all_matches[spike_mask]
+    filtered = all_matches[~spike_mask].reset_index(drop=True)
 
-    visited = set()
-    keep_indices: List[int] = []
-    detected_thresholds: Dict[int, List[int]] = {}
+    # Compute stats for reporting
+    spike_stats = _compute_spike_stats(spikes, filtered, min_duration)
 
-    for i in range(len(df)):
-        if i in visited:
-            continue
+    if len(spikes) > 0:
+        logger.info(
+            f"Filtered {len(spikes)} transient events (<{min_duration} min), "
+            f"kept {len(filtered)} events for identification"
+        )
 
-        row_i = df.iloc[i]
-        group = [i]
-        visited.add(i)
+    return filtered, spike_stats
 
-        # Find all duplicates of this event
-        for j in range(i + 1, len(df)):
-            if j in visited:
-                continue
-            row_j = df.iloc[j]
 
-            if row_j['phase'] != row_i['phase']:
-                # Past this phase (sorted), break inner if different phase
-                if row_j['phase'] > row_i['phase']:
-                    break
-                continue
+def _empty_spike_stats() -> dict:
+    """Return empty spike stats structure."""
+    return {
+        'min_duration_threshold': MIN_EVENT_DURATION_MINUTES,
+        'spike_count': 0,
+        'spike_total_minutes': 0.0,
+        'kept_count': 0,
+        'kept_total_minutes': 0.0,
+        'by_iteration': {},
+        'by_phase': {},
+    }
 
-            time_diff = abs((row_j['on_start'] - row_i['on_start']).total_seconds() / 60)
-            if time_diff > DEDUP_TIME_TOLERANCE_MINUTES * 2:
-                break  # too far ahead in time
 
-            mag_diff = abs(abs(row_j['on_magnitude']) - abs(row_i['on_magnitude']))
-            if time_diff <= DEDUP_TIME_TOLERANCE_MINUTES and mag_diff <= DEDUP_MAGNITUDE_TOLERANCE_W:
-                group.append(j)
-                visited.add(j)
+def _compute_spike_stats(
+    spikes: pd.DataFrame,
+    kept: pd.DataFrame,
+    min_duration: float,
+) -> dict:
+    """Compute statistics about filtered transient events."""
+    spike_minutes = float(spikes['duration'].sum()) if len(spikes) > 0 else 0.0
+    kept_minutes = float(kept['duration'].sum()) if len(kept) > 0 else 0.0
 
-        # Keep highest iteration (lowest threshold)
-        best_idx = max(group, key=lambda idx: df.iloc[idx]['iteration'])
-        keep_indices.append(best_idx)
-        detected_thresholds[best_idx] = sorted(set(int(df.iloc[idx]['threshold']) for idx in group))
+    # Breakdown by iteration
+    by_iteration = {}
+    for iter_num in sorted(set(
+        list(spikes['iteration'].unique()) + list(kept['iteration'].unique())
+    )):
+        iter_spikes = spikes[spikes['iteration'] == iter_num]
+        iter_kept = kept[kept['iteration'] == iter_num]
+        by_iteration[int(iter_num)] = {
+            'spike_count': len(iter_spikes),
+            'spike_minutes': round(float(iter_spikes['duration'].sum()), 1) if len(iter_spikes) > 0 else 0.0,
+            'kept_count': len(iter_kept),
+            'kept_minutes': round(float(iter_kept['duration'].sum()), 1) if len(iter_kept) > 0 else 0.0,
+        }
 
-    deduped = df.iloc[keep_indices].copy()
-    deduped['detected_at_thresholds'] = [detected_thresholds[i] for i in keep_indices]
+    # Breakdown by phase
+    by_phase = {}
+    for phase in PHASES:
+        phase_spikes = spikes[spikes['phase'] == phase] if 'phase' in spikes.columns else pd.DataFrame()
+        phase_kept = kept[kept['phase'] == phase] if 'phase' in kept.columns else pd.DataFrame()
+        if len(phase_spikes) > 0 or len(phase_kept) > 0:
+            by_phase[phase] = {
+                'spike_count': len(phase_spikes),
+                'spike_minutes': round(float(phase_spikes['duration'].sum()), 1) if len(phase_spikes) > 0 else 0.0,
+                'kept_count': len(phase_kept),
+                'kept_minutes': round(float(phase_kept['duration'].sum()), 1) if len(phase_kept) > 0 else 0.0,
+            }
 
-    removed = len(df) - len(deduped)
-    if removed > 0:
-        logger.info(f"Deduplication removed {removed} duplicates, kept {len(deduped)} unique matches")
-
-    return deduped.reset_index(drop=True)
+    return {
+        'min_duration_threshold': min_duration,
+        'spike_count': len(spikes),
+        'spike_total_minutes': round(spike_minutes, 1),
+        'kept_count': len(kept),
+        'kept_total_minutes': round(kept_minutes, 1),
+        'by_iteration': by_iteration,
+        'by_phase': by_phase,
+    }
 
 
 def group_into_sessions(

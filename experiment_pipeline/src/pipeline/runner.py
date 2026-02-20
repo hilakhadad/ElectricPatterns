@@ -375,21 +375,22 @@ def _run_dynamic_post_pipeline(
     if not skip_identification:
         try:
             from identification import (
-                load_all_matches, deduplicate_cross_iteration,
+                load_all_matches, filter_transient_events,
                 group_into_sessions, classify_sessions,
                 build_session_json,
             )
             experiment_dir = Path(output_path)
             all_matches = load_all_matches(experiment_dir, house_id, threshold_schedule)
-            deduped = deduplicate_cross_iteration(all_matches)
-            sessions = group_into_sessions(deduped)
-            classified = classify_sessions(sessions, deduped)
+            filtered, spike_stats = filter_transient_events(all_matches)
+            sessions = group_into_sessions(filtered)
+            classified = classify_sessions(sessions, filtered)
             json_path = build_session_json(
                 classified_sessions=classified,
                 house_id=house_id,
                 threshold_schedule=threshold_schedule,
                 experiment_dir=experiment_dir,
                 device_profiles=all_device_profiles,
+                spike_stats=spike_stats,
             )
             logger.info(f"Device sessions JSON saved to {json_path}")
         except Exception as e:

@@ -1034,3 +1034,150 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     {cards_html}
     <div id="confidence_hist"></div>
     <script>Plotly.newPlot('confidence_hist', {traces}, {layout}, {{displayModeBar:false}});</script>'''
+
+
+# ---------------------------------------------------------------------------
+# Spike Filter Analysis
+# ---------------------------------------------------------------------------
+
+def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
+    """
+    Create spike filter analysis section with two charts:
+    1. Bar chart: event count — spikes vs. kept, by iteration
+    2. Bar chart: total minutes — spikes vs. kept, by iteration
+    """
+    if not spike_filter or spike_filter.get('spike_count', 0) == 0:
+        kept = spike_filter.get('kept_count', 0) if spike_filter else 0
+        return (
+            f'<p style="color: #888;">No transient events filtered. '
+            f'All {kept} matched events have duration &ge; '
+            f'{spike_filter.get("min_duration_threshold", 3)} min.</p>'
+        )
+
+    spike_count = spike_filter['spike_count']
+    kept_count = spike_filter['kept_count']
+    spike_min = spike_filter['spike_total_minutes']
+    kept_min = spike_filter['kept_total_minutes']
+    threshold = spike_filter.get('min_duration_threshold', 3)
+    total_count = spike_count + kept_count
+    total_min = spike_min + kept_min
+
+    spike_pct = (spike_count / total_count * 100) if total_count > 0 else 0
+    spike_min_pct = (spike_min / total_min * 100) if total_min > 0 else 0
+
+    # Summary cards
+    cards_html = f'''
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px;">
+        <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
+            <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{spike_count}</div>
+            <div style="font-size: 0.8em; color: #666;">Spikes Filtered</div>
+        </div>
+        <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
+            <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{kept_count}</div>
+            <div style="font-size: 0.8em; color: #666;">Events Kept</div>
+        </div>
+        <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
+            <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{spike_pct:.1f}%</div>
+            <div style="font-size: 0.8em; color: #666;">of Event Count</div>
+        </div>
+        <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
+            <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{spike_min_pct:.1f}%</div>
+            <div style="font-size: 0.8em; color: #666;">of Total Minutes</div>
+        </div>
+    </div>'''
+
+    # Chart 1: Event count by iteration (stacked bar)
+    by_iter = spike_filter.get('by_iteration', {})
+    if by_iter:
+        iters = sorted(by_iter.keys(), key=lambda x: int(x))
+        iter_labels = [f'Iter {i}' for i in iters]
+        spike_counts = [by_iter[i]['spike_count'] for i in iters]
+        kept_counts = [by_iter[i]['kept_count'] for i in iters]
+
+        count_traces = json.dumps([
+            {
+                'type': 'bar',
+                'x': iter_labels,
+                'y': spike_counts,
+                'name': f'Spikes (<{threshold} min)',
+                'marker': {'color': RED, 'opacity': 0.7},
+            },
+            {
+                'type': 'bar',
+                'x': iter_labels,
+                'y': kept_counts,
+                'name': f'Kept (≥{threshold} min)',
+                'marker': {'color': GREEN, 'opacity': 0.7},
+            },
+        ])
+        count_layout = json.dumps({
+            'barmode': 'stack',
+            'margin': {'l': 45, 'r': 20, 't': 30, 'b': 40},
+            'height': 250,
+            'title': {'text': 'Event Count by Iteration', 'font': {'size': 13}},
+            'xaxis': {'title': 'Iteration'},
+            'yaxis': {'title': 'Number of Events'},
+            'paper_bgcolor': 'white',
+            'plot_bgcolor': '#f8f9fa',
+            'legend': {'orientation': 'h', 'y': -0.25},
+        })
+
+        # Chart 2: Minutes by iteration (stacked bar)
+        spike_minutes = [by_iter[i]['spike_minutes'] for i in iters]
+        kept_minutes = [by_iter[i]['kept_minutes'] for i in iters]
+
+        min_traces = json.dumps([
+            {
+                'type': 'bar',
+                'x': iter_labels,
+                'y': spike_minutes,
+                'name': f'Spike minutes (<{threshold} min)',
+                'marker': {'color': RED, 'opacity': 0.7},
+            },
+            {
+                'type': 'bar',
+                'x': iter_labels,
+                'y': kept_minutes,
+                'name': f'Kept minutes (≥{threshold} min)',
+                'marker': {'color': GREEN, 'opacity': 0.7},
+            },
+        ])
+        min_layout = json.dumps({
+            'barmode': 'stack',
+            'margin': {'l': 55, 'r': 20, 't': 30, 'b': 40},
+            'height': 250,
+            'title': {'text': 'Total Minutes by Iteration', 'font': {'size': 13}},
+            'xaxis': {'title': 'Iteration'},
+            'yaxis': {'title': 'Total Minutes'},
+            'paper_bgcolor': 'white',
+            'plot_bgcolor': '#f8f9fa',
+            'legend': {'orientation': 'h', 'y': -0.25},
+        })
+
+        charts_html = f'''
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div>
+                <div id="spike_count_chart"></div>
+                <script>Plotly.newPlot('spike_count_chart', {count_traces}, {count_layout}, {{displayModeBar:false}});</script>
+            </div>
+            <div>
+                <div id="spike_min_chart"></div>
+                <script>Plotly.newPlot('spike_min_chart', {min_traces}, {min_layout}, {{displayModeBar:false}});</script>
+            </div>
+        </div>'''
+    else:
+        charts_html = ''
+
+    # Explanation
+    explanation = f'''
+    <div style="margin-top: 12px; padding: 12px; background: #fff3cd; border-radius: 6px; font-size: 0.85em; color: #856404;">
+        <strong>Why filter spikes?</strong> With 1-minute resolution data and a purely unsupervised approach
+        (no ML, only power magnitude), this project focuses on devices with consistent usage patterns.
+        Events shorter than {threshold} minutes (microwave, oven, motor starts) cannot be reliably
+        identified at this resolution &mdash; no classification rule accepts them
+        (boiler &ge;25 min, AC cycle &ge;3 min).
+        While spikes may account for a notable share of event <em>count</em>, they represent
+        a small fraction of total <em>minutes</em> &mdash; the energy impact is minimal.
+    </div>'''
+
+    return f'{cards_html}{charts_html}{explanation}'

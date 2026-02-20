@@ -39,6 +39,7 @@ from visualization.identification_charts import (
     create_temporal_heatmap,
     create_unclassified_analysis,
     create_device_activations_detail,
+    create_spike_analysis,
 )
 from visualization.classification_charts import create_quality_section
 
@@ -112,6 +113,8 @@ def generate_identification_report(
     threshold_schedule = sessions_data.get('threshold_schedule', [])
 
     # Generate chart sections
+    spike_filter = sessions_data.get('spike_filter', {})
+    spike_html = create_spike_analysis(spike_filter)
     overview_html = create_session_overview(sessions)
     confidence_html = create_confidence_overview(sessions)
     boiler_html = create_boiler_analysis(sessions)
@@ -142,6 +145,7 @@ def generate_identification_report(
         house_id=house_id,
         generated_at=generated_at,
         threshold_schedule=threshold_schedule,
+        spike_html=spike_html,
         overview_html=overview_html,
         confidence_html=confidence_html,
         boiler_html=boiler_html,
@@ -169,6 +173,7 @@ def _build_house_html(
     house_id: str,
     generated_at: str,
     threshold_schedule: list,
+    spike_html: str,
     overview_html: str,
     confidence_html: str,
     boiler_html: str,
@@ -267,6 +272,18 @@ def _build_house_html(
                 <div class="info-item"><strong>Sessions:</strong> {total_sessions} ({type_str})</div>
             </div>
         </header>
+
+        <section>
+            <h2>Transient Event Filter (Spikes)</h2>
+            <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
+                This project works with 1-minute resolution data and uses a purely unsupervised,
+                heuristic approach &mdash; no ML, no features beyond power magnitude. We focus on devices
+                with consistent usage patterns (boiler, central AC, regular AC). Transient events
+                under 3 minutes (microwave, oven, motor starts) cannot be reliably identified at this
+                resolution, and no classification rule accepts them. Filtering is a statement of scope.
+            </p>
+            {spike_html}
+        </section>
 
         <section>
             <h2>Session Overview</h2>
