@@ -1,23 +1,26 @@
 # Experiment Analysis
 
-Analyzes the results of household power segmentation experiments. Generates comprehensive reports with matching performance, segmentation quality, and device detection.
+Post-run analysis module. Takes the output of `experiment_pipeline` and generates interactive HTML reports with matching performance, segmentation quality, device detection, and cross-house comparisons.
+
+Supports both static experiments (exp000–exp008) and dynamic threshold experiments (exp010, exp012).
 
 ## Quick Start
 
 ```bash
-cd scripts
+cd experiment_analysis/scripts
 
-# Analyze latest experiment (fast mode)
-python run_analysis.py
+# Static experiments — analyze latest run
+python run_analysis.py                              # Fast mode
+python run_analysis.py --full                       # Full mode with pattern analysis
+python run_analysis.py --houses 140,125,1001        # Specific houses only
+python run_analysis.py --experiment /path/to/exp    # Specific experiment directory
 
-# Full analysis with all metrics
-python run_analysis.py --full
-
-# Analyze specific houses
-python run_analysis.py --houses 140,125,1001
-
-# Analyze specific experiment
-python run_analysis.py --experiment /path/to/experiment
+# Dynamic threshold experiments (exp010/exp012)
+python run_dynamic_report.py                                    # Latest exp010 experiment
+python run_dynamic_report.py --experiment /path/to/exp010       # Specific experiment
+python run_dynamic_report.py --houses 305,1234                  # Specific houses
+python run_dynamic_report.py --resume /path/to/analysis_dir     # Resume: only new houses
+python run_dynamic_report.py --pre-analysis /path/to/quality    # Include quality scores
 ```
 
 ## Structure
@@ -25,94 +28,63 @@ python run_analysis.py --experiment /path/to/experiment
 ```
 experiment_analysis/
 ├── scripts/
-│   ├── run_analysis.py           # Main entry point
-│   └── generate_pattern_plots.py # Detailed pattern visualizations
+│   ├── run_analysis.py             # Static experiment analysis
+│   ├── run_dynamic_report.py       # Dynamic threshold report generation
+│   ├── generate_pattern_plots.py   # Detailed pattern visualizations
+│   ├── regenerate_html.py          # Regenerate HTML from cached metrics
+│   └── analyze_logs.py             # Analyze pipeline log files
 ├── src/
-│   ├── metrics/                  # Metric calculations
-│   │   ├── matching.py           # Matching performance
-│   │   ├── segmentation.py       # Segmentation quality
-│   │   ├── events.py             # Event classification
-│   │   ├── patterns.py           # Device detection (AC, boiler)
-│   │   ├── iterations.py         # Iteration progression
-│   │   └── monthly.py            # Monthly breakdown
+│   ├── metrics/
+│   │   ├── matching.py             # Matching rate, tag distribution
+│   │   ├── segmentation.py         # Segmentation ratio, power explained
+│   │   ├── events.py               # Event classification
+│   │   ├── patterns.py             # Device detection (AC, boiler)
+│   │   ├── classification.py       # Device classification quality metrics
+│   │   ├── iterations.py           # Iteration progression analysis
+│   │   ├── monthly.py              # Monthly breakdown
+│   │   └── dynamic_report_metrics.py  # Metrics for dynamic threshold reports
 │   ├── reports/
-│   │   ├── experiment_report.py  # Single house report
-│   │   └── aggregate_report.py   # Cross-house aggregation
+│   │   ├── experiment_report.py    # Single house report generation
+│   │   └── aggregate_report.py     # Cross-house aggregation
 │   └── visualization/
-│       ├── html_report.py        # Interactive HTML reports
-│       ├── charts.py             # Plotly charts
-│       └── pattern_plots.py      # Pattern visualizations
-└── OUTPUT/                       # Analysis results (gitignored)
+│       ├── html_report.py          # Static experiment HTML reports
+│       ├── charts.py               # Plotly charts for static reports
+│       ├── dynamic_html_report.py  # Dynamic threshold HTML reports
+│       ├── dynamic_report_charts.py # Plotly charts for dynamic reports
+│       └── pattern_plots.py        # Pattern visualizations
+└── OUTPUT/                         # Analysis results (gitignored)
 ```
 
 ## Output
 
 ```
-OUTPUT/analysis_{timestamp}/
-├── index.html                    # Main report with all houses
-├── house_{id}.html               # Individual house reports
-├── aggregate_metrics.json        # Aggregated statistics
-└── plots/                        # Generated charts
+OUTPUT/analysis_{experiment_name}_{timestamp}/
+├── index.html                          # Aggregate report (all houses)
+├── house_{id}.html                     # Individual house reports
+├── house_reports/                      # Dynamic reports per house
+│   └── dynamic_report_{id}.html
+├── dynamic_report_aggregate.html       # Dynamic aggregate report
+├── aggregate_metrics.json              # Aggregated statistics
+└── plots/                              # Generated charts
 ```
 
 ## Metrics
 
 ### Matching Metrics
-- **Matching Rate**: % of ON events successfully matched
-- **Tag Distribution**: NON-M, SPIKE, NOISY, PARTIAL breakdown
-- **Duration Distribution**: Short/Medium/Long events
+- **Matching Rate**: % of ON events successfully matched to an OFF event
+- **Tag Distribution**: Breakdown by match quality (EXACT/CLOSE/APPROX/LOOSE) and type (clean/NOISY/PARTIAL)
+- **Duration Distribution**: Short (≤2min) / Medium (3–24min) / Long (≥25min)
 
 ### Segmentation Metrics
 - **Power Segmentation Ratio**: Segmented power / Total power
 - **Minutes Segmentation Ratio**: Matched minutes / Total minutes
-- **High-Power Energy Explained**: % of minutes above threshold where remaining dropped below threshold
-- **Negative Value Count**: Quality indicator
-
-### Pre-Quality Score
-- Loaded from house_analysis output (0-100 or 'faulty')
-- Houses with faulty phases (>= 20% NaN) displayed as "Faulty" instead of numeric score
+- **High-Power Energy Explained**: % of above-threshold minutes where remaining dropped below threshold
+- **Negative Value Count**: Quality indicator for segmentation errors
 
 ### Device Detection
+- **Boiler**: Single-phase, ≥1500W, ≥25min, isolated (no compressor cycles nearby)
+- **Central AC**: Events synchronized across 2+ phases within 10 minutes
+- **Regular AC**: 800W+, compressor cycling (3-30min cycles, 4+ cycles per session)
 
-#### Central AC
-- Events synchronized across all 3 phases
-- Within 10 minutes of each other
-
-#### Regular AC
-Strict criteria to reduce false positives:
-- Power >= 800W
-- Cycle duration: 3-30 minutes
-- Session: 2+ cycles
-- Total session: 30+ minutes
-- Magnitude consistency: std < 20%
-
-#### Boiler
-- Single phase, high power
-- Long duration (>30 min)
-- Typically morning/evening usage
-
-## Usage in Code
-
-```python
-from experiment_analysis.src.reports import analyze_experiment_house
-from experiment_analysis.src.visualization import generate_html_report
-
-# Analyze single house
-analysis = analyze_experiment_house(
-    experiment_dir="/path/to/experiment",
-    house_id="140",
-    run_number=0
-)
-
-# Generate HTML report
-generate_html_report(analysis, output_path="house_140.html")
-```
-
-## Charts
-
-The HTML reports include interactive Plotly charts:
-- Matching Rate Distribution
-- Segmentation Ratio Distribution
-- Tag Breakdown (pie chart)
-- Duration Distribution
-- Device Detection Summary
+### Pre-Quality Score
+Loaded from `house_analysis` output (0–100 or "faulty"). Houses with faulty phases (≥20% NaN) displayed as "Faulty" instead of a numeric score.

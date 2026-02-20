@@ -1,6 +1,8 @@
 # ElectricPatterns - Household Energy Consumption Analysis
 
-Analysis pipeline for detecting and segregating electricity consumption patterns in households. Identifies device-specific events (ON/OFF), matches them, and separates consumption into device-related and background power.
+Analysis pipeline for detecting and segregating electricity consumption patterns in Israeli households. Identifies device-specific events (ON/OFF) in 3-phase power data, matches ON→OFF pairs, classifies devices (boiler, AC), and separates consumption into device-related and background power.
+
+Data source: EnergyHive API, 3-phase power (w1, w2, w3), 1-minute resolution.
 
 ## Project Modules
 
@@ -19,39 +21,55 @@ Analysis pipeline for detecting and segregating electricity consumption patterns
 - **Gradual detection**: Multi-minute ramp-ups/downs
 - **Near-threshold detection**: Captures events at 85-100% of threshold
 - **Tail extension**: Extends OFF events through residual power decay
-- **Progressive window search**: Better event separation
+- **NaN imputation**: Runtime gap filling to prevent false events at NaN boundaries
 
 ### Event Matching (3 Stages)
 - **Stage 1**: Clean matching (stable power between ON/OFF)
 - **Stage 2**: Noisy matching (with interference from other devices)
 - **Stage 3**: Partial matching (mismatched ON/OFF magnitudes)
 - Magnitude validation to prevent negative residuals
-- Classification: SPIKE, NON-M (normal), NOISY, PARTIAL
+
+### Device Classification
+- **Boiler**: Single-phase, >=1500W, >=25min duration, isolated
+- **Central AC**: Synchronized events across 2+ phases within 10 minutes
+- **Regular AC**: 800W+, compressor cycling pattern (3-30min cycles)
+
+### Dynamic Threshold (Default)
+The default experiment (`exp010`) uses decreasing thresholds across iterations to progressively detect smaller devices:
+- Iteration 0: 2000W (boilers, large appliances)
+- Iteration 1: 1500W (strong AC)
+- Iteration 2: 1100W (medium AC)
+- Iteration 3: 800W (small AC)
 
 ### Analysis & Reporting
 - Matching performance metrics
 - Segmentation quality scores
-- Device detection (Central AC, Regular AC, Boiler)
-- Interactive HTML reports with charts
+- Interactive HTML reports with Plotly charts
 - Monthly breakdown analysis
+- Dynamic report for multi-threshold experiments
 
 ## Project Structure
 
 ```
 .
-├── experiment_pipeline/      # Core pipeline (detection, matching, segmentation)
-│   ├── src/                  # Modular source code
-│   │   ├── detection/        # Event detection algorithms
-│   │   ├── matching/         # Stage 1, 2, 3 matching
-│   │   ├── segmentation/     # Power segmentation
-│   │   └── pipeline/         # Orchestration
-│   └── scripts/              # Execution scripts
-│
-├── experiment_analysis/      # Experiment result analysis
+├── experiment_pipeline/      # Core pipeline (detection → matching → segmentation → classification)
 │   ├── src/
-│   │   ├── metrics/          # Matching, segmentation, pattern metrics
+│   │   ├── core/             # Config, paths, data loading, NaN imputation
+│   │   ├── detection/        # Event detection (sharp, gradual, near-threshold, tail)
+│   │   ├── matching/         # Stage 1, 2, 3 matching + validation
+│   │   ├── segmentation/     # Power segmentation & evaluation
+│   │   ├── classification/   # Device type classification (boiler, AC)
+│   │   ├── output/           # Unified JSON output builder
+│   │   ├── pipeline/         # Orchestration (runner, process_* steps)
+│   │   └── visualization/    # Interactive plots
+│   ├── scripts/              # Entry points
+│   └── tests/                # Regression tests (pytest)
+│
+├── experiment_analysis/      # Post-run analysis & reports
+│   ├── src/
+│   │   ├── metrics/          # Matching, segmentation, pattern, classification metrics
 │   │   ├── reports/          # Report generation
-│   │   └── visualization/    # HTML reports & charts
+│   │   └── visualization/    # HTML reports & charts (static + dynamic)
 │   └── scripts/
 │
 ├── house_analysis/           # Pre-analysis of raw data
@@ -65,9 +83,9 @@ Analysis pipeline for detecting and segregating electricity consumption patterns
 │   ├── src/                  # Data loading & plot generation
 │   └── app.py                # Flask server
 │
-├── harvesting_data/          # Data acquisition from API
-│   ├── api.py                # EnergyHive API client
-│   ├── fetcher.py            # Fetch logic
+├── harvesting_data/          # Data acquisition from EnergyHive API
+│   ├── api.py                # API client
+│   ├── fetcher.py            # Fetch logic with retry
 │   └── cli.py                # Command-line interface
 │
 └── INPUT/HouseholdData/      # Input CSV files (gitignored)
@@ -102,16 +120,18 @@ pip install -r requirements.txt
    python run_analysis.py
    ```
 
-3. **Run segmentation pipeline**:
+3. **Run segmentation pipeline** (default: dynamic threshold):
    ```bash
    cd experiment_pipeline/scripts
-   python test_array_of_houses.py
+   python test_single_house.py --house_id 305
+   python test_array_of_houses.py --skip_visualization   # all houses
    ```
 
 4. **Analyze results**:
    ```bash
    cd experiment_analysis/scripts
    python run_analysis.py --full
+   python run_dynamic_report.py    # for dynamic threshold experiments
    ```
 
 5. **View interactive plots**:
@@ -121,61 +141,34 @@ pip install -r requirements.txt
    # Open http://localhost:5000
    ```
 
-## Pipeline Stages
+## Pipeline Overview
 
-### 1. Detection
-Detects power changes above threshold on each phase (w1, w2, w3).
-- Sharp detection for sudden changes
-- Gradual detection for slow ramps
-- Output: `on_off_{threshold}.csv`
+```
+Iteration 0 (threshold=2000W):
+  Raw CSV data → Detection → Matching → Segmentation → Remaining power
 
-### 2. Matching
-Pairs ON/OFF events with validation:
+Iteration 1 (threshold=1500W):
+  Remaining power → Detection → Matching → Segmentation → Remaining power
 
-| Stage | Description | Tag |
-|-------|-------------|-----|
-| Stage 1 | Stable power between events | NON-M, SPIKE |
-| Stage 2 | Tolerates noise from other devices | NOISY |
-| Stage 3 | Handles magnitude mismatch (>350W diff) | PARTIAL |
+Iteration 2 (threshold=1100W):
+  ...same flow, finds progressively smaller devices...
 
-Output: `matches_{house_id}.csv`
+Iteration 3 (threshold=800W):
+  ...final pass...
 
-### 3. Segmentation
-Removes event power from total consumption.
-- Creates remaining power for next iteration
-- Categorizes by duration (short/medium/long)
-- Output: `summarized_{house_id}.csv`
+→ Classification (boiler, central AC, regular AC)
+→ Unified JSON output (device_activations_{house_id}.json)
+→ Evaluation & Visualization
+```
 
-### 4. Analysis
-Calculates performance metrics:
-- Matching rate, segmentation ratio
-- Device detection (AC, boiler patterns)
-- Monthly breakdown
-- Output: HTML reports with interactive charts
-
-## Device Detection
-
-### Central AC
-- Synchronized events across all 3 phases
-- High power (>800W per phase)
-
-### Regular AC
-Detection criteria:
-- Power >= 800W
-- Cycle duration: 3-30 minutes
-- Session: 2+ cycles, 30+ min total
-- Magnitude consistency (std < 20%)
-
-### Boiler
-- Single phase, high power
-- Long duration (>30 min)
+Each iteration subtracts detected device power from the total, revealing smaller devices hidden underneath.
 
 ## Available Experiments
 
 Defined in `experiment_pipeline/src/core/config.py`:
 
-| Experiment | Threshold | Features |
-|------------|-----------|----------|
+| Experiment | Threshold | Key Feature |
+|------------|-----------|-------------|
 | exp000_baseline | 1600W | Original detection |
 | exp001_gradual_detection | 1600W | + Gradual detection |
 | exp002_lower_TH | 1500W | Lower threshold |
@@ -185,8 +178,10 @@ Defined in `experiment_pipeline/src/core/config.py`:
 | exp006_partial_matching | 1500W | + Stage 3 partial matching |
 | exp007_symmetric_threshold | 1300W | Symmetric ON/OFF (factor=1.0) |
 | exp008_tail_extension | 1300W | + Tail extension for OFF events |
+| **exp010_dynamic_threshold** | **[2000→1500→1100→800]** | **Dynamic threshold + classification (DEFAULT)** |
+| exp012_nan_imputation | [2000→1500→1100→800] | exp010 + runtime NaN gap filling |
 
 ## Requirements
 
-- Python 3.8+
-- pandas, numpy, matplotlib, plotly, tqdm, flask
+- Python 3.9+
+- pandas, numpy, matplotlib, plotly, tqdm, flask, requests
