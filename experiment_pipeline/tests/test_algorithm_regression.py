@@ -32,17 +32,17 @@ _src_dir = str(Path(__file__).resolve().parent.parent / 'src')
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from matching.validator import (
+from disaggregation.matching.validator import (
     is_valid_event_removal,
     MAX_EVENT_CV,
     MIN_EVENT_STABILITY_RATIO,
 )
-from matching.stage1 import find_match
-from segmentation.processor import _process_single_event, process_phase_segmentation
-from segmentation.restore import restore_skipped_to_unmatched
-from detection.gradual import detect_gradual_events
-from detection.near_threshold import detect_near_threshold_events
-from detection.tail_extension import extend_off_event_tails
+from disaggregation.matching.stage1 import find_match
+from disaggregation.segmentation.processor import _process_single_event, process_phase_segmentation
+from disaggregation.segmentation.restore import restore_skipped_to_unmatched
+from disaggregation.detection.gradual import detect_gradual_events
+from disaggregation.detection.near_threshold import detect_near_threshold_events
+from disaggregation.detection.tail_extension import extend_off_event_tails
 
 # ============================================================================
 # Helpers
@@ -1347,7 +1347,7 @@ class TestNearbyValue:
     def _import_add_nearby_value(self):
         """Import _add_nearby_value from pipeline.detection without triggering full package init."""
         import importlib.util
-        mod_path = str(Path(__file__).resolve().parent.parent / 'src' / 'pipeline' / 'detection.py')
+        mod_path = str(Path(__file__).resolve().parent.parent / 'src' / 'disaggregation' / 'pipeline' / 'detection_step.py')
         spec = importlib.util.spec_from_file_location('pipeline_detection', mod_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

@@ -1,17 +1,18 @@
 """
 Pipeline orchestration module.
 
-Contains the main process functions that coordinate the pipeline steps,
-and the unified pipeline runner for both static and dynamic experiments.
+Contains the unified pipeline runner. Process steps now live under
+disaggregation.pipeline and identification.
 """
-from .detection import process_detection
-from .matching import process_matching
-from .segmentation import process_segmentation
-from .evaluation import process_evaluation
-from .visualization import process_visualization
 from .runner import run_pipeline
-from .evaluation_summary import generate_dynamic_evaluation_summary
-from .cleanup import cleanup_intermediate_files
+
+from disaggregation.pipeline.detection_step import process_detection
+from disaggregation.pipeline.matching_step import process_matching
+from disaggregation.pipeline.segmentation_step import process_segmentation
+from disaggregation.pipeline.evaluation_step import process_evaluation
+from disaggregation.pipeline.visualization_step import process_visualization
+from disaggregation.pipeline.evaluation_summary import generate_dynamic_evaluation_summary
+from identification.cleanup import cleanup_intermediate_files
 
 __all__ = [
     'process_detection',
