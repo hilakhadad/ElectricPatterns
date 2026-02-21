@@ -12,24 +12,18 @@ python run_analysis.py --house 140     # Analyze specific house
 python run_analysis.py --list          # List available houses
 ```
 
-Also available as a SLURM job for HPC:
-```bash
-sbatch sbatch_analysis.sh
-```
-
 ## Structure
 
 ```
 house_analysis/
 ├── scripts/
-│   ├── run_analysis.py          # Main entry point
-│   └── sbatch_analysis.sh       # SLURM job script
+│   └── run_analysis.py          # Main entry point
 ├── src/
 │   ├── metrics/
 │   │   ├── coverage.py          # Data availability, gaps, duplicates
 │   │   ├── power_stats.py       # Power statistics per phase
 │   │   ├── temporal.py          # Day/night, hourly, weekly patterns
-│   │   └── quality.py           # Composite quality scoring (0–100)
+│   │   └── quality.py           # Composite quality scoring (0-100)
 │   ├── reports/
 │   │   ├── house_report.py      # Per-house analysis
 │   │   └── aggregate_report.py  # Cross-house summary
@@ -39,7 +33,7 @@ house_analysis/
 └── OUTPUT/                      # Analysis results (gitignored)
 ```
 
-## Quality Score (0–100)
+## Quality Score (0-100)
 
 Composite score based on 5 components:
 
@@ -49,11 +43,11 @@ Composite score based on 5 components:
 | Gap Quality | 20 | Deductions for large gaps, high gap %, NaN values |
 | Phase Balance | 15 | Based on max/min phase power ratio |
 | Monthly Balance | 20 | Even coverage across months (low std = high score) |
-| Low Noise | 15 | Reasonable hourly variability (CV 0.3–0.8 = optimal) |
+| Low Noise | 15 | Reasonable hourly variability (CV 0.3-0.8 = optimal) |
 
 ### Faulty Phase Detection
-- Phase with ≥20% NaN values → marked as **faulty**
-- Dead phase: < 1% of max phase power (< 2% of sister phases)
+- Phase with >=20% NaN values -> marked as **faulty**
+- Dead phase: < 1% of max phase power
 - Houses with faulty phases get `quality_label='faulty'` instead of a numeric score
 
 ## Output
@@ -65,4 +59,4 @@ OUTPUT/run_{timestamp}/
 └── summary.json          # JSON metrics for downstream use
 ```
 
-The quality scores from this module are used by `experiment_analysis` to contextualize pipeline results.
+Quality scores from this module are used by `disaggregation_analysis` to contextualize pipeline results.

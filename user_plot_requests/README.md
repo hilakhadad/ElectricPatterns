@@ -11,10 +11,8 @@ python app.py
 ```
 
 ### Colab Notebooks
-- `device_plots_colab.ipynb` — Plot device activations from static experiments
-- `device_plots_dynamic_threshold.ipynb` — Plot device activations from dynamic threshold experiments (exp010/exp012)
-
-See [README_DYNAMIC_THRESHOLD.md](README_DYNAMIC_THRESHOLD.md) for the dynamic threshold notebook guide.
+- `device_plots_colab.ipynb` - Plot device activations from static experiments
+- `device_plots_dynamic_threshold.ipynb` - Plot device activations from dynamic threshold experiments (exp010/exp012)
 
 ## Structure
 
@@ -34,7 +32,7 @@ user_plot_requests/
 
 - Select house from dropdown
 - Choose date and time window
-- View interactive power consumption plots (4-row layout: original, remaining, segregated, events)
+- 4-row interactive plot: original power, remaining power, segregated devices, events
 - Download plots as HTML
 
 ### API Endpoints
@@ -52,5 +50,5 @@ user_plot_requests/
 
 The app loads data from two sources (in priority order):
 
-1. **Experiment Output**: `experiment_pipeline/OUTPUT/experiments/` — includes segmentation results
-2. **Raw Input**: `INPUT/HouseholdData/` — original power data only (fallback)
+1. **Experiment output**: `experiment_pipeline/OUTPUT/experiments/` - includes segmentation results
+2. **Raw input**: `INPUT/HouseholdData/` - original power data only (fallback)

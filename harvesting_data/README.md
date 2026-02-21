@@ -13,9 +13,6 @@ python -m harvesting_data.cli --parallel
 
 # All houses (sequential, more stable)
 python -m harvesting_data.cli --sequential
-
-# SLURM cluster
-sbatch slurm_fetch_house.sh 140
 ```
 
 ## Structure
@@ -27,9 +24,7 @@ harvesting_data/
 ├── storage.py            # Data loading/saving
 ├── config.py             # Configuration (paths, API settings)
 ├── cli.py                # Command-line interface (multi-house)
-├── fetch_single_house.py # Single house fetcher
-├── slurm_fetch_house.sh  # SLURM job script
-└── status.sh             # Check SLURM job status
+└── fetch_single_house.py # Single house fetcher
 ```
 
 ## Configuration
