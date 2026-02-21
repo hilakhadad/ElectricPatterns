@@ -27,25 +27,29 @@ from metrics.population_statistics import (
 
 def _make_quality(house_id, boiler_temporal=0.9, boiler_cv=0.10,
                   boiler_median_dur=40, overall_quality=0.8):
-    """Create a synthetic quality dict for one house."""
+    """Create a synthetic quality dict matching classification_quality.py output."""
     return {
         'house_id': house_id,
-        'overall_quality': overall_quality,
+        'overall_quality_score': overall_quality,
         'quality_tier': 'good',
-        'temporal_consistency': {
-            'boiler': {'value': boiler_temporal, 'months_with': int(boiler_temporal * 12), 'flag': None},
+        'total_activations': 30,
+        'data_months': 12,
+        'metrics': {
+            'temporal_consistency': {
+                'boiler': {'value': boiler_temporal, 'months_with': int(boiler_temporal * 12), 'flag': None},
+            },
+            'magnitude_stability': {
+                'boiler': {'mean': 2100, 'std': 2100 * boiler_cv, 'cv': boiler_cv,
+                           'phase_switching_rate': 0.0, 'flag': None},
+            },
+            'duration_plausibility': {
+                'boiler': {'count': 30, 'median': boiler_median_dur, 'q25': 30, 'q75': 55, 'flag': None},
+            },
+            'seasonal_coherence': {
+                'boiler': {'warm_count': 15, 'cool_count': 15, 'ratio': 1.0, 'flag': None},
+            },
+            'energy_conservation': {'flag': None},
         },
-        'magnitude_stability': {
-            'boiler': {'mean': 2100, 'std': 2100 * boiler_cv, 'cv': boiler_cv,
-                       'phase_switching_rate': 0.0, 'flag': None},
-        },
-        'duration_plausibility': {
-            'boiler': {'count': 30, 'median': boiler_median_dur, 'q25': 30, 'q75': 55, 'flag': None},
-        },
-        'seasonal_coherence': {
-            'boiler': {'warm_count': 15, 'cool_count': 15, 'ratio': 1.0, 'flag': None},
-        },
-        'energy_conservation': {'flag': None},
         'flags': [],
     }
 

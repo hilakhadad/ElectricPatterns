@@ -263,7 +263,7 @@ def _group_central_ac_for_display(events: List[Dict]) -> List[Dict]:
     return result
 
 
-def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
+def create_device_activations_detail(activations: List[Dict[str, Any]], house_id: str = '') -> str:
     """
     Create detailed device activations tables grouped by device_type.
 
@@ -290,15 +290,20 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         if parsed['duration'] < min_dur:
             continue
         device_groups.setdefault(dtype, []).append(parsed)
-        if parsed['date'] and parsed['start']:
+        # Only collect dates for classified (non-unknown) device types
+        if dtype != 'unclassified' and parsed['date'] and parsed['start']:
             all_copyable.append(f"{parsed['date']} {parsed['start']}-{parsed['end']}")
 
     if not any(device_groups.values()):
         return '<p style="color: #888;">No high-confidence device activations found.</p>'
 
-    display_order = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
+    # Exclude unclassified/unknown from display (user requested)
+    display_order = ['boiler', 'central_ac', 'regular_ac']
 
-    total_count = sum(len(v) for v in device_groups.values())
+    # Limit to MAX_DISPLAY_PER_TYPE activations per device type
+    MAX_DISPLAY_PER_TYPE = 15
+
+    total_count = sum(len(v) for k, v in device_groups.items() if k != 'unclassified')
     all_copyable_text = ', '.join(all_copyable)
     copy_all_html = f'''
     <div style="margin-bottom: 15px;">
@@ -333,9 +338,13 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         if dtype == 'central_ac':
             session_rows = _group_central_ac_for_display(events)
             count = len(session_rows)
-            for i, r in enumerate(session_rows, 1):
+            # Collect ALL dates for copy button
+            for r in session_rows:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            display_rows = session_rows[:MAX_DISPLAY_PER_TYPE]
+            truncated = count > MAX_DISPLAY_PER_TYPE
+            for i, r in enumerate(display_rows, 1):
                 conf_val = r.get('confidence', 0)
                 conf_pct = f'{conf_val:.0%}' if conf_val else '-'
                 conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
@@ -371,9 +380,13 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         else:
             events.sort(key=lambda r: r['date'] + r['start'])
             count = len(events)
-            for i, r in enumerate(events, 1):
+            # Collect ALL dates for copy button
+            for r in events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            display_events = events[:MAX_DISPLAY_PER_TYPE]
+            truncated = count > MAX_DISPLAY_PER_TYPE
+            for i, r in enumerate(display_events, 1):
                 conf_val = r.get('confidence', 0)
                 conf_pct = f'{conf_val:.0%}' if conf_val else '-'
                 conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
@@ -403,6 +416,14 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
 
         copyable_text = ', '.join(copyable_dates)
 
+        truncation_notice = ''
+        if truncated:
+            truncation_notice = f'''
+                <div style="padding: 6px 12px; margin-top: 4px; background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 4px; font-size: 0.82em; color: #4a5568;">
+                    Showing {MAX_DISPLAY_PER_TYPE} of {count} activations.
+                    Full data available in <code>device_sessions_{house_id}.json</code>
+                </div>'''
+
         sections_html += f'''
         <div style="margin-bottom: 15px;">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer;"
@@ -419,7 +440,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                     <tbody>
                         {rows}
                     </tbody>
-                </table>
+                </table>{truncation_notice}
                 <div style="margin-top: 5px;">
                     <button onclick="var ta=document.getElementById('{section_id}-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
                             style="padding: 3px 10px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.8em;">
@@ -1168,7 +1189,77 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     else:
         charts_html = ''
 
-    # Explanation
+    # Pie chart: Event breakdown by duration category
+    # Categories: Spikes (<3 min), Short (3-25 min), Long (>=25 min)
+    short_count = spike_filter.get('short_count', 0)
+    long_count = spike_filter.get('long_count', 0)
+    short_min = spike_filter.get('short_minutes', 0)
+    long_min = spike_filter.get('long_minutes', 0)
+
+    # If short/long aren't in spike_filter, estimate from kept events
+    if short_count == 0 and long_count == 0 and kept_count > 0:
+        # Fallback: we can't distinguish short/long without per-event data
+        short_count = kept_count
+        short_min = kept_min
+
+    pie_labels = []
+    pie_values_count = []
+    pie_values_min = []
+    pie_colors = []
+
+    if spike_count > 0:
+        pie_labels.append(f'Spikes (<{threshold} min)')
+        pie_values_count.append(spike_count)
+        pie_values_min.append(spike_min)
+        pie_colors.append(RED)
+    if short_count > 0:
+        pie_labels.append(f'Short ({threshold}-25 min)')
+        pie_values_count.append(short_count)
+        pie_values_min.append(short_min)
+        pie_colors.append(ORANGE)
+    if long_count > 0:
+        pie_labels.append('Long (>=25 min)')
+        pie_values_count.append(long_count)
+        pie_values_min.append(long_min)
+        pie_colors.append(GREEN)
+
+    pie_html = ''
+    if len(pie_labels) >= 2:
+        count_pie = json.dumps([{
+            'type': 'pie', 'labels': pie_labels, 'values': pie_values_count,
+            'marker': {'colors': pie_colors}, 'textinfo': 'label+percent+value',
+            'textposition': 'auto', 'hole': 0.35,
+            'hovertemplate': '%{label}: %{value} events (%{percent})<extra></extra>',
+        }])
+        count_pie_layout = json.dumps({
+            'margin': {'l': 10, 'r': 10, 't': 30, 'b': 10}, 'height': 250,
+            'title': {'text': 'By Event Count', 'font': {'size': 13}},
+            'paper_bgcolor': 'white', 'showlegend': False,
+        })
+        min_pie = json.dumps([{
+            'type': 'pie', 'labels': pie_labels, 'values': pie_values_min,
+            'marker': {'colors': pie_colors}, 'textinfo': 'label+percent+value',
+            'textposition': 'auto', 'hole': 0.35,
+            'hovertemplate': '%{label}: %{value:.0f} min (%{percent})<extra></extra>',
+        }])
+        min_pie_layout = json.dumps({
+            'margin': {'l': 10, 'r': 10, 't': 30, 'b': 10}, 'height': 250,
+            'title': {'text': 'By Total Minutes', 'font': {'size': 13}},
+            'paper_bgcolor': 'white', 'showlegend': False,
+        })
+        pie_html = f'''
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+            <div>
+                <div id="spike_pie_count"></div>
+                <script>Plotly.newPlot('spike_pie_count', {count_pie}, {count_pie_layout}, {{displayModeBar:false}});</script>
+            </div>
+            <div>
+                <div id="spike_pie_min"></div>
+                <script>Plotly.newPlot('spike_pie_min', {min_pie}, {min_pie_layout}, {{displayModeBar:false}});</script>
+            </div>
+        </div>'''
+
+    # Explanation with clarifications about Unknown and Confidence
     explanation = f'''
     <div style="margin-top: 12px; padding: 12px; background: #fff3cd; border-radius: 6px; font-size: 0.85em; color: #856404;">
         <strong>Why filter spikes?</strong> With 1-minute resolution data and a purely unsupervised approach
@@ -1176,8 +1267,13 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
         Events shorter than {threshold} minutes (microwave, oven, motor starts) cannot be reliably
         identified at this resolution &mdash; no classification rule accepts them
         (boiler &ge;25 min, AC cycle &ge;3 min).
-        While spikes may account for a notable share of event <em>count</em>, they represent
-        a small fraction of total <em>minutes</em> &mdash; the energy impact is minimal.
+    </div>
+    <div style="margin-top: 8px; padding: 12px; background: #e8f4fd; border-radius: 6px; font-size: 0.85em; color: #0c5460;">
+        <strong>Spikes vs Unknown:</strong> Spikes are removed <em>before</em> session grouping and classification.
+        They are <strong>not</strong> part of the Unknown category. Unknown sessions are events that passed the duration
+        filter (&ge;{threshold} min) but did not match any device classification rule.<br>
+        <strong>Confidence scope:</strong> Confidence scores are calculated only for <em>classified</em> sessions
+        (boiler, central AC, regular AC). Unknown sessions do not have confidence scores and are excluded from confidence statistics.
     </div>'''
 
-    return f'{cards_html}{charts_html}{explanation}'
+    return f'{cards_html}{charts_html}{pie_html}{explanation}'

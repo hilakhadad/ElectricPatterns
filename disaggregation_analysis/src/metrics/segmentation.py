@@ -223,13 +223,13 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
                                             run_number: int = 0,
                                             threshold: float = 1300) -> Dict[str, Any]:
     """
-    Calculate how many high-power minutes are explained by segregation.
+    Calculate how many high-power minutes are segregated.
 
     For each phase, counts:
     1. Minutes where original power > threshold (high power)
-    2. Minutes where original > threshold BUT remaining < threshold (explained)
+    2. Minutes where original > threshold BUT remaining < threshold (segregated)
 
-    A minute is "explained" when the segregation successfully attributed enough
+    A minute is "segregated" when the segregation successfully attributed enough
     power to events that the remaining power dropped below the threshold.
 
     Args:
@@ -289,8 +289,8 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
             above_th_count = above_th_mask.sum()
             phase_stats[phase]['above_th'] += above_th_count
 
-            # Minutes explained: original > TH but remaining < TH
-            # This means the segregation "explained" the high power
+            # Minutes segregated: original > TH but remaining < TH
+            # This means the segregation successfully attributed the high power
             if above_th_count > 0:
                 explained_mask = above_th_mask & (df[remaining_col] < threshold)
                 explained_count = explained_mask.sum()

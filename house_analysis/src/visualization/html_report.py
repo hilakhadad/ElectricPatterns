@@ -467,6 +467,88 @@ def _get_month_name(month_num: int) -> str:
     return months[month_num] if 1 <= month_num <= 12 else str(month_num)
 
 
+def _coverage_color(ratio: float) -> str:
+    """Return CSS color string for a coverage ratio (0-1)."""
+    if ratio >= 0.95:
+        return 'color: #155724;'  # dark green
+    elif ratio >= 0.80:
+        return 'color: #28a745;'  # green
+    elif ratio >= 0.65:
+        return 'color: #e67e22;'  # orange
+    else:
+        return 'color: #dc3545;'  # red
+
+
+def _coverage_bg(ratio: float) -> str:
+    """Return CSS background for a coverage ratio (0-1)."""
+    if ratio >= 0.95:
+        return 'background: #d4edda;'  # light green
+    elif ratio >= 0.80:
+        return 'background: #e8f5e9;'  # very light green
+    elif ratio >= 0.65:
+        return 'background: #fff3cd;'  # light yellow
+    else:
+        return 'background: #f8d7da;'  # light red
+
+
+def _score_color(score: float) -> str:
+    """Return CSS color string for a quality score (0-100)."""
+    if score >= 90:
+        return 'color: #155724;'
+    elif score >= 75:
+        return 'color: #004085;'
+    elif score >= 50:
+        return 'color: #856404;'
+    else:
+        return 'color: #721c24;'
+
+
+def _month_coverage_style(ratio: float) -> str:
+    """Return inline style for monthly coverage value with gradient coloring."""
+    if ratio >= 0.95:
+        return 'color: #155724; font-weight: 700;'
+    elif ratio >= 0.80:
+        return 'color: #28a745; font-weight: 600;'
+    elif ratio >= 0.65:
+        return 'color: #e67e22; font-weight: 600;'
+    elif ratio >= 0.50:
+        return 'color: #dc3545; font-weight: 600;'
+    else:
+        return 'color: #dc3545; font-weight: 700; background: #f8d7da; padding: 1px 4px; border-radius: 3px;'
+
+
+def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
+    """Build anomaly warning HTML if extreme values detected."""
+    if not coverage.get('has_anomalies', False):
+        return ''
+
+    anomaly_count = coverage.get('anomaly_count', 0)
+    anomaly_phases = coverage.get('anomaly_phases', {})
+    max_vals = coverage.get('phase_max_values', {})
+
+    phase_details = []
+    for ph, count in anomaly_phases.items():
+        max_v = max_vals.get(ph, 0)
+        phase_details.append(f'{ph}: {count} readings, max {max_v:,.0f}W')
+
+    details_html = '<br>'.join(phase_details)
+
+    return f'''
+            <div class="card" style="border-left: 4px solid #dc3545;">
+                <h2 style="color: #dc3545;">Anomaly Warning</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
+                    <strong>{anomaly_count}</strong> readings exceed 20kW per phase &mdash; almost certainly sensor errors.
+                    These extreme values distort all statistics (mean, max, std, CV) and charts.
+                </p>
+                <div style="background: #f8d7da; border-radius: 6px; padding: 12px; font-size: 0.88em; color: #721c24;">
+                    {details_html}
+                </div>
+                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
+                    Consider filtering these outliers before analysis. Quality score penalized by {coverage.get('anomaly_count', 0)} anomalous readings.
+                </p>
+            </div>'''
+
+
 def generate_single_house_html_report(analysis: Dict[str, Any],
                                        output_path: str) -> str:
     """
@@ -583,7 +665,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 <div class="month-stats">
                     <span>Days: {month_days}</span>
                     <span>Avg: {month_avg:.0f}W</span>
-                    <span>Coverage: {month_coverage:.0%}</span>
+                    <span style="{_month_coverage_style(month_coverage)}">Coverage: {month_coverage:.0%}</span>
                 </div>
                 <div class="mini-chart">
                     {mini_chart}
@@ -601,7 +683,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="metric-label">Days of Data</div>
                     </div>
                     <div class="metric">
-                        <div class="metric-value">{year_coverage:.1%}</div>
+                        <div class="metric-value" style="{_coverage_color(year_coverage)}">{year_coverage:.1%}</div>
                         <div class="metric-label">Coverage</div>
                     </div>
                     <div class="metric">
@@ -910,8 +992,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-label">Days of Data</div>
                         <div class="overview-desc">Total calendar days from first to last reading</div>
                     </div>
-                    <div class="overview-item">
-                        <div class="overview-value">{coverage.get('coverage_ratio', 0):.1%}</div>
+                    <div class="overview-item" style="{_coverage_bg(coverage.get('coverage_ratio', 0))}">
+                        <div class="overview-value" style="{_coverage_color(coverage.get('coverage_ratio', 0))}">{coverage.get('coverage_ratio', 0):.1%}</div>
                         <div class="overview-label">Coverage</div>
                         <div class="overview-desc">Minutes with data / total minutes in time span</div>
                     </div>
@@ -928,17 +1010,54 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 </div>
             </div>
 
-            <!-- NaN % and Max Gap -->
+            <!-- Data Loss Breakdown: NaN gaps vs No-Data gaps -->
+            <div class="card">
+                <h2>Data Loss Breakdown</h2>
+                <p style="color: #666; font-size: 0.85em; margin-bottom: 12px;">
+                    Two types of data loss: <strong>No-Data gaps</strong> (entire rows missing &mdash; sensor offline)
+                    vs <strong>NaN gaps</strong> (rows exist but values are missing &mdash; sensor reported empty readings).
+                </p>
+                <div class="two-col-grid">
+                    <div class="overview-item" style="{'background: #fce4ec;' if coverage.get('no_data_gap_pct', 0) >= 10 else 'background: #f8f9fa;'}">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">No-Data Gaps (Missing Rows)</div>
+                        <div style="font-size: 1.4em; font-weight: 700; color: {'#dc3545' if coverage.get('no_data_gap_pct', 0) >= 10 else '#6f42c1'};">{coverage.get('no_data_gap_pct', 0):.1f}%</div>
+                        <div class="phase-list" style="margin-top: 6px;">
+                            <div class="phase-row">{coverage.get('no_data_gap_minutes', 0):,} minutes missing</div>
+                            <div class="phase-row">{coverage.get('no_data_gap_count', 0)} separate gaps</div>
+                            <div class="phase-row">Longest gap: {coverage.get('max_no_data_gap_minutes', coverage.get('max_gap_minutes', 0)):,.0f} min</div>
+                        </div>
+                        <div class="overview-desc">Timestamps where the sensor didn't report at all</div>
+                    </div>
+                    <div class="overview-item" style="{'background: #fff3cd;' if coverage.get('nan_gap_pct', 0) >= 5 else 'background: #f8f9fa;'}">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN Gaps (Empty Values)</div>
+                        <div style="font-size: 1.4em; font-weight: 700; color: {'#e67e22' if coverage.get('nan_gap_pct', 0) >= 5 else '#6f42c1'};">{coverage.get('nan_gap_pct', 0):.1f}%</div>
+                        <div class="phase-list" style="margin-top: 6px;">
+                            <div class="phase-row">{coverage.get('nan_rows_count', 0):,} rows with NaN</div>
+                            <div class="phase-row">w1: {quality.get('w1_nan_pct', 0):.1f}%, w2: {quality.get('w2_nan_pct', 0):.1f}%, w3: {quality.get('w3_nan_pct', 0):.1f}%</div>
+                        </div>
+                        <div class="overview-desc">Rows that exist but have missing values in one or more phases</div>
+                    </div>
+                </div>
+                <div style="margin-top: 10px; padding: 10px; background: #f0f4ff; border-radius: 6px; font-size: 0.85em; color: #555;">
+                    <strong>Total data loss:</strong> {quality.get('total_data_loss_pct', 0):.1f}%
+                    (No-Data {coverage.get('no_data_gap_pct', 0):.1f}% + NaN {coverage.get('nan_gap_pct', 0):.1f}%)
+                    &mdash; Continuity: <span class="badge {nan_cont_class}">{nan_cont_text}</span>
+                </div>
+            </div>
+
+            {_build_anomaly_warning(coverage)}
+
+            <!-- Per-Phase NaN Details -->
             <div class="card">
                 <div class="two-col-grid">
                     <div class="overview-item">
-                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN %</div>
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN % per Phase</div>
                         <div class="phase-list">
-                            <div class="phase-row"><span class="phase-name">w1:</span> {quality.get('w1_nan_pct', 0):.1f}%</div>
-                            <div class="phase-row"><span class="phase-name">w2:</span> {quality.get('w2_nan_pct', 0):.1f}%</div>
-                            <div class="phase-row"><span class="phase-name">w3:</span> {quality.get('w3_nan_pct', 0):.1f}%</div>
+                            <div class="phase-row"><span class="phase-name">w1:</span> <span style="{_month_coverage_style(1 - quality.get('w1_nan_pct', 0)/100)}">{quality.get('w1_nan_pct', 0):.1f}%</span></div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> <span style="{_month_coverage_style(1 - quality.get('w2_nan_pct', 0)/100)}">{quality.get('w2_nan_pct', 0):.1f}%</span></div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> <span style="{_month_coverage_style(1 - quality.get('w3_nan_pct', 0)/100)}">{quality.get('w3_nan_pct', 0):.1f}%</span></div>
                         </div>
-                        <div class="overview-desc">% of readings missing per phase</div>
+                        <div class="overview-desc">% of readings missing per phase (within existing rows)</div>
                     </div>
                     <div class="overview-item">
                         <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">Max NaN Gap</div>

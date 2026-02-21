@@ -64,8 +64,8 @@ def compute_population_statistics(
     classification_rates = _compute_classification_rates(all_quality, all_confidence)
 
     # Quality score distribution
-    quality_scores = [q.get('overall_quality', 0) for q in all_quality
-                      if q.get('overall_quality') is not None]
+    quality_scores = [q.get('overall_quality_score', 0) for q in all_quality
+                      if q.get('overall_quality_score') is not None]
     quality_distribution = _compute_distribution(quality_scores) if quality_scores else {}
 
     # Confidence distribution
@@ -102,16 +102,18 @@ def _extract_house_features(
         if not house_id:
             continue
 
-        temporal = quality.get('temporal_consistency', {})
-        magnitude = quality.get('magnitude_stability', {})
-        duration = quality.get('duration_plausibility', {})
-        seasonal = quality.get('seasonal_coherence', {})
+        # Metrics are nested under 'metrics' key in classification_quality output
+        metrics = quality.get('metrics', {})
+        temporal = metrics.get('temporal_consistency', {})
+        magnitude = metrics.get('magnitude_stability', {})
+        duration = metrics.get('duration_plausibility', {})
+        seasonal = metrics.get('seasonal_coherence', {})
 
         conf = conf_by_house.get(house_id, {})
         conf_summary = conf.get('confidence_summary', {})
 
         house_feat = {
-            'overall_quality': quality.get('overall_quality', 0),
+            'overall_quality': quality.get('overall_quality_score', 0),
             'quality_tier': quality.get('quality_tier', 'unknown'),
             'flags_count': len(quality.get('flags', [])),
             'avg_confidence': conf_summary.get('mean', 0),

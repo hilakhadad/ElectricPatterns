@@ -107,7 +107,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
                                     days_span: int = None,
                                     max_gap_minutes: float = None,
                                     pct_gaps_over_2min: float = None,
-                                    avg_nan_pct: float = None) -> Dict[str, Any]:
+                                    avg_nan_pct: float = None,
+                                    anomaly_count: int = None) -> Dict[str, Any]:
     """
     Calculate data quality metrics for household data.
 
@@ -208,18 +209,28 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['faulty_nan_phases'] = faulty_nan_phases
     metrics['has_faulty_nan_phase'] = len(faulty_nan_phases) > 0
 
-    # ===== NaN CONTINUITY CLASSIFICATION =====
-    # Classify data continuity based on max NaN percentage across phases.
-    # Used to filter houses with fragmented data from aggregate reports.
+    # ===== DATA CONTINUITY CLASSIFICATION =====
+    # Classify data continuity based on BOTH:
+    # 1. NaN percentage within existing rows (max across phases)
+    # 2. No-data percentage (missing rows entirely, from coverage_ratio)
+    # A house can have 0% NaN but 50% missing rows if the sensor was offline for months.
     phase_nan_pcts = [metrics.get(f'{col}_nan_pct', 0) for col in phase_cols if col in data.columns]
     max_phase_nan_pct = max(phase_nan_pcts) if phase_nan_pcts else 0
     metrics['max_phase_nan_pct'] = round(max_phase_nan_pct, 2)
 
-    if max_phase_nan_pct < 5:
+    # Compute total data loss: missing rows + NaN within existing rows
+    no_data_pct = (1 - (coverage_ratio if coverage_ratio is not None else 1.0)) * 100
+    # NaN affects only existing rows, so scale by coverage
+    effective_nan_pct = max_phase_nan_pct * (coverage_ratio if coverage_ratio is not None else 1.0)
+    total_data_loss_pct = no_data_pct + effective_nan_pct
+    metrics['no_data_pct'] = round(no_data_pct, 2)
+    metrics['total_data_loss_pct'] = round(total_data_loss_pct, 2)
+
+    if total_data_loss_pct < 5:
         nan_continuity = 'continuous'       # Continuous data
-    elif max_phase_nan_pct < 15:
+    elif total_data_loss_pct < 15:
         nan_continuity = 'minor_gaps'       # Minor gaps
-    elif max_phase_nan_pct < 40:
+    elif total_data_loss_pct < 40:
         nan_continuity = 'discontinuous'    # Discontinuous
     else:
         nan_continuity = 'fragmented'       # Heavily fragmented
@@ -481,6 +492,13 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     )
     if total_negatives > 100:
         integrity_score -= min(3, (total_negatives - 100) / 500 * 3)
+
+    # Penalty for anomalous readings (up to 2 pts, taken from integrity budget)
+    # Extreme outliers (>20kW per phase) distort all statistics and charts
+    n_anomalies = anomaly_count if anomaly_count is not None else 0
+    if n_anomalies > 0:
+        integrity_score -= min(2, n_anomalies / 50 * 2)
+    metrics['anomaly_penalty'] = round(min(2, n_anomalies / 50 * 2) if n_anomalies > 0 else 0, 1)
 
     integrity_score = max(0, integrity_score)
     quality_score += integrity_score

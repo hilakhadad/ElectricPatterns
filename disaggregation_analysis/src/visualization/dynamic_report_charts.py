@@ -5,7 +5,7 @@ Creates visualization sections, each returning an HTML string
 with embedded Plotly charts or pure HTML/CSS.
 
 Color scheme (no red):
-  Green  = #28a745 (explained / success)
+  Green  = #28a745 (segregated / success)
   Gray   = #6c757d (background / baseload)
   Orange = #e67e22 (unmatched / attention)
   Yellow = #eab308 (sub-threshold / warm yellow)
@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 # Color constants
-GREEN = '#28a745'           # Explained (success)
+GREEN = '#28a745'           # Segregated (success)
 GRAY = '#6c757d'            # Background (baseload)
 ORANGE = '#e67e22'          # Unmatched (distinct orange)
 YELLOW = '#eab308'          # Sub-threshold (warm yellow)
@@ -31,19 +31,19 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     """
     Create summary section with decomposition box and efficiency card.
 
-    Decomposition box (bordered): Explained + Background + Unmatched + Sub-threshold [+ No Data] = 100%
-    Efficiency card (separate): Explained / (Explained + Unmatched) — only detectable power.
+    Decomposition box (bordered): Segregated + Background + Unmatched + Sub-threshold [+ No Data] = 100%
+    Efficiency card (separate): Segregated / (Segregated + Unmatched) — only detectable power.
     """
     totals = metrics.get('totals', {})
     phases = metrics.get('phases', {})
-    explained_pct = totals.get('explained_pct', 0)
+    segregated_pct = totals.get('segregated_pct', 0)
     background_pct = totals.get('background_pct', 0)
     above_th_pct = totals.get('above_th_pct', 0)
     sub_threshold_pct = totals.get('sub_threshold_pct', 0)
     no_data_pct = totals.get('no_data_pct', 0)
     efficiency = totals.get('efficiency', 0)
 
-    explained_kwh = totals.get('explained_kwh', 0)
+    segregated_kwh = totals.get('segregated_kwh', 0)
     background_kwh = totals.get('background_kwh', 0)
     above_th_kwh = totals.get('above_th_kwh', 0)
     sub_threshold_kwh = totals.get('sub_threshold_kwh', 0)
@@ -78,7 +78,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
 
     # Card count for grid (4 or 5 columns depending on No Data)
     grid_cols = 5 if has_no_data else 4
-    total_sum = explained_pct + background_pct + above_th_pct + sub_threshold_pct + no_data_pct
+    total_sum = segregated_pct + background_pct + above_th_pct + sub_threshold_pct + no_data_pct
 
     # Build No Data card (pre-built for Python 3.9 compat)
     no_data_card_html = ''
@@ -107,9 +107,9 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         </div>
         <div style="display: grid; grid-template-columns: repeat({grid_cols}, 1fr); gap: 12px; margin-bottom: 12px;">
             <div style="background: {LIGHT_GREEN}; border-left: 4px solid {GREEN}; border-radius: 8px; padding: 14px; text-align: center;">
-                <div style="font-size: 1.8em; font-weight: bold; color: {GREEN};">{explained_pct:.1f}%</div>
-                <div style="font-size: 0.9em; color: #155724; font-weight: 600;">Explained</div>
-                <div style="font-size: 0.8em; color: #666;">{explained_kwh} kWh</div>
+                <div style="font-size: 1.8em; font-weight: bold; color: {GREEN};">{segregated_pct:.1f}%</div>
+                <div style="font-size: 0.9em; color: #155724; font-weight: 600;">Segregated</div>
+                <div style="font-size: 0.8em; color: #666;">{segregated_kwh} kWh</div>
                 <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.4;">
                     Matched ON&rarr;OFF events (boilers, ACs, high-power devices).<br>
                     <em>Per-minute difference: original &minus; remaining.</em>
@@ -145,7 +145,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
             {no_data_card_html}
         </div>
         <div style="background: #f8f9fa; border-radius: 6px; padding: 8px 15px; text-align: center; font-size: 0.82em; color: #555;">
-            <span style="color:{GREEN};">Explained ({explained_pct:.1f}%)</span> +
+            <span style="color:{GREEN};">Segregated ({segregated_pct:.1f}%)</span> +
             <span style="color:{ORANGE};">Unmatched ({above_th_pct:.1f}%)</span> +
             <span style="color:{YELLOW};">Sub-threshold ({sub_threshold_pct:.1f}%)</span> +
             <span style="color:{GRAY};">Background ({background_pct:.1f}%)</span>
@@ -158,7 +158,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
         <div style="font-size: 2.8em; font-weight: bold; color: {eff_color};">{efficiency:.1f}%</div>
         <div style="font-size: 1em; font-weight: 700; color: #333;">Detection Efficiency</div>
         <div style="font-size: 0.82em; color: #555; margin-top: 4px; line-height: 1.5;">
-            <strong>Efficiency</strong> = {explained_kwh} / ({explained_kwh} + {above_th_kwh}) kWh
+            <strong>Efficiency</strong> = {segregated_kwh} / ({segregated_kwh} + {above_th_kwh}) kWh
             = <strong style="color:{eff_color};">{efficiency:.1f}%</strong><br>
             <em>Scope: only above-threshold (&ge;{min_threshold}W) power. Background and sub-threshold excluded.</em>
         </div>
@@ -170,18 +170,18 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
     """
     Create stacked horizontal bar chart showing power decomposition per phase.
 
-    Each phase gets one bar: [Explained | Background | Unmatched | No Data]
+    Each phase gets one bar: [Segregated | Background | Unmatched | No Data]
     """
     phases = metrics.get('phases', {})
     chart_id = 'power-breakdown-chart'
 
     phase_labels = ['w1', 'w2', 'w3']
-    explained_vals = []
+    segregated_vals = []
     background_vals = []
     above_th_vals = []
     sub_th_vals = []
     no_data_vals = []
-    hover_explained = []
+    hover_segregated = []
     hover_bg = []
     hover_above = []
     hover_sub = []
@@ -189,13 +189,13 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
 
     for p in phase_labels:
         ph = phases.get(p, {})
-        explained_vals.append(ph.get('explained_pct', 0))
+        segregated_vals.append(ph.get('segregated_pct', 0))
         background_vals.append(ph.get('background_pct', 0))
         above_th_vals.append(ph.get('above_th_pct', 0))
         sub_th_vals.append(ph.get('sub_threshold_pct', 0))
         no_data_vals.append(ph.get('no_data_pct', 0))
-        hover_explained.append(
-            f"{p}: {ph.get('explained_kwh', 0)} kWh ({ph.get('explained_pct', 0):.1f}%)"
+        hover_segregated.append(
+            f"{p}: {ph.get('segregated_kwh', 0)} kWh ({ph.get('segregated_pct', 0):.1f}%)"
         )
         hover_bg.append(
             f"{p}: {ph.get('background_kwh', 0)} kWh ({ph.get('background_pct', 0):.1f}%)"
@@ -213,11 +213,11 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
 
     has_no_data = any(v >= 0.1 for v in no_data_vals)
 
-    trace_explained = {
-        'y': phase_labels, 'x': explained_vals, 'name': 'Explained',
+    trace_segregated = {
+        'y': phase_labels, 'x': segregated_vals, 'name': 'Segregated',
         'type': 'bar', 'orientation': 'h', 'marker': {'color': GREEN},
-        'text': [f'{v:.1f}%' for v in explained_vals], 'textposition': 'inside',
-        'hovertext': hover_explained, 'hoverinfo': 'text',
+        'text': [f'{v:.1f}%' for v in segregated_vals], 'textposition': 'inside',
+        'hovertext': hover_segregated, 'hoverinfo': 'text',
     }
     trace_above_th = {
         'y': phase_labels, 'x': above_th_vals, 'name': 'Unmatched',
@@ -238,7 +238,7 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
         'hovertext': hover_bg, 'hoverinfo': 'text',
     }
 
-    traces = [trace_explained, trace_above_th, trace_sub_th, trace_background]
+    traces = [trace_segregated, trace_above_th, trace_sub_th, trace_background]
 
     if has_no_data:
         trace_no_data = {
@@ -325,7 +325,7 @@ def create_efficiency_gauge(metrics: Dict[str, Any]) -> str:
         <div style="text-align: center;">
             <div id="{phase_chart_id}" style="width:200px;height:200px;display:inline-block;"></div>
             <div style="font-size: 0.85em; color: #666;">
-                {ph.get('explained_kwh', 0)} / {round(ph.get('total_kwh', 0) - ph.get('background_kwh', 0), 2)} kWh
+                {ph.get('segregated_kwh', 0)} / {round(ph.get('total_kwh', 0) - ph.get('background_kwh', 0), 2)} kWh
             </div>
             <script>
                 Plotly.newPlot('{phase_chart_id}', [{json.dumps(data)}], {json.dumps(layout)},
@@ -353,7 +353,7 @@ def create_threshold_waterfall(metrics: Dict[str, Any]) -> str:
     x_labels = [f'TH={t["threshold"]}W' for t in per_threshold]
     x_labels.append('Total')
 
-    values = [t.get('explained_pct', 0) for t in per_threshold]
+    values = [t.get('segregated_pct', 0) for t in per_threshold]
     total = sum(values)
 
     # Waterfall: each bar is relative, total is absolute
@@ -376,7 +376,7 @@ def create_threshold_waterfall(metrics: Dict[str, Any]) -> str:
 
     layout = {
         'title': 'Contribution by Threshold Level',
-        'yaxis': {'title': '% of Total Power Explained'},
+        'yaxis': {'title': '% of Total Power Segregated'},
         'xaxis': {'title': ''},
         'showlegend': False,
         'margin': {'t': 60, 'b': 50, 'l': 60, 'r': 30},
@@ -446,7 +446,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     """
     Create HTML table summarizing detected devices.
 
-    Columns: Device Type | Count | Avg Power | Avg Duration | % of Explained
+    Columns: Device Type | Count | Avg Power | Avg Duration | % of Segregated
     """
     devices = metrics.get('devices', {})
 
@@ -520,7 +520,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
                 <th style="padding: 12px 15px; text-align: center;" title="Number of matched ON/OFF activation pairs">Count</th>
                 <th style="padding: 12px 15px; text-align: center;" title="Average ON magnitude across all activations of this type">Avg Power</th>
                 <th style="padding: 12px 15px; text-align: center;" title="Average total duration from ON start to OFF end">Avg Duration</th>
-                <th style="padding: 12px 15px; text-align: left;" title="This device type's energy share of all explained energy (magnitude x duration)">% of Explained Energy</th>
+                <th style="padding: 12px 15px; text-align: left;" title="This device type's energy share of all segregated energy (magnitude x duration)">% of Segregated Energy</th>
             </tr>
         </thead>
         <tbody>

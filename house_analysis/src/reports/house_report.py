@@ -59,6 +59,7 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     max_gap_minutes = coverage.get('max_gap_minutes', 0)
     pct_gaps_over_2min = coverage.get('pct_gaps_over_2min', 0)
     avg_nan_pct = coverage.get('avg_nan_pct', 0)
+    anomaly_count = coverage.get('anomaly_count', 0)
     quality = calculate_data_quality_metrics(
         data, phase_cols,
         coverage_ratio=coverage_ratio,
@@ -66,6 +67,7 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
         max_gap_minutes=max_gap_minutes,
         pct_gaps_over_2min=pct_gaps_over_2min,
         avg_nan_pct=avg_nan_pct,
+        anomaly_count=anomaly_count,
     )
     results['data_quality'] = quality
 

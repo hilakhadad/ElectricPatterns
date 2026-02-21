@@ -201,7 +201,7 @@ def create_minutes_segmentation_distribution_chart(analyses: List[Dict[str, Any]
     """
     Create histogram showing distribution of minutes segmentation ratios.
 
-    Shows what portion of time was successfully explained by matches across houses.
+    Shows what portion of time was successfully segregated by matches across houses.
     Minutes ratio = matched_minutes / (total_days * 24 * 60) - NOT multiplied by 3
 
     Args:
@@ -265,7 +265,7 @@ def create_minutes_segmentation_distribution_chart(analyses: List[Dict[str, Any]
     }
 
     layout = {
-        'title': f'Minutes Segmentation Distribution<br><sub>Avg: {avg_ratio:.2f}% | Range: {min_ratio:.2f}% - {max_ratio:.2f}% of time explained</sub>',
+        'title': f'Minutes Segmentation Distribution<br><sub>Avg: {avg_ratio:.2f}% | Range: {min_ratio:.2f}% - {max_ratio:.2f}% of time segregated</sub>',
         'xaxis': {'title': 'Minutes Segmentation Ratio'},
         'yaxis': {'title': 'Number of Houses'},
         'showlegend': False

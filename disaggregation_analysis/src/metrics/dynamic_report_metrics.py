@@ -2,9 +2,9 @@
 Metrics calculation for dynamic threshold experiment reports.
 
 Computes a three-bucket power decomposition per phase:
-  - Explained: power successfully matched to device events
+  - Segregated: power successfully matched to device events
   - Background: estimated constant baseload (5th percentile)
-  - Improvable: remaining targetable power not yet explained
+  - Improvable: remaining targetable power not yet segregated
 
 Also computes detection efficiency, per-threshold contributions,
 remaining power classification, and device summary.
@@ -168,9 +168,9 @@ def _compute_phase_decomposition(
 
     - total_power: sum of original (clipped >= 0)
     - background: percentile_5(original) * minutes
-    - explained: sum(original - final_remaining), clipped >= 0
-    - improvable: total - background - explained, clipped >= 0
-    - efficiency: explained / (total - background) * 100
+    - segregated: sum(original - final_remaining), clipped >= 0
+    - improvable: total - background - segregated, clipped >= 0
+    - efficiency: segregated / (total - background) * 100
     """
     orig_col = f'original_{phase}'
     remain_col = f'remaining_{phase}'
@@ -200,8 +200,8 @@ def _compute_phase_decomposition(
     p5 = np.percentile(original, 5) if minutes > 0 else 0
     background_power = p5 * minutes
 
-    # Explained: original - remaining (per-minute, clipped >= 0)
-    explained_power = (original - remaining).clip(lower=0).sum()
+    # Segregated: original - remaining (per-minute, clipped >= 0)
+    segregated_power = (original - remaining).clip(lower=0).sum()
 
     # Improvable: what's left after subtracting background from remaining
     improvable_power = max(0, remaining.sum() - background_power)
@@ -217,22 +217,22 @@ def _compute_phase_decomposition(
     no_data_pct = (1 - coverage) * 100
 
     # Percentages of measured power (internal, for efficiency calc)
-    explained_pct_measured = (explained_power / total_power * 100) if total_power > 0 else 0
+    segregated_pct_measured = (segregated_power / total_power * 100) if total_power > 0 else 0
     background_pct_measured = (background_power / total_power * 100) if total_power > 0 else 0
     improvable_pct_measured = (improvable_power / total_power * 100) if total_power > 0 else 0
     above_th_pct_measured = (above_th_power / total_power * 100) if total_power > 0 else 0
     sub_threshold_pct_measured = (sub_threshold_power / total_power * 100) if total_power > 0 else 0
 
     # Display percentages: scaled by coverage so all categories sum to 100%
-    explained_pct = explained_pct_measured * coverage
+    segregated_pct = segregated_pct_measured * coverage
     background_pct = background_pct_measured * coverage
     improvable_pct = improvable_pct_measured * coverage
     above_th_pct = above_th_pct_measured * coverage
     sub_threshold_pct = sub_threshold_pct_measured * coverage
 
-    # Detection efficiency: explained / (explained + above_th) — only detectable power
-    detectable = explained_power + above_th_power
-    efficiency = (explained_power / detectable * 100) if detectable > 0 else 100
+    # Detection efficiency: segregated / (segregated + above_th) — only detectable power
+    detectable = segregated_power + above_th_power
+    efficiency = (segregated_power / detectable * 100) if detectable > 0 else 100
 
     # kWh conversions (watts * minutes / 60 / 1000)
     to_kwh = lambda w: round(w / 60 / 1000, 2)
@@ -243,9 +243,9 @@ def _compute_phase_decomposition(
     return {
         'total_power': round(total_power, 1),
         'total_kwh': to_kwh(total_power),
-        'explained_power': round(explained_power, 1),
-        'explained_kwh': to_kwh(explained_power),
-        'explained_pct': round(explained_pct, 1),
+        'segregated_power': round(segregated_power, 1),
+        'segregated_kwh': to_kwh(segregated_power),
+        'segregated_pct': round(segregated_pct, 1),
         'background_power': round(background_power, 1),
         'background_kwh': to_kwh(background_power),
         'background_pct': round(background_pct, 1),
@@ -272,7 +272,7 @@ def _compute_phase_decomposition(
 def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
     """Aggregate metrics across all 3 phases."""
     total_power = sum(p.get('total_power', 0) for p in phases.values())
-    explained_power = sum(p.get('explained_power', 0) for p in phases.values())
+    segregated_power = sum(p.get('segregated_power', 0) for p in phases.values())
     background_power = sum(p.get('background_power', 0) for p in phases.values())
     improvable_power = sum(p.get('improvable_power', 0) for p in phases.values())
     above_th_power = sum(p.get('above_th_power', 0) for p in phases.values())
@@ -284,31 +284,31 @@ def _compute_totals(phases: Dict[str, Dict]) -> Dict[str, Any]:
     no_data_pct = (1 - coverage) * 100
 
     # Internal percentages (of measured power)
-    explained_pct_m = (explained_power / total_power * 100) if total_power > 0 else 0
+    segregated_pct_m = (segregated_power / total_power * 100) if total_power > 0 else 0
     background_pct_m = (background_power / total_power * 100) if total_power > 0 else 0
     improvable_pct_m = (improvable_power / total_power * 100) if total_power > 0 else 0
     above_th_pct_m = (above_th_power / total_power * 100) if total_power > 0 else 0
     sub_threshold_pct_m = (sub_threshold_power / total_power * 100) if total_power > 0 else 0
 
     # Display percentages: scaled by coverage
-    explained_pct = explained_pct_m * coverage
+    segregated_pct = segregated_pct_m * coverage
     background_pct = background_pct_m * coverage
     improvable_pct = improvable_pct_m * coverage
     above_th_pct = above_th_pct_m * coverage
     sub_threshold_pct = sub_threshold_pct_m * coverage
 
-    # Efficiency: explained / (explained + above_threshold) — only detectable power
-    detectable = explained_power + above_th_power
-    efficiency = (explained_power / detectable * 100) if detectable > 0 else 100
+    # Efficiency: segregated / (segregated + above_threshold) — only detectable power
+    detectable = segregated_power + above_th_power
+    efficiency = (segregated_power / detectable * 100) if detectable > 0 else 100
 
     to_kwh = lambda w: round(w / 60 / 1000, 2)
 
     return {
         'total_power': round(total_power, 1),
         'total_kwh': to_kwh(total_power),
-        'explained_power': round(explained_power, 1),
-        'explained_kwh': to_kwh(explained_power),
-        'explained_pct': round(explained_pct, 1),
+        'segregated_power': round(segregated_power, 1),
+        'segregated_kwh': to_kwh(segregated_power),
+        'segregated_pct': round(segregated_pct, 1),
         'background_power': round(background_power, 1),
         'background_kwh': to_kwh(background_power),
         'background_pct': round(background_pct, 1),
@@ -351,8 +351,8 @@ def _load_per_threshold_contribution(
                 if th_rows.empty:
                     contributions.append({
                         'threshold': th,
-                        'explained_pct': 0,
-                        'explained_power': 0,
+                        'segregated_pct': 0,
+                        'segregated_power': 0,
                     })
                     continue
 
@@ -362,8 +362,8 @@ def _load_per_threshold_contribution(
 
                 contributions.append({
                     'threshold': th,
-                    'explained_power': round(iter_explained, 1),
-                    'explained_pct': round(iter_pct, 1),
+                    'segregated_power': round(iter_explained, 1),
+                    'segregated_pct': round(iter_pct, 1),
                     'cumulative_pct': round(cum_pct, 1),
                 })
             return contributions
@@ -390,8 +390,8 @@ def _compute_per_threshold_from_pkls(
         if run_dir is None:
             contributions.append({
                 'threshold': threshold,
-                'explained_pct': 0,
-                'explained_power': 0,
+                'segregated_pct': 0,
+                'segregated_power': 0,
             })
             continue
 
@@ -399,8 +399,8 @@ def _compute_per_threshold_from_pkls(
         if not summ_dir.exists():
             contributions.append({
                 'threshold': threshold,
-                'explained_pct': 0,
-                'explained_power': 0,
+                'segregated_pct': 0,
+                'segregated_power': 0,
             })
             continue
 
@@ -408,8 +408,8 @@ def _compute_per_threshold_from_pkls(
         if data.empty:
             contributions.append({
                 'threshold': threshold,
-                'explained_pct': 0,
-                'explained_power': 0,
+                'segregated_pct': 0,
+                'segregated_power': 0,
             })
             continue
 
@@ -446,8 +446,8 @@ def _compute_per_threshold_from_pkls(
 
         contributions.append({
             'threshold': threshold,
-            'explained_power': round(iter_explained, 1),
-            'explained_pct': round(iter_pct, 1),
+            'segregated_power': round(iter_explained, 1),
+            'segregated_pct': round(iter_pct, 1),
         })
 
         prev_remaining_total = remaining_total
@@ -599,7 +599,7 @@ def _empty_phase() -> Dict[str, Any]:
     """Return empty phase metrics."""
     return {
         'total_power': 0, 'total_kwh': 0,
-        'explained_power': 0, 'explained_kwh': 0, 'explained_pct': 0,
+        'segregated_power': 0, 'segregated_kwh': 0, 'segregated_pct': 0,
         'background_power': 0, 'background_kwh': 0, 'background_pct': 0,
         'background_per_minute': 0,
         'improvable_power': 0, 'improvable_kwh': 0, 'improvable_pct': 0,
@@ -620,7 +620,7 @@ def _empty_metrics(house_id: str) -> Dict[str, Any]:
         'phases': {p: empty_phase for p in ['w1', 'w2', 'w3']},
         'totals': {
             'total_power': 0, 'total_kwh': 0,
-            'explained_power': 0, 'explained_kwh': 0, 'explained_pct': 0,
+            'segregated_power': 0, 'segregated_kwh': 0, 'segregated_pct': 0,
             'background_power': 0, 'background_kwh': 0, 'background_pct': 0,
             'improvable_power': 0, 'improvable_kwh': 0, 'improvable_pct': 0,
             'above_th_power': 0, 'above_th_kwh': 0, 'above_th_pct': 0,

@@ -135,7 +135,7 @@ def generate_identification_report(
     activations_detail_html = ''
     if not skip_activations_detail:
         activations = _load_activations(experiment_dir, house_id)
-        activations_detail_html = create_device_activations_detail(activations)
+        activations_detail_html = create_device_activations_detail(activations, house_id=house_id)
 
     # Build HTML
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -439,6 +439,29 @@ def generate_identification_aggregate_report(
             dt = s.get('device_type', 'unknown')
             device_counts[dt] = device_counts.get(dt, 0) + 1
 
+        # Spike filter info
+        spike_filter = sessions_data.get('spike_filter', {})
+        spike_count = spike_filter.get('spike_count', 0)
+
+        # Days span and sessions/day from session timestamps
+        session_dates = set()
+        min_date = max_date = None
+        for s in sessions:
+            start = s.get('start', '')
+            if start:
+                try:
+                    d = datetime.fromisoformat(str(start)).date()
+                    session_dates.add(d)
+                    if min_date is None or d < min_date:
+                        min_date = d
+                    if max_date is None or d > max_date:
+                        max_date = d
+                except (ValueError, TypeError):
+                    pass
+
+        days_span = (max_date - min_date).days + 1 if min_date and max_date else 0
+        sessions_per_day = total / days_span if days_span > 0 else 0
+
         # Quality + confidence metrics
         try:
             quality = calculate_classification_quality(experiment_dir, house_id)
@@ -466,6 +489,9 @@ def generate_identification_aggregate_report(
             'quality_score': quality_score,
             'device_counts': device_counts,
             'report_link': report_link,
+            'days_span': days_span,
+            'sessions_per_day': sessions_per_day,
+            'spike_count': spike_count,
         })
 
     # Population statistics
@@ -523,6 +549,7 @@ def _build_aggregate_html(
     pop_html = _build_population_section(population_stats) if population_stats else ''
 
     # Per-house table rows
+    _td = 'padding:8px 10px;border-bottom:1px solid #eee;'
     table_rows = ''
     for h in sorted(house_summaries, key=lambda x: x['house_id']):
         hid = h['house_id']
@@ -537,17 +564,25 @@ def _build_aggregate_html(
 
         q = h['quality_score']
         q_str = f'{q:.2f}' if q is not None else '-'
+        q_val = q if q is not None else 0
         q_color = '#28a745' if q and q >= 0.7 else '#eab308' if q and q >= 0.4 else '#e67e22' if q else '#aaa'
         c_color = '#28a745' if h['avg_confidence'] >= 0.7 else '#eab308' if h['avg_confidence'] >= 0.4 else '#e67e22'
 
+        days = h.get('days_span', 0)
+        spd = h.get('sessions_per_day', 0)
+        spikes = h.get('spike_count', 0)
+
         table_rows += f'''
         <tr>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;">{link}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">{h['total_sessions']}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;">{h['classified_pct']:.0f}%</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;color:{c_color};font-weight:600;">{h['avg_confidence']:.2f}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;text-align:center;color:{q_color};font-weight:600;">{q_str}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #eee;">{badges}</td>
+            <td style="{_td}" data-value="{hid}">{link}</td>
+            <td style="{_td}text-align:center;" data-value="{days}">{days}</td>
+            <td style="{_td}text-align:center;" data-value="{h['total_sessions']}">{h['total_sessions']}</td>
+            <td style="{_td}text-align:center;" data-value="{spd:.2f}">{spd:.1f}</td>
+            <td style="{_td}text-align:center;" data-value="{spikes}">{spikes}</td>
+            <td style="{_td}text-align:center;" data-value="{h['classified_pct']:.1f}">{h['classified_pct']:.0f}%</td>
+            <td style="{_td}text-align:center;color:{c_color};font-weight:600;" data-value="{h['avg_confidence']:.3f}">{h['avg_confidence']:.2f}</td>
+            <td style="{_td}text-align:center;color:{q_color};font-weight:600;" data-value="{q_val:.3f}">{q_str}</td>
+            <td style="{_td}">{badges}</td>
         </tr>'''
 
     return f"""<!DOCTYPE html>
@@ -624,27 +659,75 @@ def _build_aggregate_html(
 
         <section>
             <h2>Per-House Results</h2>
-            <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+            <div style="font-size:0.82em;color:#666;margin-bottom:10px;line-height:1.7;">
+                <strong>Column descriptions:</strong>
+                <strong>Days</strong> = calendar days from first to last session |
+                <strong>Sessions</strong> = total device sessions found |
+                <strong>Sess/Day</strong> = average sessions per day (higher = more device activity detected) |
+                <strong>Spikes</strong> = transient events filtered out (&lt;3 min) |
+                <strong>Classified</strong> = % of sessions assigned to a device type (boiler/AC) |
+                <strong>Confidence</strong> = avg classification confidence (0&ndash;1, how well each session matches its device criteria) |
+                <strong>Quality</strong> = internal consistency score (temporal, magnitude, duration, seasonal checks)
+            </div>
+            <div style="overflow-x:auto;">
+            <table id="agg-table" style="width:100%;border-collapse:collapse;font-size:0.88em;">
                 <thead>
                     <tr style="background:#2d3748;color:white;">
-                        <th style="padding:10px 12px;text-align:left;">House</th>
-                        <th style="padding:10px 12px;text-align:center;">Sessions</th>
-                        <th style="padding:10px 12px;text-align:center;">Classified</th>
-                        <th style="padding:10px 12px;text-align:center;">Confidence</th>
-                        <th style="padding:10px 12px;text-align:center;">Quality</th>
-                        <th style="padding:10px 12px;text-align:left;">Devices</th>
+                        <th style="padding:8px 10px;text-align:left;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(0,'str')" title="House identifier (click to sort)">House &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(1,'num')" title="Calendar days from first to last session">Days &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(2,'num')" title="Total device sessions found">Sessions &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(3,'num')" title="Average sessions per day">Sess/Day &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(4,'num')" title="Transient events filtered (<3 min)">Spikes &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(5,'num')" title="% of sessions assigned to a device type">Classified &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(6,'num')" title="Average classification confidence (0-1)">Confidence &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(7,'num')" title="Internal consistency quality score (0-1)">Quality &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:left;white-space:nowrap;">Devices</th>
                     </tr>
                 </thead>
                 <tbody>
                     {table_rows}
                 </tbody>
             </table>
+            </div>
         </section>
 
         <footer>
             ElectricPatterns &mdash; Module 2: Device Identification Aggregate Report
         </footer>
     </div>
+
+    <script>
+    var aggSortState = {{}};
+    function sortAggTable(colIdx, type) {{
+        var table = document.getElementById('agg-table');
+        var tbody = table.querySelector('tbody');
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        var key = 'agg-' + colIdx;
+        var asc = aggSortState[key] === undefined ? true : !aggSortState[key];
+        aggSortState[key] = asc;
+        rows.sort(function(a, b) {{
+            var cellA = a.cells[colIdx], cellB = b.cells[colIdx];
+            var vA, vB;
+            if (type === 'num') {{
+                vA = parseFloat(cellA.getAttribute('data-value') || cellA.textContent.replace(/[^0-9.-]/g, '')) || 0;
+                vB = parseFloat(cellB.getAttribute('data-value') || cellB.textContent.replace(/[^0-9.-]/g, '')) || 0;
+            }} else {{
+                vA = (cellA.getAttribute('data-value') || cellA.textContent).trim();
+                vB = (cellB.getAttribute('data-value') || cellB.textContent).trim();
+                if (vA < vB) return asc ? -1 : 1;
+                if (vA > vB) return asc ? 1 : -1;
+                return 0;
+            }}
+            return asc ? (vA - vB) : (vB - vA);
+        }});
+        rows.forEach(function(row) {{ tbody.appendChild(row); }});
+        // Update header indicator
+        var ths = table.querySelectorAll('thead th');
+        ths.forEach(function(th, i) {{
+            th.style.fontWeight = (i === colIdx) ? '900' : 'normal';
+        }});
+    }}
+    </script>
 </body>
 </html>"""
 
@@ -663,15 +746,19 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
         if dtype not in per_device:
             continue
         d = per_device[dtype]
-        count_dist = d.get('count', {})
-        mag_dist = d.get('magnitude', {})
+        count_dist = d.get('count_per_month', {})
+        mag_dist = d.get('mean_magnitude', {})
+        dur_dist = d.get('median_duration', {})
+        houses_with = d.get("houses_with_device", 0)
+        pct = (houses_with / n * 100) if n > 0 else 0
         device_cards += f'''
         <div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
             <div style="font-weight:600;color:#2a4365;margin-bottom:6px;">{dtype.replace("_", " ").title()}</div>
             <div style="font-size:0.85em;color:#555;">
-                Houses: {d.get("houses_with_device", 0)}/{n}<br>
-                Sessions/house: median {count_dist.get("median", 0):.0f}<br>
-                Avg magnitude: {mag_dist.get("median", 0):.0f}W
+                Houses: <strong>{houses_with}/{n}</strong> ({pct:.0f}%)<br>
+                Median magnitude: {mag_dist.get("median", 0):.0f}W<br>
+                Median duration: {dur_dist.get("median", 0):.0f} min<br>
+                Months active/house: median {count_dist.get("median", 0):.0f}
             </div>
         </div>'''
 

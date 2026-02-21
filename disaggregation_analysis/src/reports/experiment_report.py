@@ -629,18 +629,18 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
         if neg_count > 0:
             lines.append(f"WARNING: {neg_count} negative values detected!")
 
-    # High-Power Energy Explained
+    # High-Power Energy Segregated
     th_expl = analysis.get('threshold_explanation', {})
     if th_expl and 'total_minutes_above_th' in th_expl:
-        lines.append(f"\n--- High-Power Energy Explained (>{th_expl.get('threshold', 1300)}W) ---")
+        lines.append(f"\n--- High-Power Energy Segregated (>{th_expl.get('threshold', 1300)}W) ---")
         lines.append(f"Total minutes above threshold: {th_expl.get('total_minutes_above_th', 0):,}")
-        lines.append(f"Minutes explained: {th_expl.get('total_minutes_explained', 0):,} "
+        lines.append(f"Minutes segregated: {th_expl.get('total_minutes_explained', 0):,} "
                     f"({th_expl.get('total_explanation_rate', 0):.1%})")
         for phase in ['w1', 'w2', 'w3']:
             above = th_expl.get(f'{phase}_minutes_above_th', 0)
             explained = th_expl.get(f'{phase}_minutes_explained', 0)
             rate = th_expl.get(f'{phase}_explanation_rate', 0)
-            lines.append(f"  {phase}: {above:,} above TH, {explained:,} explained ({rate:.1%})")
+            lines.append(f"  {phase}: {above:,} above TH, {explained:,} segregated ({rate:.1%})")
 
     # Scores
     scores = analysis.get('scores', {})
