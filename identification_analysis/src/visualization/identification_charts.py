@@ -1069,11 +1069,17 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     """
     if not spike_filter or spike_filter.get('spike_count', 0) == 0:
         kept = spike_filter.get('kept_count', 0) if spike_filter else 0
-        return (
-            f'<p style="color: #888;">No transient events filtered. '
-            f'All {kept} matched events have duration &ge; '
-            f'{spike_filter.get("min_duration_threshold", 3)} min.</p>'
-        )
+        threshold = spike_filter.get('min_duration_threshold', 3) if spike_filter else 3
+        if kept > 0:
+            return (
+                f'<p style="color: #888;">No transient events filtered. '
+                f'All {kept} matched events have duration &ge; {threshold} min.</p>'
+            )
+        else:
+            return (
+                f'<p style="color: #888;">No spike filter data available. '
+                f'Re-run the pipeline to generate spike statistics.</p>'
+            )
 
     spike_count = spike_filter['spike_count']
     kept_count = spike_filter['kept_count']
