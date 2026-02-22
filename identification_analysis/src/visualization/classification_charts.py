@@ -359,7 +359,7 @@ def _create_confidence_histogram(confidence: Dict) -> str:
     # Color by tier
     colors = [TIER_COLORS.get(t, GRAY) for t in tiers]
 
-    chart_id = 'confidence_hist'
+    chart_id = 'quality_confidence_hist'
     # Group by tier for stacked histogram
     high_scores = [s for s, t in zip(scores, tiers) if t == 'high']
     med_scores = [s for s, t in zip(scores, tiers) if t == 'medium']
@@ -388,7 +388,7 @@ def _create_confidence_histogram(confidence: Dict) -> str:
         'shapes': [
             {'type': 'line', 'x0': 0.40, 'x1': 0.40, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'dash': 'dash', 'color': '#999', 'width': 1}},
-            {'type': 'line', 'x0': 0.70, 'x1': 0.70, 'y0': 0, 'y1': 1, 'yref': 'paper',
+            {'type': 'line', 'x0': 0.80, 'x1': 0.80, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'dash': 'dash', 'color': '#999', 'width': 1}},
         ],
     })
@@ -398,7 +398,7 @@ def _create_confidence_histogram(confidence: Dict) -> str:
         <h3 style="font-size:0.95em;margin-bottom:4px;">Confidence Distribution</h3>
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
             Each activation receives a confidence score (0&ndash;1) based on magnitude consistency,
-            duration fit, phase pattern, and match quality tag. Tiers: High (&ge;0.70), Medium (0.40&ndash;0.70),
+            duration fit, phase pattern, and match quality tag. Tiers: High (&ge;0.80), Medium (0.40&ndash;0.80),
             Low (&lt;0.40). Dashed lines mark tier boundaries. A healthy classification has most activations
             in the High tier.
         </p>

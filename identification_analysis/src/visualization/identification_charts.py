@@ -528,14 +528,16 @@ def create_session_overview(sessions: List[Dict]) -> str:
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 
-    # Count and energy by device type
+    # Count, minutes, and energy by device type
     counts = defaultdict(int)
+    minutes = defaultdict(float)
     energy = defaultdict(float)  # magnitude * duration (watt-minutes)
     for s in sessions:
         dtype = s.get('device_type', 'unknown')
         counts[dtype] += 1
-        mag = s.get('avg_cycle_magnitude_w', 0) or 0
         dur = s.get('duration_minutes', 0) or 0
+        minutes[dtype] += dur
+        mag = s.get('avg_cycle_magnitude_w', 0) or 0
         energy[dtype] += mag * dur
 
     total = sum(counts.values())
@@ -546,7 +548,7 @@ def create_session_overview(sessions: List[Dict]) -> str:
     # Summary cards
     avg_conf_vals = [s.get('confidence', 0) for s in sessions if s.get('confidence')]
     avg_conf = sum(avg_conf_vals) / len(avg_conf_vals) if avg_conf_vals else 0
-    conf_color = GREEN if avg_conf >= 0.7 else ORANGE if avg_conf >= 0.5 else RED
+    conf_color = GREEN if avg_conf >= 0.8 else ORANGE if avg_conf >= 0.5 else RED
 
     cards_html = f'''
     <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
@@ -598,6 +600,35 @@ def create_session_overview(sessions: List[Dict]) -> str:
         'legend': {'orientation': 'h', 'y': -0.1},
     })
 
+    # Pie chart — minutes by device type
+    min_labels = []
+    min_values = []
+    min_colors = []
+    for dt in display_order:
+        if minutes.get(dt, 0) > 0:
+            min_labels.append(DEVICE_DISPLAY_NAMES.get(dt, dt))
+            min_values.append(round(minutes[dt], 1))
+            min_colors.append(DEVICE_COLORS.get(dt, GRAY))
+
+    min_traces = json.dumps([{
+        'type': 'pie',
+        'labels': min_labels,
+        'values': min_values,
+        'marker': {'colors': min_colors},
+        'textinfo': 'label+percent',
+        'textposition': 'auto',
+        'hovertemplate': '%{label}: %{value:.0f} min (%{percent})<extra></extra>',
+        'hole': 0.35,
+    }])
+    min_layout = json.dumps({
+        'margin': {'l': 20, 'r': 20, 't': 30, 'b': 20},
+        'height': 280,
+        'title': {'text': 'Minutes by Device Type', 'font': {'size': 14}},
+        'paper_bgcolor': 'white',
+        'showlegend': True,
+        'legend': {'orientation': 'h', 'y': -0.1},
+    })
+
     # Bar chart — energy by device type
     bar_labels = []
     bar_values = []
@@ -629,10 +660,14 @@ def create_session_overview(sessions: List[Dict]) -> str:
 
     return f'''
     {cards_html}
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
         <div>
             <div id="session_pie"></div>
             <script>Plotly.newPlot('session_pie', {pie_traces}, {pie_layout}, {{displayModeBar:false}});</script>
+        </div>
+        <div>
+            <div id="minutes_pie"></div>
+            <script>Plotly.newPlot('minutes_pie', {min_traces}, {min_layout}, {{displayModeBar:false}});</script>
         </div>
         <div>
             <div id="session_energy_bar"></div>
@@ -1045,8 +1080,8 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
         return '<p style="color: #888;">No classified sessions with confidence scores.</p>'
 
     confidences = [s.get('confidence', 0) for s in classified]
-    high = sum(1 for c in confidences if c >= 0.7)
-    medium = sum(1 for c in confidences if 0.4 <= c < 0.7)
+    high = sum(1 for c in confidences if c >= 0.8)
+    medium = sum(1 for c in confidences if 0.4 <= c < 0.8)
     low = sum(1 for c in confidences if c < 0.4)
     total = len(confidences)
 
@@ -1055,11 +1090,11 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;">
         <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{high} ({high/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">High (\u22650.70)</div>
+            <div style="font-size: 0.8em; color: #666;">High (\u22650.80)</div>
         </div>
         <div style="background: #fef3cd; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {ORANGE};">{medium} ({medium/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.70)</div>
+            <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.80)</div>
         </div>
         <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{low} ({low/total:.0%})</div>
@@ -1071,14 +1106,14 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     traces = json.dumps([
         {
             'type': 'histogram',
-            'x': [c for c in confidences if c >= 0.7],
+            'x': [c for c in confidences if c >= 0.8],
             'name': 'High',
             'marker': {'color': GREEN},
             'xbins': {'start': 0, 'end': 1, 'size': 0.05},
         },
         {
             'type': 'histogram',
-            'x': [c for c in confidences if 0.4 <= c < 0.7],
+            'x': [c for c in confidences if 0.4 <= c < 0.8],
             'name': 'Medium',
             'marker': {'color': ORANGE},
             'xbins': {'start': 0, 'end': 1, 'size': 0.05},
@@ -1101,7 +1136,7 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
         'plot_bgcolor': '#f8f9fa',
         'legend': {'orientation': 'h', 'y': -0.2},
         'shapes': [
-            {'type': 'line', 'x0': 0.7, 'x1': 0.7, 'y0': 0, 'y1': 1, 'yref': 'paper',
+            {'type': 'line', 'x0': 0.8, 'x1': 0.8, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
             {'type': 'line', 'x0': 0.4, 'x1': 0.4, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'color': '#888', 'dash': 'dot', 'width': 1}},

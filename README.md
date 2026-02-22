@@ -19,8 +19,8 @@ Module 1 (iterative):
   Iteration 3  (800W): Remaining -> Detection -> Matching -> Segmentation -> Remaining power
 
 Module 2 (once):
-  All matches -> Filter spikes (<3 min) -> Group sessions (30-min gap)
-             -> Phase sync -> Classify -> Confidence score -> JSON output
+  All matches -> Filter spikes (<3 min) -> Group sessions (30-min gap) -> Split sessions
+             -> Classify (boiler -> central AC -> regular AC) -> Confidence score -> JSON output
 ```
 
 Each iteration subtracts detected device power from the total, revealing smaller devices hidden underneath.

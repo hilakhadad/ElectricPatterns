@@ -22,7 +22,7 @@ DEFAULT_SESSION_GAP_MINUTES = 30    # user requested ~30 (was 60 in legacy code)
 # ============================================================================
 # Boiler classification
 # ============================================================================
-BOILER_MIN_DURATION = 25            # minutes
+BOILER_MIN_DURATION = 15            # minutes
 BOILER_MIN_MAGNITUDE = 1500         # watts
 BOILER_ISOLATION_WINDOW = 30        # minutes — no medium events nearby
 BOILER_MIN_COUNT = 3                # sessions to confirm pattern (informational)
@@ -31,6 +31,15 @@ BOILER_MIN_COUNT = 3                # sessions to confirm pattern (informational
 # Central AC classification
 # ============================================================================
 CENTRAL_AC_SYNC_TOLERANCE = 10      # minutes — phase sync tolerance
+
+# Central AC candidate thresholds (per-phase, more lenient than regular AC)
+CENTRAL_AC_MIN_MAGNITUDE = 800      # watts — same as regular AC
+CENTRAL_AC_MIN_CYCLES = 4           # cycles — same as regular AC
+CENTRAL_AC_MIN_CYCLE_DURATION = 3   # minutes — same as AC_MIN_CYCLE_DURATION
+CENTRAL_AC_MAX_CYCLE_DURATION = 30  # minutes — same as AC_MAX_CYCLE_DURATION
+CENTRAL_AC_MAX_MAGNITUDE_CV = 0.30  # 30% (vs regular AC's 20%)
+CENTRAL_AC_MAX_DURATION_CV = 0.40   # 40% — cycle durations should be consistent
+CENTRAL_AC_MAX_GAP_CV = 0.50        # 50% — gaps between cycles should be regular
 
 # ============================================================================
 # Regular AC classification

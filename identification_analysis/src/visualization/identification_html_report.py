@@ -532,7 +532,7 @@ def _build_house_html(
             <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
                 Water heater detection analysis: daily usage patterns, monthly consistency,
                 power magnitude stability, and dominant phase.
-                Boiler criteria: &ge;25 min, &ge;1500W, single-phase, isolated.
+                Boiler criteria: &ge;15 min, &ge;1500W, single-phase, isolated.
             </p>
             {boiler_html}
         </section>
@@ -789,8 +789,8 @@ def _build_aggregate_html(
         q = h['quality_score']
         q_str = f'{q:.2f}' if q is not None else '-'
         q_val = q if q is not None else 0
-        q_color = '#28a745' if q and q >= 0.7 else '#eab308' if q and q >= 0.4 else '#e67e22' if q else '#aaa'
-        c_color = '#28a745' if h['avg_confidence'] >= 0.7 else '#eab308' if h['avg_confidence'] >= 0.4 else '#e67e22'
+        q_color = '#28a745' if q and q >= 0.8 else '#eab308' if q and q >= 0.4 else '#e67e22' if q else '#aaa'
+        c_color = '#28a745' if h['avg_confidence'] >= 0.8 else '#eab308' if h['avg_confidence'] >= 0.4 else '#e67e22'
 
         days = h.get('days_span', 0)
         spd = h.get('sessions_per_day', 0)
