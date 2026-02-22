@@ -500,6 +500,31 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
         integrity_score -= min(2, n_anomalies / 50 * 2)
     metrics['anomaly_penalty'] = round(min(2, n_anomalies / 50 * 2) if n_anomalies > 0 else 0, 1)
 
+    # Penalty for zero-power months (up to 3 pts)
+    # Months where all 3 phases report 0W are a data acquisition failure.
+    zero_power_months = 0
+    total_months = 0
+    if 'timestamp' in data.columns:
+        data_zp = data.copy()
+        data_zp['timestamp'] = pd.to_datetime(data_zp['timestamp'])
+        data_zp['year_month'] = data_zp['timestamp'].dt.to_period('M')
+        for period, group in data_zp.groupby('year_month'):
+            total_months += 1
+            sum_cols = [c for c in phase_cols if c in group.columns]
+            if sum_cols:
+                total_power = group[sum_cols].sum(axis=1)
+                if total_power.mean() < 1.0 and len(group) > 100:
+                    zero_power_months += 1
+    metrics['zero_power_months'] = zero_power_months
+    metrics['total_months'] = total_months
+    if zero_power_months > 0 and total_months > 0:
+        zero_ratio = zero_power_months / total_months
+        zero_penalty = min(3, zero_ratio * 10)  # up to 3 pts
+        integrity_score -= zero_penalty
+        metrics['zero_power_penalty'] = round(zero_penalty, 1)
+    else:
+        metrics['zero_power_penalty'] = 0.0
+
     integrity_score = max(0, integrity_score)
     quality_score += integrity_score
     metrics['integrity_score'] = round(integrity_score, 1)

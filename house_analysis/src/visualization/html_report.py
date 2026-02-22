@@ -517,6 +517,38 @@ def _month_coverage_style(ratio: float) -> str:
         return 'color: #dc3545; font-weight: 700; background: #f8d7da; padding: 1px 4px; border-radius: 3px;'
 
 
+def _format_small_pct(pct: float, raw_pct: float = None, has_actual_data: bool = False) -> str:
+    """Format percentage, showing '<0.1%' when value rounds to 0 but isn't truly 0."""
+    if raw_pct is None:
+        raw_pct = pct
+    if pct == 0 and raw_pct > 0 and has_actual_data:
+        return '&lt;0.1%'
+    return f'{pct:.1f}%'
+
+
+def _build_zero_power_warning(quality: Dict[str, Any]) -> str:
+    """Build warning HTML for months with zero power readings."""
+    zero_months = quality.get('zero_power_months', 0)
+    total_months = quality.get('total_months', 0)
+    if zero_months == 0:
+        return ''
+
+    penalty = quality.get('zero_power_penalty', 0)
+    return f'''
+            <div class="card" style="border-left: 4px solid #e67e22;">
+                <h2 style="color: #e67e22;">Zero-Power Month Anomaly</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
+                    <strong>{zero_months} out of {total_months} months</strong> have average power near 0W across all phases.
+                    This indicates sensor offline, power disconnection, or data acquisition failure during these periods.
+                </p>
+                <div style="background: #fff3cd; border-radius: 6px; padding: 12px; font-size: 0.88em; color: #856404;">
+                    These months contain no usable data for device detection.
+                    Coverage percentage may show 100% (rows exist) but with all-zero readings.
+                    Quality score penalized by {penalty:.1f} points.
+                </div>
+            </div>'''
+
+
 def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
     """Build anomaly warning HTML if extreme values detected."""
     if not coverage.get('has_anomalies', False):
@@ -657,18 +689,29 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             month_coverage = month_info.get('coverage_ratio', 0)
             mini_chart = create_mini_hourly_chart(month_info.get('hourly_pattern', {}))
 
+            is_zero = month_info.get('is_zero_power', False)
+            zero_reason = month_info.get('zero_power_reason', '')
+            zero_border = 'border: 2px solid #dc3545;' if is_zero else ''
+            zero_badge = f'<span style="display:inline-block; background:#dc3545; color:white; font-size:0.7em; padding:1px 6px; border-radius:3px; margin-left:6px;">ANOMALY</span>' if is_zero else ''
+            zero_overlay = f'''
+                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+                    background:rgba(220,53,69,0.9); color:white; padding:4px 10px; border-radius:4px;
+                    font-size:0.78em; font-weight:600; white-space:nowrap;">{zero_reason}</div>
+            ''' if is_zero else ''
+
             months_cards_html += f"""
-            <div class="month-card">
+            <div class="month-card" style="{zero_border}">
                 <div class="month-header">
-                    <strong>{month_name} {year}</strong>
+                    <strong>{month_name} {year}</strong>{zero_badge}
                 </div>
                 <div class="month-stats">
                     <span>Days: {month_days}</span>
                     <span>Avg: {month_avg:.0f}W</span>
                     <span style="{_month_coverage_style(month_coverage)}">Coverage: {month_coverage:.0%}</span>
                 </div>
-                <div class="mini-chart">
+                <div class="mini-chart" style="position:relative;">
                     {mini_chart}
+                    {zero_overlay}
                 </div>
             </div>
             """
@@ -998,7 +1041,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-desc">Minutes with data / total minutes in time span</div>
                     </div>
                     <div class="overview-item" style="{'background: #e8daf0;' if coverage.get('no_data_pct', 0) >= 5 else ''}">
-                        <div class="overview-value" style="color: #6f42c1;">{coverage.get('no_data_pct', 0):.1f}%</div>
+                        <div class="overview-value" style="color: #6f42c1;">{_format_small_pct(coverage.get('no_data_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)}</div>
                         <div class="overview-label" style="color: #4a0e6b;">No Data</div>
                         <div class="overview-desc">Minutes with no reading within the measurement period (gaps + disconnections)</div>
                     </div>
@@ -1020,7 +1063,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 <div class="two-col-grid">
                     <div class="overview-item" style="{'background: #fce4ec;' if coverage.get('no_data_gap_pct', 0) >= 10 else 'background: #f8f9fa;'}">
                         <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">No-Data Gaps (Missing Rows)</div>
-                        <div style="font-size: 1.4em; font-weight: 700; color: {'#dc3545' if coverage.get('no_data_gap_pct', 0) >= 10 else '#6f42c1'};">{coverage.get('no_data_gap_pct', 0):.1f}%</div>
+                        <div style="font-size: 1.4em; font-weight: 700; color: {'#dc3545' if coverage.get('no_data_gap_pct', 0) >= 10 else '#6f42c1'};">{_format_small_pct(coverage.get('no_data_gap_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)}</div>
                         <div class="phase-list" style="margin-top: 6px;">
                             <div class="phase-row">{coverage.get('no_data_gap_minutes', 0):,} minutes missing</div>
                             <div class="phase-row">{coverage.get('no_data_gap_count', 0)} separate gaps</div>
@@ -1040,12 +1083,13 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 </div>
                 <div style="margin-top: 10px; padding: 10px; background: #f0f4ff; border-radius: 6px; font-size: 0.85em; color: #555;">
                     <strong>Total data loss:</strong> {quality.get('total_data_loss_pct', 0):.1f}%
-                    (No-Data {coverage.get('no_data_gap_pct', 0):.1f}% + NaN {coverage.get('nan_gap_pct', 0):.1f}%)
+                    (No-Data {_format_small_pct(coverage.get('no_data_gap_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)} + NaN {coverage.get('nan_gap_pct', 0):.1f}%)
                     &mdash; Continuity: <span class="badge {nan_cont_class}">{nan_cont_text}</span>
                 </div>
             </div>
 
             {_build_anomaly_warning(coverage)}
+            {_build_zero_power_warning(quality)}
 
             <!-- Per-Phase NaN Details -->
             <div class="card">

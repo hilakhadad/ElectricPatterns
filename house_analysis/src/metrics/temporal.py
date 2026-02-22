@@ -265,6 +265,18 @@ def calculate_temporal_patterns_by_period(data: pd.DataFrame, phase_cols: list =
                 'mean': [float(hourly_month.get(h, 0)) if not pd.isna(hourly_month.get(h, 0)) else 0 for h in range(24)]
             }
 
+            # Anomaly: zero-power month (all phases report 0 or near-0)
+            month_max_power = float(month_data['total_power'].max()) if len(month_data) > 0 else 0
+            if month_metrics['avg_power'] < 1.0 and len(month_data) > 100:
+                month_metrics['is_zero_power'] = True
+                month_metrics['zero_power_reason'] = (
+                    'All readings are 0W — sensor offline or disconnected'
+                    if month_max_power < 1.0 else
+                    'Average power near 0W — mostly dead readings'
+                )
+            else:
+                month_metrics['is_zero_power'] = False
+
             year_metrics['months'][int(month)] = month_metrics
 
         result['by_year'][int(year)] = year_metrics

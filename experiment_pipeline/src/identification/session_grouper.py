@@ -154,6 +154,11 @@ def _empty_spike_stats() -> dict:
         'spike_total_minutes': 0.0,
         'kept_count': 0,
         'kept_total_minutes': 0.0,
+        'short_count': 0,
+        'short_minutes': 0.0,
+        'long_count': 0,
+        'long_minutes': 0.0,
+        'long_duration_threshold': 25,
         'by_iteration': {},
         'by_phase': {},
     }
@@ -167,6 +172,19 @@ def _compute_spike_stats(
     """Compute statistics about filtered transient events."""
     spike_minutes = float(spikes['duration'].sum()) if len(spikes) > 0 else 0.0
     kept_minutes = float(kept['duration'].sum()) if len(kept) > 0 else 0.0
+
+    # Duration breakdown of kept events: short (3-25 min) vs long (>=25 min)
+    # Aligns with device classification: AC cycles are 3-30 min, boilers >=25 min
+    LONG_DURATION_THRESHOLD = 25  # minutes — matches boiler min duration
+    if len(kept) > 0:
+        short_mask = kept['duration'] < LONG_DURATION_THRESHOLD
+        short_count = int(short_mask.sum())
+        long_count = int((~short_mask).sum())
+        short_minutes = round(float(kept.loc[short_mask, 'duration'].sum()), 1)
+        long_minutes = round(float(kept.loc[~short_mask, 'duration'].sum()), 1)
+    else:
+        short_count = long_count = 0
+        short_minutes = long_minutes = 0.0
 
     # Breakdown by iteration
     by_iteration = {}
@@ -201,6 +219,11 @@ def _compute_spike_stats(
         'spike_total_minutes': round(spike_minutes, 1),
         'kept_count': len(kept),
         'kept_total_minutes': round(kept_minutes, 1),
+        'short_count': short_count,
+        'short_minutes': short_minutes,
+        'long_count': long_count,
+        'long_minutes': long_minutes,
+        'long_duration_threshold': LONG_DURATION_THRESHOLD,
         'by_iteration': by_iteration,
         'by_phase': by_phase,
     }

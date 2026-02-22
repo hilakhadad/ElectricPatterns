@@ -1283,3 +1283,246 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     </div>'''
 
     return f'{cards_html}{charts_html}{pie_html}{explanation}'
+
+
+# ---------------------------------------------------------------------------
+# Per-session power visualization (original / remaining / segregated)
+# ---------------------------------------------------------------------------
+
+def create_session_power_plots(
+    sessions: List[Dict],
+    summarized_data,  # pd.DataFrame with timestamp, original_wN, remaining_wN columns
+    margin_minutes: int = 60,
+    max_sessions: int = 50,
+) -> str:
+    """Create per-session power charts showing original, remaining, and segregated power.
+
+    For each classified session, renders a Plotly chart with:
+      - Original power (blue) — what the sensor read
+      - Remaining power (gray) — after all device extraction
+      - Segregated power (green fill) — what was attributed to devices
+
+    Args:
+        sessions: List of session dicts from device_sessions JSON
+        summarized_data: DataFrame with columns: timestamp, original_wN, remaining_wN
+        margin_minutes: Minutes to show before and after session (default: 60)
+        max_sessions: Maximum number of session charts to generate
+
+    Returns:
+        HTML string with all session charts
+    """
+    import pandas as pd
+
+    if summarized_data is None or summarized_data.empty or not sessions:
+        return '<p style="color: #888;">No power data available for session visualization.</p>'
+
+    # Ensure timestamp is datetime
+    if not pd.api.types.is_datetime64_any_dtype(summarized_data['timestamp']):
+        summarized_data = summarized_data.copy()
+        summarized_data['timestamp'] = pd.to_datetime(summarized_data['timestamp'])
+    summarized_data = summarized_data.sort_values('timestamp').reset_index(drop=True)
+
+    # Filter to classified sessions only, sorted by confidence (highest first)
+    classified = [s for s in sessions if s.get('device_type') not in ('unknown', None)]
+    classified.sort(key=lambda s: s.get('confidence', 0), reverse=True)
+
+    if not classified:
+        return '<p style="color: #888;">No classified sessions to visualize.</p>'
+
+    classified = classified[:max_sessions]
+
+    # Group by device type for organized display
+    by_type = {}
+    for s in classified:
+        dtype = s.get('device_type', 'unknown')
+        by_type.setdefault(dtype, []).append(s)
+
+    type_order = ['boiler', 'central_ac', 'regular_ac']
+    type_labels = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC'}
+
+    charts_html_parts = []
+    chart_id = 0
+
+    for dtype in type_order:
+        if dtype not in by_type:
+            continue
+        dtype_sessions = by_type[dtype]
+        color = DEVICE_COLORS.get(dtype, GRAY)
+        label = type_labels.get(dtype, dtype)
+
+        charts_html_parts.append(
+            f'<h3 style="color:{color}; margin-top:20px; margin-bottom:10px;">'
+            f'{label} ({len(dtype_sessions)} sessions)</h3>'
+        )
+
+        for s in dtype_sessions:
+            chart_html = _render_session_chart(
+                s, summarized_data, margin_minutes, chart_id, color
+            )
+            charts_html_parts.append(chart_html)
+            chart_id += 1
+
+    if not charts_html_parts:
+        return '<p style="color: #888;">No session charts generated.</p>'
+
+    return '\n'.join(charts_html_parts)
+
+
+def _render_session_chart(
+    session: Dict,
+    summarized_data,  # pd.DataFrame
+    margin_minutes: int,
+    chart_id: int,
+    device_color: str,
+) -> str:
+    """Render a single session's power chart."""
+    import pandas as pd
+
+    start_str = session.get('start', '')
+    end_str = session.get('end', '')
+    if not start_str or not end_str:
+        return ''
+
+    session_start = pd.Timestamp(start_str)
+    session_end = pd.Timestamp(end_str)
+    margin = pd.Timedelta(minutes=margin_minutes)
+
+    window_start = session_start - margin
+    window_end = session_end + margin
+
+    # Slice data to window
+    mask = (summarized_data['timestamp'] >= window_start) & (summarized_data['timestamp'] <= window_end)
+    window_data = summarized_data[mask]
+
+    if window_data.empty:
+        return ''
+
+    # Determine phases for this session
+    phases = session.get('phases', [])
+    if not phases:
+        # Try to infer from constituent events
+        events = session.get('constituent_events', [])
+        phases = list(set(e.get('phase', '') for e in events if e.get('phase')))
+    if not phases:
+        return ''
+
+    # Session metadata
+    dtype = session.get('device_type', 'unknown')
+    confidence = session.get('confidence', 0)
+    duration = session.get('duration_minutes', 0)
+    magnitude = session.get('avg_cycle_magnitude_w', 0)
+    cycles = session.get('cycle_count', 0)
+
+    label_map = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC'}
+    dtype_label = label_map.get(dtype, dtype)
+
+    # Build chart: one subplot per phase
+    timestamps = window_data['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist()
+
+    traces = []
+    phase_colors = {'w1': '#007bff', 'w2': '#dc3545', 'w3': '#28a745'}
+
+    for phase in phases:
+        orig_col = f'original_{phase}'
+        remain_col = f'remaining_{phase}'
+
+        if orig_col not in window_data.columns or remain_col not in window_data.columns:
+            continue
+
+        original = window_data[orig_col].tolist()
+        remaining = window_data[remain_col].tolist()
+        segregated = [(o - r) if (o is not None and r is not None) else 0
+                      for o, r in zip(original, remaining)]
+
+        ph_color = phase_colors.get(phase, '#333')
+        phase_label = phase.upper()
+
+        # Original power line
+        traces.append({
+            'x': timestamps, 'y': original, 'type': 'scatter', 'mode': 'lines',
+            'name': f'{phase_label} Original',
+            'line': {'color': ph_color, 'width': 2},
+            'hovertemplate': f'{phase_label} Original: %{{y:.0f}}W<br>%{{x}}<extra></extra>',
+        })
+
+        # Remaining power line
+        traces.append({
+            'x': timestamps, 'y': remaining, 'type': 'scatter', 'mode': 'lines',
+            'name': f'{phase_label} Remaining',
+            'line': {'color': ph_color, 'width': 1.5, 'dash': 'dash'},
+            'hovertemplate': f'{phase_label} Remaining: %{{y:.0f}}W<br>%{{x}}<extra></extra>',
+        })
+
+        # Segregated power (filled area)
+        traces.append({
+            'x': timestamps, 'y': segregated, 'type': 'scatter', 'mode': 'lines',
+            'name': f'{phase_label} Segregated',
+            'fill': 'tozeroy',
+            'fillcolor': ph_color.replace(')', ',0.2)').replace('rgb', 'rgba') if 'rgb' in ph_color
+                        else _hex_to_rgba(ph_color, 0.2),
+            'line': {'color': ph_color, 'width': 1, 'dash': 'dot'},
+            'hovertemplate': f'{phase_label} Segregated: %{{y:.0f}}W<br>%{{x}}<extra></extra>',
+        })
+
+    if not traces:
+        return ''
+
+    # Session time range markers
+    start_idx = session_start.strftime('%Y-%m-%d %H:%M')
+    end_idx = session_end.strftime('%Y-%m-%d %H:%M')
+
+    shapes = [
+        # Session start vertical line
+        {'type': 'line', 'x0': start_idx, 'x1': start_idx, 'y0': 0, 'y1': 1,
+         'yref': 'paper', 'line': {'color': device_color, 'width': 2, 'dash': 'dash'}},
+        # Session end vertical line
+        {'type': 'line', 'x0': end_idx, 'x1': end_idx, 'y0': 0, 'y1': 1,
+         'yref': 'paper', 'line': {'color': device_color, 'width': 2, 'dash': 'dash'}},
+        # Session highlight rectangle
+        {'type': 'rect', 'x0': start_idx, 'x1': end_idx, 'y0': 0, 'y1': 1,
+         'yref': 'paper', 'fillcolor': device_color, 'opacity': 0.07, 'line': {'width': 0}},
+    ]
+
+    layout = {
+        'height': 300,
+        'margin': {'l': 50, 'r': 20, 't': 10, 'b': 40},
+        'xaxis': {'title': '', 'tickangle': -30, 'tickfont': {'size': 10}},
+        'yaxis': {'title': 'Power (W)', 'titlefont': {'size': 11}},
+        'legend': {'orientation': 'h', 'y': -0.3, 'x': 0, 'font': {'size': 10}},
+        'plot_bgcolor': '#fafafa',
+        'paper_bgcolor': 'white',
+        'shapes': shapes,
+        'hovermode': 'x unified',
+    }
+
+    traces_json = json.dumps(traces)
+    layout_json = json.dumps(layout)
+    div_id = f'session_power_{chart_id}'
+
+    # Header with session info
+    phases_str = ', '.join(p.upper() for p in phases)
+    header = (
+        f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:4px; flex-wrap:wrap;">'
+        f'<span style="font-weight:600; color:#333;">'
+        f'{session_start.strftime("%Y-%m-%d %H:%M")} — {session_end.strftime("%H:%M")}</span>'
+        f'<span style="background:{device_color}; color:white; padding:1px 8px; border-radius:3px; font-size:0.82em;">'
+        f'{dtype_label}</span>'
+        f'<span style="font-size:0.85em; color:#666;">Confidence: {confidence:.2f} | '
+        f'Duration: {duration:.0f}min | Magnitude: {magnitude:.0f}W | '
+        f'Cycles: {cycles} | Phase: {phases_str}</span>'
+        f'</div>'
+    )
+
+    return f'''
+    <div style="margin-bottom:16px; border:1px solid #e2e8f0; border-radius:8px; padding:12px; background:white;">
+        {header}
+        <div id="{div_id}"></div>
+        <script>Plotly.newPlot('{div_id}', {traces_json}, {layout_json}, {{displayModeBar:false, responsive:true}});</script>
+    </div>'''
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert hex color to rgba string."""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f'rgba({r},{g},{b},{alpha})'

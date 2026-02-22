@@ -43,7 +43,10 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics['expected_minutes'] = expected_minutes
         metrics['actual_minutes'] = actual_minutes
         metrics['coverage_ratio'] = min(actual_minutes / expected_minutes, 1.0) if expected_minutes > 0 else 1.0
-        metrics['no_data_pct'] = round((1 - metrics['coverage_ratio']) * 100, 1)
+        raw_no_data_pct = (1 - metrics['coverage_ratio']) * 100
+        metrics['no_data_pct'] = round(raw_no_data_pct, 1)
+        # Track if there are missing minutes even when pct rounds to 0.0%
+        metrics['no_data_pct_raw'] = raw_no_data_pct
 
     # NaN tracking per phase (within loaded rows)
     nan_pcts = []

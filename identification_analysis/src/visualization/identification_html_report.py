@@ -40,10 +40,55 @@ from visualization.identification_charts import (
     create_unclassified_analysis,
     create_device_activations_detail,
     create_spike_analysis,
+    create_session_power_plots,
 )
 from visualization.classification_charts import create_quality_section
 
 logger = logging.getLogger(__name__)
+
+
+def _load_summarized_power(experiment_dir: Path, house_id: str):
+    """Load summarized power data from the last pipeline iteration.
+
+    Concatenates all monthly summarized pkl files from the last run directory.
+    Returns a DataFrame with columns: timestamp, original_wN, remaining_wN.
+    """
+    import pandas as pd
+
+    # Find the last run directory (highest run number)
+    run_dirs = sorted(experiment_dir.glob("run_*"), key=lambda d: d.name)
+    if not run_dirs:
+        return None
+
+    last_run = run_dirs[-1]
+    summarized_dir = last_run / f"house_{house_id}" / "summarized"
+
+    if not summarized_dir.exists():
+        logger.warning(f"No summarized directory found at {summarized_dir}")
+        return None
+
+    pkl_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
+    if not pkl_files:
+        logger.warning(f"No summarized pkl files found in {summarized_dir}")
+        return None
+
+    dfs = []
+    for pkl_file in pkl_files:
+        try:
+            df = pd.read_pickle(pkl_file)
+            dfs.append(df)
+        except Exception as e:
+            logger.warning(f"Failed to load {pkl_file}: {e}")
+
+    if not dfs:
+        return None
+
+    combined = pd.concat(dfs, ignore_index=True)
+    combined['timestamp'] = pd.to_datetime(combined['timestamp'])
+    combined = combined.sort_values('timestamp').reset_index(drop=True)
+
+    logger.info(f"Loaded {len(combined)} rows of summarized power data from {len(pkl_files)} files")
+    return combined
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +176,15 @@ def generate_identification_report(
     except Exception as e:
         logger.warning(f"Classification quality failed for house {house_id}: {e}")
 
+    # Per-session power visualization (original / remaining / segregated)
+    session_power_html = ''
+    try:
+        summarized_data = _load_summarized_power(experiment_dir, house_id)
+        if summarized_data is not None:
+            session_power_html = create_session_power_plots(sessions, summarized_data)
+    except Exception as e:
+        logger.warning(f"Session power visualization failed for house {house_id}: {e}")
+
     # Device activations detail (flat format)
     activations_detail_html = ''
     if not skip_activations_detail:
@@ -153,6 +207,7 @@ def generate_identification_report(
         heatmap_html=heatmap_html,
         quality_html=quality_html,
         unclassified_html=unclassified_html,
+        session_power_html=session_power_html,
         activations_detail_html=activations_detail_html,
         summary=summary,
     )
@@ -181,6 +236,7 @@ def _build_house_html(
     heatmap_html: str,
     quality_html: str,
     unclassified_html: str,
+    session_power_html: str,
     activations_detail_html: str,
     summary: Dict[str, Any],
 ) -> str:
@@ -341,6 +397,19 @@ def _build_house_html(
                 not covered by the current heuristic rules.
             </p>
             {unclassified_html}
+        </section>
+
+        <section>
+            <h2>Session Power Visualization</h2>
+            <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
+                Per-session power traces: <strong>solid line</strong> = original sensor reading,
+                <strong>dashed line</strong> = remaining power after extraction,
+                <strong>filled area</strong> = segregated (extracted) power.
+                Each chart shows 1 hour before and after the session.
+                Vertical dashed lines mark session boundaries.
+                Sessions are sorted by confidence (highest first).
+            </p>
+            {session_power_html}
         </section>
 
         {activations_section_html}
