@@ -329,6 +329,23 @@ def run_pipeline(
 
     # Dynamic post-pipeline steps
     if is_dynamic and iterations_completed > 0:
+        # Guided cycle recovery (before identification, after all iterations)
+        use_guided_recovery = getattr(exp_config, 'use_guided_recovery', False)
+        if use_guided_recovery:
+            try:
+                from disaggregation.pipeline.recovery_step import process_guided_recovery
+                recovery_result = process_guided_recovery(
+                    output_path=output_path,
+                    house_id=house_id,
+                    threshold_schedule=threshold_schedule,
+                    config=exp_config,
+                    run_logger=logger,
+                )
+                logger.info(f"Recovery: {recovery_result}")
+            except Exception as e:
+                logger.error(f"Error in guided recovery: {e}")
+                logger.error(traceback.format_exc())
+
         _run_dynamic_post_pipeline(
             output_path=output_path,
             house_id=house_id,

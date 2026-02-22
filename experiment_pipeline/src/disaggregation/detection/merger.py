@@ -60,6 +60,106 @@ def merge_overlapping_events(events_df: pd.DataFrame, max_gap_minutes: int = 0,
     return pd.DataFrame(merged).reset_index(drop=True)
 
 
+def merge_split_off_events(off_events: pd.DataFrame, on_events: pd.DataFrame,
+                           max_gap_minutes: int = 2,
+                           data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+    """
+    Merge OFF events that represent a split device shutdown.
+
+    More relaxed than merge_consecutive_off_events — does NOT require both events
+    to be instantaneous. Handles cases where a device shuts down in two steps
+    due to measurement error (e.g., boiler 2500W → 1200W → 0W).
+
+    Criteria:
+    1. Same phase (implicit — called per-phase)
+    2. Gap between first OFF end and second OFF start <= max_gap_minutes
+    3. No ON event between them
+    4. Power between them is elevated (device still running):
+       power_between >= |OFF_2.magnitude| * 0.5
+
+    Args:
+        off_events: DataFrame with OFF events ('start', 'end', 'magnitude')
+        on_events: DataFrame with ON events (to check for intervening ONs)
+        max_gap_minutes: Maximum gap between split OFF events (default 2)
+        data: DataFrame with timestamp as index (for power lookup and magnitude recalc)
+        phase: Phase column name (for magnitude recalculation from actual values)
+
+    Returns:
+        DataFrame with merged OFF events
+    """
+    if len(off_events) <= 1:
+        return off_events
+
+    # Sort by start time
+    df = off_events.sort_values('start').reset_index(drop=True)
+
+    # Get ON event times for intervening check
+    on_starts = set()
+    if on_events is not None and len(on_events) > 0:
+        on_starts = set(on_events['start'])
+
+    merged = []
+    current = df.iloc[0].copy()
+
+    for i in range(1, len(df)):
+        next_event = df.iloc[i]
+
+        gap_minutes = (next_event['start'] - current['end']).total_seconds() / 60
+
+        # Check if any ON event occurs between current end and next start
+        has_on_between = False
+        if on_starts:
+            for on_start in on_starts:
+                if current['end'] < on_start < next_event['start']:
+                    has_on_between = True
+                    break
+
+        # Check power between the two OFFs (device should still be running)
+        power_ok = False
+        if data is not None and phase is not None and gap_minutes >= 0:
+            try:
+                between_start = current['end']
+                between_end = next_event['start']
+                between_data = data.loc[between_start:between_end, phase]
+                if len(between_data) > 0:
+                    power_between = between_data.mean()
+                    # Device should still be running: power between drops should be
+                    # at least 50% of the second drop's magnitude
+                    power_ok = power_between >= abs(next_event['magnitude']) * 0.5
+                else:
+                    # Adjacent events (no data between) — OK to merge
+                    power_ok = True
+            except (KeyError, TypeError):
+                power_ok = False
+
+        # Merge if: close gap, no ON between, power still elevated
+        if gap_minutes <= max_gap_minutes and not has_on_between and power_ok:
+            # Merge: extend boundaries, recalculate magnitude from actual values
+            new_end = max(current['end'], next_event['end'])
+
+            if data is not None and phase is not None:
+                # Recalculate magnitude from phase values
+                before_start = current['start'] - pd.Timedelta(minutes=1)
+                try:
+                    value_before = data.loc[before_start, phase]
+                    value_end = data.loc[new_end, phase]
+                    new_magnitude = value_end - value_before
+                except (KeyError, TypeError):
+                    new_magnitude = current['magnitude'] + next_event['magnitude']
+            else:
+                new_magnitude = current['magnitude'] + next_event['magnitude']
+
+            current['end'] = new_end
+            current['magnitude'] = new_magnitude
+        else:
+            merged.append(current)
+            current = next_event.copy()
+
+    merged.append(current)
+
+    return pd.DataFrame(merged).reset_index(drop=True)
+
+
 def merge_consecutive_on_events(on_events: pd.DataFrame, off_events: pd.DataFrame,
                                  max_gap_minutes: int = 2,
                                  data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:

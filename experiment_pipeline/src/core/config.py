@@ -33,6 +33,14 @@ class ExperimentConfig:
     tail_min_residual_fraction: float = 0.05
     threshold_schedule: Optional[List[int]] = None  # Dynamic threshold: list of thresholds per iteration
     use_nan_imputation: bool = False  # Fill short NaN gaps at runtime to prevent false diff() events
+    use_inrush_normalization: bool = False  # Detect and normalize inrush spikes in ON/OFF events
+    inrush_settling_factor: float = 0.7  # Minimum settled/spike ratio to trigger (0.7 = >30% drop)
+    inrush_max_settling_minutes: int = 5  # Maximum minutes to look for settling
+    use_split_off_merger: bool = False  # Merge split OFF events from measurement errors
+    split_off_max_gap_minutes: int = 2  # Maximum gap between split OFF events
+    use_guided_recovery: bool = False  # Search for missed AC cycles at lower threshold (off by default)
+    guided_recovery_threshold_factor: float = 0.6  # Recovery threshold = avg_magnitude * factor
+    guided_recovery_min_cycles: int = 3  # Minimum matched cycles to establish template
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -57,6 +65,14 @@ class ExperimentConfig:
             'tail_min_residual_fraction': self.tail_min_residual_fraction,
             'threshold_schedule': self.threshold_schedule,
             'use_nan_imputation': self.use_nan_imputation,
+            'use_inrush_normalization': self.use_inrush_normalization,
+            'inrush_settling_factor': self.inrush_settling_factor,
+            'inrush_max_settling_minutes': self.inrush_max_settling_minutes,
+            'use_split_off_merger': self.use_split_off_merger,
+            'split_off_max_gap_minutes': self.split_off_max_gap_minutes,
+            'use_guided_recovery': self.use_guided_recovery,
+            'guided_recovery_threshold_factor': self.guided_recovery_threshold_factor,
+            'guided_recovery_min_cycles': self.guided_recovery_min_cycles,
         }
 
     def to_json(self, file_path: str):
@@ -104,6 +120,25 @@ EXPERIMENTS = {
         use_tail_extension=True,
         threshold_schedule=[2000, 1500, 1100, 800],
         use_nan_imputation=True,
+    ),
+
+    'exp013_inrush_splitoff': ExperimentConfig(
+        exp_id='exp013',
+        description='exp012 + inrush normalization + split-OFF merger (fixes pits, split shutdowns, improves matching)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_inrush_normalization=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
     ),
 }
 
