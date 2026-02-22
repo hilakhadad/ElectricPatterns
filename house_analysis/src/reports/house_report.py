@@ -157,15 +157,6 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['low_data_volume'] = 'low_data_volume' in quality_flags
     flags['low_data_integrity'] = 'low_data_integrity' in quality_flags
 
-    # Quality scoring component flags (from quality.py quality_flags)
-    quality_flags = quality.get('quality_flags', [])
-    flags['low_sharp_entry'] = 'low_sharp_entry' in quality_flags
-    flags['low_device_signature'] = 'low_device_signature' in quality_flags
-    flags['low_power_profile'] = 'low_power_profile' in quality_flags
-    flags['low_variability'] = 'low_variability' in quality_flags
-    flags['low_data_volume'] = 'low_data_volume' in quality_flags
-    flags['low_data_integrity'] = 'low_data_integrity' in quality_flags
-
     return flags
 
 

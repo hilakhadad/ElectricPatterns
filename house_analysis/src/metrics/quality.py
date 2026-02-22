@@ -536,8 +536,74 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['balance_score'] = round(power_profile_score, 1)
     metrics['noise_score'] = round(variability_score, 1)
 
-    # Ensure bounds
-    metrics['quality_score'] = max(0, min(100, round(quality_score, 1)))
+    # Save base score before anomaly penalties
+    base_score = max(0, min(100, round(quality_score, 1)))
+    metrics['base_quality_score'] = base_score
+
+    # ===== ANOMALY PENALTIES =====
+    # Critical data-reliability issues that the 6-component score doesn't capture.
+    # Applied as additive deductions from the base score.
+    anomaly_penalties = []
+
+    # Dead phase: devices on that phase are undetectable (-15 per phase)
+    n_dead = len(metrics.get('dead_phases', []))
+    if n_dead > 0:
+        dead_names = ', '.join(metrics['dead_phases'])
+        deduction = min(30, n_dead * 15)
+        anomaly_penalties.append({
+            'reason': f'dead_phase ({dead_names})',
+            'deduction': deduction,
+        })
+
+    # Faulty NaN phase: ≥10% NaN on active phase (-10 per phase)
+    n_faulty = len(metrics.get('faulty_nan_phases', []))
+    if n_faulty > 0:
+        faulty_names = ', '.join(metrics['faulty_nan_phases'])
+        deduction = min(20, n_faulty * 10)
+        anomaly_penalties.append({
+            'reason': f'faulty_nan_phase ({faulty_names})',
+            'deduction': deduction,
+        })
+
+    # Very low coverage (<50%): half the data is missing
+    cov = coverage_ratio if coverage_ratio is not None else 1.0
+    if cov < 0.50:
+        anomaly_penalties.append({
+            'reason': f'very_low_coverage ({cov:.0%})',
+            'deduction': 15,
+        })
+    elif cov < 0.70:
+        anomaly_penalties.append({
+            'reason': f'low_coverage ({cov:.0%})',
+            'deduction': 8,
+        })
+
+    # Extreme outliers (>20kW readings) distort all statistics and charts
+    if n_anomalies > 0:
+        anomaly_penalties.append({
+            'reason': f'extreme_outliers ({n_anomalies} readings >20kW)',
+            'deduction': 5,
+        })
+
+    # Fragmented / discontinuous data
+    total_loss = metrics.get('total_data_loss_pct', 0)
+    if total_loss >= 40:
+        anomaly_penalties.append({
+            'reason': f'fragmented_data ({total_loss:.0f}% data loss)',
+            'deduction': 10,
+        })
+    elif total_loss >= 15:
+        anomaly_penalties.append({
+            'reason': f'discontinuous_data ({total_loss:.0f}% data loss)',
+            'deduction': 5,
+        })
+
+    total_penalty = sum(p['deduction'] for p in anomaly_penalties)
+    final_score = max(0, base_score - total_penalty)
+
+    metrics['anomaly_penalties'] = total_penalty
+    metrics['anomaly_penalty_details'] = anomaly_penalties
+    metrics['quality_score'] = round(final_score, 1)
 
     # ===== QUALITY FLAGS (per-component tags for insufficient scores) =====
     # Each flag indicates the house doesn't meet sufficient level for that component.

@@ -535,7 +535,7 @@ def _build_zero_power_warning(quality: Dict[str, Any]) -> str:
 
     penalty = quality.get('zero_power_penalty', 0)
     return f'''
-            <div class="card" style="border-left: 4px solid #e67e22;">
+            <div class="card" id="section-zero-power-warning" style="border-left: 4px solid #e67e22;">
                 <h2 style="color: #e67e22;">Zero-Power Month Anomaly</h2>
                 <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
                     <strong>{zero_months} out of {total_months} months</strong> have average power near 0W across all phases.
@@ -566,7 +566,7 @@ def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
     details_html = '<br>'.join(phase_details)
 
     return f'''
-            <div class="card" style="border-left: 4px solid #dc3545;">
+            <div class="card" id="section-anomaly-warning" style="border-left: 4px solid #dc3545;">
                 <h2 style="color: #dc3545;">Anomaly Warning</h2>
                 <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
                     <strong>{anomaly_count}</strong> readings exceed 20kW per phase &mdash; almost certainly sensor errors.
@@ -578,6 +578,113 @@ def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
                 <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
                     Consider filtering these outliers before analysis. Quality score penalized by {coverage.get('anomaly_count', 0)} anomalous readings.
                 </p>
+            </div>'''
+
+
+def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
+                          coverage: Dict[str, Any]) -> str:
+    """Build clickable findings tags section for the top of per-house report."""
+
+    # Define all possible findings: (flag_key, label, severity, target_section_id)
+    # severity: 'critical', 'warning', 'info'
+    findings = []
+
+    # --- Critical findings ---
+    if flags.get('has_dead_phase'):
+        dead = quality.get('dead_phases', [])
+        findings.append(('critical', f'Dead Phase ({", ".join(dead)})', 'section-data-loss'))
+
+    if flags.get('has_faulty_nan_phase'):
+        faulty = quality.get('faulty_nan_phases', [])
+        findings.append(('critical', f'Faulty NaN Phase ({", ".join(faulty)})', 'section-data-loss'))
+
+    cov_ratio = coverage.get('coverage_ratio', 1)
+    if cov_ratio < 0.50:
+        findings.append(('critical', f'Very Low Coverage ({cov_ratio:.0%})', 'section-data-overview'))
+
+    nan_cont = quality.get('nan_continuity_label', '')
+    if nan_cont == 'fragmented':
+        loss = quality.get('total_data_loss_pct', 0)
+        findings.append(('critical', f'Fragmented Data ({loss:.0f}% loss)', 'section-data-loss'))
+
+    # --- Warning findings ---
+    if 0.50 <= cov_ratio < 0.70:
+        findings.append(('warning', f'Low Coverage ({cov_ratio:.0%})', 'section-data-overview'))
+
+    if coverage.get('has_anomalies', False):
+        count = coverage.get('anomaly_count', 0)
+        findings.append(('warning', f'Extreme Outliers ({count} readings >20kW)', 'section-anomaly-warning'))
+
+    if nan_cont == 'discontinuous':
+        loss = quality.get('total_data_loss_pct', 0)
+        findings.append(('warning', f'Discontinuous Data ({loss:.0f}% loss)', 'section-data-loss'))
+
+    zero_months = quality.get('zero_power_months', 0)
+    if zero_months > 0:
+        total_m = quality.get('total_months', 0)
+        findings.append(('warning', f'Zero-Power Months ({zero_months}/{total_m})', 'section-zero-power-warning'))
+
+    if flags.get('has_negative_values'):
+        findings.append(('warning', 'Negative Power Values', 'section-power-stats'))
+
+    if flags.get('unbalanced_phases'):
+        ratio = quality.get('phase_balance_ratio', 0)
+        findings.append(('warning', f'Unbalanced Phases', 'section-power-stats'))
+
+    # --- Info findings (low scoring components) ---
+    if flags.get('low_sharp_entry'):
+        findings.append(('info', 'Low Sharp Entry Rate', 'section-charts'))
+
+    if flags.get('low_device_signature'):
+        findings.append(('info', 'Low Device Signature', 'section-charts'))
+
+    if flags.get('low_power_profile'):
+        findings.append(('info', 'Low Power Profile', 'section-charts'))
+
+    if flags.get('low_variability'):
+        findings.append(('info', 'Low Variability', 'section-charts'))
+
+    if flags.get('low_data_volume'):
+        findings.append(('info', 'Low Data Volume', 'section-data-overview'))
+
+    if flags.get('low_data_integrity'):
+        findings.append(('info', 'Low Data Integrity', 'section-data-loss'))
+
+    if not findings:
+        return '''
+            <div class="card findings-section">
+                <h2>Findings</h2>
+                <div class="findings-ok">No significant issues found.</div>
+            </div>'''
+
+    tags_html = ''
+    for severity, label, target in findings:
+        tags_html += f'<a href="#{target}" class="finding-tag finding-tag-{severity}">{label}</a>\n'
+
+    # Penalty summary if anomaly penalties were applied
+    penalty_html = ''
+    penalty_total = quality.get('anomaly_penalties', 0)
+    if penalty_total > 0:
+        base = quality.get('base_quality_score', 0)
+        final = quality.get('quality_score', 0)
+        details = quality.get('anomaly_penalty_details', [])
+        reasons = ', '.join(f'-{d["deduction"]}pts ({d["reason"]})' for d in details)
+        penalty_html = f'''
+                <div class="penalty-summary">
+                    <strong>Score adjusted:</strong> Base {base:.0f} &minus; {penalty_total:.0f} penalty = <strong>{final:.0f}</strong>
+                    <br><span style="font-size: 0.9em;">{reasons}</span>
+                </div>'''
+
+    return f'''
+            <div class="card findings-section">
+                <h2>Findings</h2>
+                <p style="color: #666; font-size: 0.85em; margin-bottom: 8px;">
+                    Click a tag to jump to the relevant section.
+                </p>
+                <div class="findings-tags">
+                    {tags_html}
+                </div>
+                {penalty_html}
             </div>'''
 
 
@@ -643,6 +750,9 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     # Active flags
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
+
+    # Build findings tags
+    findings_html = _build_findings_tags(flags, quality, coverage)
 
     # Get years from temporal_by_period
     years_data = temporal_by_period.get('by_year', {})
@@ -998,6 +1108,66 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             display: inline-block;
             min-width: 28px;
         }}
+
+        /* Findings tags */
+        .findings-section {{
+            margin-bottom: 20px;
+        }}
+        .findings-tags {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }}
+        .finding-tag {{
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 0.15s, box-shadow 0.15s;
+            display: inline-block;
+        }}
+        .finding-tag:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }}
+        .finding-tag-critical {{
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }}
+        .finding-tag-warning {{
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }}
+        .finding-tag-info {{
+            background: #cce5ff;
+            color: #004085;
+            border: 1px solid #b8daff;
+        }}
+        .findings-ok {{
+            padding: 10px 16px;
+            background: #d4edda;
+            color: #155724;
+            border-radius: 8px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }}
+        .penalty-summary {{
+            margin-top: 10px;
+            padding: 10px 14px;
+            background: #fff3cd;
+            border-radius: 8px;
+            font-size: 0.85em;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }}
+        html {{
+            scroll-behavior: smooth;
+        }}
     </style>
 </head>
 <body>
@@ -1022,12 +1192,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 <div class="hero-score">{score:.0f}<span class="hero-max">/100</span></div>
                 <div class="hero-badge"><span class="badge {badge_class}">{badge_text}</span>{nan_badge_html}</div>
                 <div class="hero-subtitle">
-                    Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity
+                    {'Base score: ' + str(round(quality.get('base_quality_score', score))) + ' &minus; ' + str(round(quality.get('anomaly_penalties', 0))) + ' anomaly penalty' if quality.get('anomaly_penalties', 0) > 0 else 'Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity'}
                 </div>
             </div>
 
+            {findings_html}
+
             <!-- Data Overview -->
-            <div class="card">
+            <div class="card" id="section-data-overview">
                 <h2>Data Overview</h2>
                 <div class="overview-grid">
                     <div class="overview-item">
@@ -1054,7 +1226,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             </div>
 
             <!-- Data Loss Breakdown: NaN gaps vs No-Data gaps -->
-            <div class="card">
+            <div class="card" id="section-data-loss">
                 <h2>Data Loss Breakdown</h2>
                 <p style="color: #666; font-size: 0.85em; margin-bottom: 12px;">
                     Two types of data loss: <strong>No-Data gaps</strong> (entire rows missing &mdash; sensor offline)
@@ -1116,7 +1288,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             </div>
 
             <!-- Power Statistics -->
-            <div class="card">
+            <div class="card" id="section-power-stats">
                 <h2>Power Statistics</h2>
                 <div class="overview-grid">
                     <div class="overview-item">
@@ -1153,7 +1325,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             </div>
 
             <!-- Charts -->
-            <div class="card">
+            <div class="card" id="section-charts">
                 <h2>Power Patterns & Analysis</h2>
                 <div class="charts-grid">
                     <div class="chart-card chart-full-width">
@@ -1192,7 +1364,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card" id="section-flags">
                 <h2>Issues & Flags</h2>
                 <p class="flags">{flags_html}</p>
             </div>
