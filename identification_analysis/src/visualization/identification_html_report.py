@@ -47,28 +47,73 @@ logger = logging.getLogger(__name__)
 
 
 def _load_summarized_power(experiment_dir: Path, house_id: str):
-    """Load summarized power data from the last pipeline iteration.
+    """Load summarized power: true original from first run + final remaining from last run.
 
-    Concatenates all monthly summarized pkl files from the last run directory.
-    Returns a DataFrame with columns: timestamp, original_wN, remaining_wN.
+    Each pipeline iteration stores original_wN (input to THAT iteration) and
+    remaining_wN (output). So run_0 has the true raw original, and the last run
+    has the final remaining after all device extractions. Loading only the last
+    run would show original ≈ remaining (segregated ≈ 0) because most devices
+    were already extracted in earlier iterations.
+
+    Returns a DataFrame with columns: timestamp, original_wN, remaining_wN
+    where original comes from run_0 and remaining from the last run.
     """
     import pandas as pd
 
-    # Find the last run directory (highest run number)
-    run_dirs = sorted(experiment_dir.glob("run_*"), key=lambda d: d.name)
+    run_dirs = sorted(
+        [d for d in experiment_dir.glob("run_*") if d.is_dir()],
+        key=lambda d: d.name,
+    )
     if not run_dirs:
         return None
 
+    first_run = run_dirs[0]
     last_run = run_dirs[-1]
-    summarized_dir = last_run / f"house_{house_id}" / "summarized"
 
+    # Load first run (true original power)
+    first_df = _load_run_summarized_files(first_run, house_id)
+    if first_df is None:
+        return None
+
+    # Single run — use as-is
+    if first_run == last_run:
+        return first_df
+
+    # Load last run (final remaining power)
+    last_df = _load_run_summarized_files(last_run, house_id)
+    if last_df is None:
+        return first_df
+
+    # Merge: original_wN from first run + remaining_wN from last run
+    phases = ['w1', 'w2', 'w3']
+    orig_cols = ['timestamp'] + [f'original_{p}' for p in phases
+                                  if f'original_{p}' in first_df.columns]
+    remain_cols = ['timestamp'] + [f'remaining_{p}' for p in phases
+                                    if f'remaining_{p}' in last_df.columns]
+
+    merged = first_df[orig_cols].merge(last_df[remain_cols], on='timestamp', how='inner')
+
+    if merged.empty:
+        logger.warning("Merge produced empty result, falling back to first run data")
+        return first_df
+
+    logger.info(
+        f"Loaded summarized power: {len(merged)} rows "
+        f"(original from {first_run.name}, remaining from {last_run.name})"
+    )
+    return merged
+
+
+def _load_run_summarized_files(run_dir: Path, house_id: str):
+    """Load and concatenate summarized pkl files from a specific run directory."""
+    import pandas as pd
+
+    summarized_dir = run_dir / f"house_{house_id}" / "summarized"
     if not summarized_dir.exists():
-        logger.warning(f"No summarized directory found at {summarized_dir}")
         return None
 
     pkl_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
     if not pkl_files:
-        logger.warning(f"No summarized pkl files found in {summarized_dir}")
         return None
 
     dfs = []
@@ -85,8 +130,6 @@ def _load_summarized_power(experiment_dir: Path, house_id: str):
     combined = pd.concat(dfs, ignore_index=True)
     combined['timestamp'] = pd.to_datetime(combined['timestamp'])
     combined = combined.sort_values('timestamp').reset_index(drop=True)
-
-    logger.info(f"Loaded {len(combined)} rows of summarized power data from {len(pkl_files)} files")
     return combined
 
 
@@ -108,6 +151,127 @@ def _load_sessions(experiment_dir: Path, house_id: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.warning(f"Failed to load sessions JSON from {path}: {e}")
     return {}
+
+
+def _load_spike_intervals(experiment_dir: Path, house_id: str) -> dict:
+    """Load filtered spike matches (< 3 min) as time intervals per phase.
+
+    Returns dict: {phase: [(start_iso, end_iso), ...]}
+    """
+    import pandas as pd
+
+    MIN_DURATION = 3  # minutes — matches identification config
+    run_dirs = sorted(
+        [d for d in experiment_dir.glob("run_*") if d.is_dir()],
+        key=lambda d: d.name,
+    )
+    all_spikes = []
+    seen = set()  # deduplicate across runs by (phase, on_start)
+
+    for run_dir in run_dirs:
+        matches_dir = run_dir / f"house_{house_id}" / "matches"
+        if not matches_dir.exists():
+            continue
+        for pkl_file in sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")):
+            try:
+                df = pd.read_pickle(pkl_file)
+                if df.empty or 'duration' not in df.columns:
+                    continue
+                spikes = df[df['duration'] < MIN_DURATION].copy()
+                if spikes.empty:
+                    continue
+                # Deduplicate: same physical event may appear in multiple runs
+                new_rows = []
+                for _, row in spikes.iterrows():
+                    key = (row['phase'], str(row['on_start']))
+                    if key not in seen:
+                        seen.add(key)
+                        new_rows.append(row)
+                if new_rows:
+                    all_spikes.append(pd.DataFrame(new_rows))
+            except Exception:
+                continue
+
+    if not all_spikes:
+        return {}
+
+    combined = pd.concat(all_spikes, ignore_index=True)
+    result = {}
+    for phase in ['w1', 'w2', 'w3']:
+        phase_spikes = combined[combined['phase'] == phase]
+        if phase_spikes.empty:
+            continue
+        intervals = []
+        for _, row in phase_spikes.iterrows():
+            s = pd.Timestamp(row['on_start']).isoformat()
+            e = pd.Timestamp(row.get('off_end') or row.get('off_start') or row['on_start']).isoformat()
+            intervals.append((s, e))
+        result[phase] = sorted(intervals)
+
+    logger.info(f"Loaded {sum(len(v) for v in result.values())} spike intervals for house {house_id}")
+    return result
+
+
+def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
+    """Load all matches from all iterations as intervals per phase.
+
+    Returns dict: {phase: [(on_start_iso, off_end_iso, magnitude, duration), ...]}
+    Used by chart visualization to show individual match rectangles
+    instead of computing segregated = original - remaining.
+    """
+    import pandas as pd
+
+    run_dirs = sorted(
+        [d for d in experiment_dir.glob("run_*") if d.is_dir()],
+        key=lambda d: d.name,
+    )
+    all_dfs = []
+    for run_dir in run_dirs:
+        matches_dir = run_dir / f"house_{house_id}" / "matches"
+        if not matches_dir.exists():
+            continue
+        for pkl_file in sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")):
+            try:
+                df = pd.read_pickle(pkl_file)
+                if not df.empty:
+                    cols = ['phase', 'on_start', 'off_end', 'off_start',
+                            'on_magnitude', 'duration']
+                    available = [c for c in cols if c in df.columns]
+                    all_dfs.append(df[available].copy())
+            except Exception:
+                continue
+
+    if not all_dfs:
+        return {}
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    # Deduplicate by (phase, on_start)
+    combined['_key'] = combined['phase'] + '_' + combined['on_start'].astype(str)
+    combined = combined.drop_duplicates(subset='_key', keep='first').drop(columns=['_key'])
+    # Fill missing off_end
+    if 'off_end' in combined.columns:
+        combined['off_end'] = combined['off_end'].fillna(
+            combined.get('off_start', combined['on_start']))
+    else:
+        combined['off_end'] = combined.get('off_start', combined['on_start'])
+
+    result = {}
+    for phase in ['w1', 'w2', 'w3']:
+        pm = combined[combined['phase'] == phase]
+        if pm.empty:
+            continue
+        intervals = []
+        for _, row in pm.iterrows():
+            intervals.append((
+                pd.Timestamp(row['on_start']).isoformat(),
+                pd.Timestamp(row['off_end']).isoformat(),
+                int(round(abs(float(row['on_magnitude'])))),
+                round(float(row['duration']), 1) if pd.notna(row.get('duration', None)) else 0.0,
+            ))
+        result[phase] = sorted(intervals)
+
+    logger.info(f"Loaded {sum(len(v) for v in result.values())} match intervals for house {house_id}")
+    return result
 
 
 def _load_activations(experiment_dir: Path, house_id: str) -> list:
@@ -182,12 +346,19 @@ def generate_identification_report(
     except Exception as e:
         logger.warning(f"Failed to load summarized power for house {house_id}: {e}")
 
-    # Device activations detail (flat format) with expandable power charts
+    # Load all match intervals for chart visualization (individual match rectangles)
+    all_match_intervals = {}
+    try:
+        all_match_intervals = _load_all_match_intervals(experiment_dir, house_id)
+    except Exception as e:
+        logger.warning(f"Failed to load match intervals for house {house_id}: {e}")
+
+    # Device activations detail (session-level) with expandable power charts
     activations_detail_html = ''
     if not skip_activations_detail:
-        activations = _load_activations(experiment_dir, house_id)
         activations_detail_html = create_device_activations_detail(
-            activations, house_id=house_id, summarized_data=summarized_data,
+            sessions, house_id=house_id, summarized_data=summarized_data,
+            all_match_intervals=all_match_intervals,
         )
 
     # Build HTML

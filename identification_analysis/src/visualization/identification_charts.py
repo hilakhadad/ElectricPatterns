@@ -139,43 +139,55 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     '''
 
 
-def _parse_activation_row(act: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse a single activation into display-ready fields."""
-    on_start_raw = act.get('on_start')
-    off_end_raw = act.get('off_end') or act.get('off_start')
+def _parse_session_row(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a session (from device_sessions.json) into display-ready fields."""
+    start_raw = session.get('start', '')
+    end_raw = session.get('end', '')
 
-    date_str = on_time_str = off_time_str = ''
+    date_str = start_str = end_str = ''
 
-    if on_start_raw:
-        try:
-            on_dt = datetime.fromisoformat(str(on_start_raw))
-            date_str = on_dt.strftime('%Y-%m-%d')
-            on_time_str = on_dt.strftime('%H:%M')
-        except (ValueError, TypeError):
-            date_str = str(on_start_raw)[:10]
-            on_time_str = str(on_start_raw)[11:16] if len(str(on_start_raw)) > 16 else ''
+    if start_raw:
+        dt = _parse_iso(str(start_raw))
+        if dt:
+            date_str = dt.strftime('%Y-%m-%d')
+            start_str = dt.strftime('%H:%M')
+        else:
+            date_str = str(start_raw)[:10]
+            start_str = str(start_raw)[11:16] if len(str(start_raw)) > 16 else ''
 
-    if off_end_raw:
-        try:
-            off_dt = datetime.fromisoformat(str(off_end_raw))
-            off_time_str = off_dt.strftime('%H:%M')
-        except (ValueError, TypeError):
-            off_time_str = str(off_end_raw)[11:16] if len(str(off_end_raw)) > 16 else ''
+    if end_raw:
+        dt = _parse_iso(str(end_raw))
+        if dt:
+            end_str = dt.strftime('%H:%M')
+        else:
+            end_str = str(end_raw)[11:16] if len(str(end_raw)) > 16 else ''
 
-    duration = act.get('duration', 0) or 0
-    dur_s = _dur_str(duration)
-    magnitude = abs(act.get('on_magnitude', 0) or 0)
-    confidence = act.get('confidence', 0) or 0
+    duration = session.get('duration_minutes', 0) or 0
+    magnitude = session.get('avg_cycle_magnitude_w', 0) or 0
+    confidence = session.get('confidence', 0) or 0
+    cycle_count = session.get('cycle_count', 0) or 0
+    phases = session.get('phases', [])
+    phase_presence = session.get('phase_presence', {})
+    phase_magnitudes = session.get('phase_magnitudes', {})
+
+    # Single phase string for boiler/regular_ac display
+    phase = phases[0] if len(phases) == 1 else ', '.join(phases)
 
     return {
-        'date': date_str, 'start': on_time_str, 'end': off_time_str,
-        'duration': duration, 'dur_str': dur_s,
-        'magnitude': magnitude, 'phase': act.get('phase', ''),
-        'tag': act.get('tag', ''), 'device_type': act.get('device_type') or 'unclassified',
+        'date': date_str, 'start': start_str, 'end': end_str,
+        'duration': duration, 'dur_str': _dur_str(duration),
+        'magnitude': magnitude, 'phase': phase,
+        'device_type': session.get('device_type', 'unknown'),
         'confidence': confidence,
-        'session_id': act.get('session_id', ''),
-        'on_start_iso': str(on_start_raw) if on_start_raw else '',
-        'off_end_iso': str(off_end_raw) if off_end_raw else '',
+        'cycle_count': cycle_count,
+        'session_id': session.get('session_id', ''),
+        'on_start_iso': str(start_raw) if start_raw else '',
+        'off_end_iso': str(end_raw) if end_raw else '',
+        'w1': phase_presence.get('w1', 'X'),
+        'w2': phase_presence.get('w2', 'X'),
+        'w3': phase_presence.get('w3', 'X'),
+        'phase_magnitudes': phase_magnitudes,
+        'constituent_events': session.get('constituent_events', []),
     }
 
 
@@ -265,38 +277,37 @@ def _group_central_ac_for_display(events: List[Dict]) -> List[Dict]:
     return result
 
 
-def create_device_activations_detail(activations: List[Dict[str, Any]], house_id: str = '',
-                                     summarized_data=None) -> str:
+def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: str = '',
+                                     summarized_data=None,
+                                     all_match_intervals: Optional[Dict[str, list]] = None) -> str:
     """
-    Create detailed device activations tables grouped by device_type.
+    Create detailed device sessions tables grouped by device_type.
 
-    Filters to high-confidence detections using minimum duration per type.
+    Each row represents a full session (not individual ON→OFF pairs).
     Includes sortable columns, per-type Copy Dates, and a Copy All button.
     When summarized_data is provided, each row is clickable to expand a 3x3
     power chart grid (original/remaining/segregated x w1/w2/w3).
+    all_match_intervals: {phase: [(start, end, magnitude, duration), ...]}
+        for rendering individual match rectangles in the segregated chart.
     """
-    if not activations:
-        return '<p style="color: #888;">No device activations data available.</p>'
-
-    matched = [a for a in activations if a.get('match_type') == 'matched']
-    if not matched:
-        return '<p style="color: #888;">No matched device activations found.</p>'
+    if not sessions:
+        return '<p style="color: #888;">No session data available.</p>'
 
     MIN_DURATION = {
-        'boiler': 15, 'central_ac': 5, 'regular_ac': 3, 'unclassified': 0,
+        'boiler': 15, 'central_ac': 5, 'regular_ac': 3, 'unknown': 0,
     }
 
     device_groups = {}
     all_copyable = []
-    for act in matched:
-        parsed = _parse_activation_row(act)
+    for session in sessions:
+        parsed = _parse_session_row(session)
         dtype = parsed['device_type']
         min_dur = MIN_DURATION.get(dtype, 0)
         if parsed['duration'] < min_dur:
             continue
         device_groups.setdefault(dtype, []).append(parsed)
         # Only collect dates for classified (non-unknown) device types
-        if dtype != 'unclassified' and parsed['date'] and parsed['start']:
+        if dtype != 'unknown' and parsed['date'] and parsed['start']:
             all_copyable.append(f"{parsed['date']} {parsed['start']}-{parsed['end']}")
 
     if not any(device_groups.values()):
@@ -314,13 +325,10 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
     all_chart_data = {}
     global_act_idx = 0
 
-    # Exclude unclassified/unknown from display (user requested)
-    display_order = ['boiler', 'central_ac', 'regular_ac']
+    # Display all device types including unknown
+    display_order = ['boiler', 'central_ac', 'regular_ac', 'unknown']
 
-    # Limit to MAX_DISPLAY_PER_TYPE activations per device type
-    MAX_DISPLAY_PER_TYPE = 15
-
-    total_count = sum(len(v) for k, v in device_groups.items() if k != 'unclassified')
+    total_count = sum(len(v) for v in device_groups.values())
     all_copyable_text = ', '.join(all_copyable)
     copy_all_html = f'''
     <div style="margin-bottom: 15px;">
@@ -353,15 +361,12 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
         copyable_dates = []
 
         if dtype == 'central_ac':
-            session_rows = _group_central_ac_for_display(events)
-            count = len(session_rows)
-            # Collect ALL dates for copy button
-            for r in session_rows:
+            events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(events)
+            for r in events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
-            display_rows = session_rows[:MAX_DISPLAY_PER_TYPE]
-            truncated = count > MAX_DISPLAY_PER_TYPE
-            for i, r in enumerate(display_rows, 1):
+            for i, r in enumerate(events, 1):
                 act_idx = global_act_idx
                 global_act_idx += 1
                 conf_val = r.get('confidence', 0)
@@ -384,15 +389,17 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
             </tr>'''
                 if has_charts:
                     rows += _build_chart_row_html(act_idx, 11)
-                    # Build session_phases for central AC (active phases -> magnitude)
-                    session_phases = {}
-                    mag = r.get('magnitude', 0)
-                    for ph in ['w1', 'w2', 'w3']:
-                        if r.get(ph) == 'V':
-                            session_phases[ph] = mag
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases:
+                        mag = r.get('magnitude', 0)
+                        for ph in ['w1', 'w2', 'w3']:
+                            if r.get(ph) == 'V':
+                                session_phases[ph] = mag
                     cd = _extract_chart_window(
                         summarized_data, r.get('on_start_iso', ''),
                         r.get('off_end_iso', ''), session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
                     )
                     if cd:
                         all_chart_data[str(act_idx)] = cd
@@ -414,13 +421,10 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
         else:
             events.sort(key=lambda r: r['date'] + r['start'])
             count = len(events)
-            # Collect ALL dates for copy button
             for r in events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
-            display_events = events[:MAX_DISPLAY_PER_TYPE]
-            truncated = count > MAX_DISPLAY_PER_TYPE
-            for i, r in enumerate(display_events, 1):
+            for i, r in enumerate(events, 1):
                 act_idx = global_act_idx
                 global_act_idx += 1
                 conf_val = r.get('confidence', 0)
@@ -436,14 +440,19 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
                 <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
                 <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
                 <td style="{_cell} text-align: center;">{r['phase']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
                 <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
             </tr>'''
                 if has_charts:
-                    rows += _build_chart_row_html(act_idx, 8)
-                    session_phases = {r['phase']: r['magnitude']} if r.get('phase') else {}
+                    rows += _build_chart_row_html(act_idx, 9)
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases and r.get('phase'):
+                        session_phases = {r['phase']: r['magnitude']}
                     cd = _extract_chart_window(
                         summarized_data, r.get('on_start_iso', ''), r.get('off_end_iso', ''),
                         session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
                     )
                     if cd:
                         all_chart_data[str(act_idx)] = cd
@@ -457,18 +466,11 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center;">Phase</th>
-                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Confidence &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 8, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>'''
 
         copyable_text = ', '.join(copyable_dates)
-
-        truncation_notice = ''
-        if truncated:
-            truncation_notice = f'''
-                <div style="padding: 6px 12px; margin-top: 4px; background: #f0f4ff; border: 1px solid #d0d8f0; border-radius: 4px; font-size: 0.82em; color: #4a5568;">
-                    Showing {MAX_DISPLAY_PER_TYPE} of {count} activations.
-                    Full data available in <code>device_sessions_{house_id}.json</code>
-                </div>'''
 
         sections_html += f'''
         <div style="margin-bottom: 15px;">
@@ -486,7 +488,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]], house_id
                     <tbody>
                         {rows}
                     </tbody>
-                </table>{truncation_notice}
+                </table>
                 <div style="margin-top: 5px;">
                     <button onclick="var ta=document.getElementById('{section_id}-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
                             style="padding: 3px 10px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.8em;">
@@ -1353,7 +1355,9 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
 
 def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
                           session_phases: dict, device_type: str,
-                          margin_minutes: int = 60) -> Optional[dict]:
+                          margin_minutes: int = 60,
+                          all_match_intervals: Optional[Dict[str, list]] = None,
+                          constituent_events: Optional[list] = None) -> Optional[dict]:
     """Extract power data window for a single activation's expandable charts.
 
     Args:
@@ -1363,6 +1367,10 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
         session_phases: dict mapping phase -> magnitude (e.g. {'w2': 2500})
         device_type: device type string for color lookup
         margin_minutes: minutes of context before/after
+        all_match_intervals: {phase: [(start, end, magnitude, duration), ...]}
+            All matches from all iterations for building match rectangles.
+        constituent_events: List of session's own events for identifying
+            which matches belong to this session.
 
     Returns:
         Compact dict with chart data, or None if no data available.
@@ -1407,6 +1415,55 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
                 int(round(v)) if pd.notna(v) else 0
                 for v in window[remain_col]
             ]
+
+    # Add match rectangles for each phase (individual match shapes)
+    if all_match_intervals:
+        # Build set of session event keys for fast lookup
+        ses_keys = set()
+        for ce in (constituent_events or []):
+            ce_start = ce.get('on_start', '')
+            ce_phase = ce.get('phase', '')
+            if ce_start and ce_phase:
+                try:
+                    normalized = pd.Timestamp(ce_start).strftime('%Y-%m-%dT%H:%M')
+                    ses_keys.add((ce_phase, normalized))
+                except (ValueError, TypeError):
+                    pass
+
+        min_duration_threshold = 3  # spike threshold in minutes
+        win_start = start - margin
+        win_end = end + margin
+
+        for phase in ['w1', 'w2', 'w3']:
+            phase_matches = all_match_intervals.get(phase, [])
+            if not phase_matches:
+                continue
+            rects = []
+            for (m_start, m_end, m_mag, m_dur) in phase_matches:
+                try:
+                    ts_s = pd.Timestamp(m_start)
+                    ts_e = pd.Timestamp(m_end)
+                except (ValueError, TypeError):
+                    continue
+                # Check if within chart window
+                if ts_e < win_start or ts_s > win_end:
+                    continue
+                # Classify: session match, spike, or other device
+                normalized_start = ts_s.strftime('%Y-%m-%dT%H:%M')
+                if (phase, normalized_start) in ses_keys:
+                    cat = 'ses'
+                elif m_dur < min_duration_threshold:
+                    cat = 'spk'
+                else:
+                    cat = 'oth'
+                rects.append({
+                    's': ts_s.strftime('%Y-%m-%d %H:%M'),
+                    'e': ts_e.strftime('%Y-%m-%d %H:%M'),
+                    'm': m_mag,
+                    'c': cat,
+                })
+            if rects:
+                result[f'mt_{phase}'] = rects
 
     return result
 
@@ -1477,10 +1534,20 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
         var phases = ['w1','w2','w3'];
         var pC = {{w1:'#007bff',w2:'#dc3545',w3:'#28a745'}};
         var shapes = _sessShapes(d);
+
+        // Compute global Y max across all phases and all rows (original/remaining/segregated)
+        var gMax = 0;
+        phases.forEach(function(ph) {{
+            (d['o_'+ph]||[]).forEach(function(v){{ if(v>gMax) gMax=v; }});
+        }});
+        gMax = Math.ceil(gMax * 1.08 / 100) * 100;  // 8% headroom, round to nearest 100
+        if (gMax < 100) gMax = 100;
+
+        var xRange = [d.ts[0], d.ts[d.ts.length-1]];
         var bLay = {{
             margin:{{l:50,r:10,t:28,b:30}},height:200,
-            xaxis:{{tickangle:-30,tickfont:{{size:9}}}},
-            yaxis:{{title:'W',titlefont:{{size:10}}}},
+            xaxis:{{tickangle:-30,tickfont:{{size:9}},range:xRange}},
+            yaxis:{{title:'W',titlefont:{{size:10}},range:[0,gMax]}},
             plot_bgcolor:'#fafafa',paper_bgcolor:'white',
             shapes:shapes,hovermode:'x unified'
         }};
@@ -1510,30 +1577,52 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
                 title:{{text:ph.toUpperCase()+' — Remaining',font:{{size:12}}}}
             }}), cfg);
 
-            // Row 3: Segregated (2 colors — session vs other)
-            var seg = orig.map(function(o,i){{ return Math.max(0,o-(rem[i]||0)); }});
-            var spMag = (d.sp && d.sp[ph]) ? d.sp[ph] : 0;
-            var sesP = seg.map(function(s,i){{
-                if(spMag===0) return 0;
-                if(ts[i]>=d.ss && ts[i]<=d.se) return Math.min(spMag,s);
-                return 0;
+            // Row 3: Segregated — individual match rectangles as toself polygons
+            var matchRects = d['mt_'+ph]||[];
+            var sesX=[],sesY=[],spkX=[],spkY=[],othX=[],othY=[];
+            matchRects.forEach(function(r) {{
+                var bx,by;
+                if (r.c==='ses') {{ bx=sesX; by=sesY; }}
+                else if (r.c==='spk') {{ bx=spkX; by=spkY; }}
+                else {{ bx=othX; by=othY; }}
+                bx.push(r.s,r.s,r.e,r.e,r.s,null);
+                by.push(0,r.m,r.m,0,0,null);
             }});
-            var othP = seg.map(function(s,i){{ return Math.max(0,s-sesP[i]); }});
 
-            Plotly.newPlot('act-c-'+idx+'-s-'+ph, [
-                {{x:ts,y:othP,type:'scatter',mode:'lines',name:'Other devices',
-                  fill:'tozeroy',fillcolor:'rgba(176,176,176,0.35)',
-                  line:{{color:'#999',width:1}},
-                  hovertemplate:'Other: %{{y:.0f}}W<extra></extra>'}},
-                {{x:ts,y:seg,type:'scatter',mode:'lines',name:'This session',
-                  fill:'tonexty',fillcolor:_hexRgba(d.dc,0.45),
-                  line:{{color:d.dc,width:1.5}},
-                  hovertemplate:'Session: %{{customdata:.0f}}W<br>Total seg: %{{y:.0f}}W<extra></extra>',
-                  customdata:sesP}}
-            ], Object.assign({{}},bLay,{{
+            var segTraces = [];
+            if (sesX.length) segTraces.push({{
+                x:sesX,y:sesY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:_hexRgba(d.dc,0.55),
+                line:{{color:d.dc,width:1}},
+                name:'This session',legendgroup:'ses',showlegend:true,
+                hovertemplate:'Session: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (spkX.length) segTraces.push({{
+                x:spkX,y:spkY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:'rgba(255,165,0,0.4)',
+                line:{{color:'#e67e22',width:1}},
+                name:'Filtered (<3 min)',legendgroup:'spk',showlegend:true,
+                hovertemplate:'Spike: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (othX.length) segTraces.push({{
+                x:othX,y:othY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:'rgba(176,176,176,0.4)',
+                line:{{color:'#aaa',width:1}},
+                name:'Other devices',legendgroup:'oth',showlegend:true,
+                hovertemplate:'Other: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (!segTraces.length) segTraces.push({{
+                x:ts,y:ts.map(function(){{return null;}}),
+                type:'scatter',mode:'lines',line:{{width:0}},
+                showlegend:false,hoverinfo:'skip'
+            }});
+
+            Plotly.newPlot('act-c-'+idx+'-s-'+ph, segTraces,
+            Object.assign({{}},bLay,{{
                 title:{{text:ph.toUpperCase()+' — Segregated',font:{{size:12}}}},
-                showlegend:(ph==='w1'),
-                legend:{{orientation:'h',y:-0.35,font:{{size:10}}}}
+                margin:{{l:50,r:10,t:28,b:55}},
+                showlegend:true,
+                legend:{{orientation:'h',y:-0.3,font:{{size:10}}}}
             }}), cfg);
         }});
     }}
