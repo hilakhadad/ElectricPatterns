@@ -35,6 +35,13 @@ from .config import (
     AC_FILTER_MIN_CYCLE_MAG,
     AC_FILTER_MAG_RATIO,
     CENTRAL_AC_SYNC_TOLERANCE,
+    CENTRAL_AC_MIN_MAGNITUDE,
+    CENTRAL_AC_MIN_CYCLES,
+    CENTRAL_AC_MIN_CYCLE_DURATION,
+    CENTRAL_AC_MAX_CYCLE_DURATION,
+    CENTRAL_AC_MAX_MAGNITUDE_CV,
+    CENTRAL_AC_MAX_DURATION_CV,
+    CENTRAL_AC_MAX_GAP_CV,
     MULTI_PHASE_WINDOW,
     PHASES,
 )
@@ -110,14 +117,27 @@ def classify_sessions(
 
     # --- Step 2: Central AC -----------------------------------------------
     unclassified_sessions = [s for s in sessions if s.session_id not in classified_session_ids]
-    multi_phase = detect_phase_synchronized_groups(unclassified_sessions)
+
+    # Pre-filter: only sessions with AC-like cycling can be central AC candidates
+    ac_candidates = [s for s in unclassified_sessions if _is_central_ac_candidate(s)]
+
+    if ac_candidates:
+        logger.info(
+            f"  Central AC: {len(ac_candidates)}/{len(unclassified_sessions)} "
+            f"sessions are AC candidates"
+        )
+
+    multi_phase = detect_phase_synchronized_groups(ac_candidates)
 
     for mp in multi_phase:
         conf, breakdown = _central_ac_confidence(mp)
         result['central_ac'].append(ClassifiedSession(
             session=mp,
             device_type='central_ac',
-            reason=f"Synchronised across {len(mp.phases)} phases",
+            reason=(
+                f"Synchronised across {len(mp.phases)} phases, "
+                f"each showing AC-like cycling"
+            ),
             confidence=conf,
             confidence_breakdown=breakdown,
         ))
@@ -234,11 +254,14 @@ def _is_boiler_session(session: Session, all_matches: pd.DataFrame) -> bool:
         return False
 
     # Isolation check — no medium-duration events nearby on same phase
+    # (excluding the session's own events to avoid self-detection)
     phase_matches = all_matches[all_matches['phase'] == session.phase]
     if not phase_matches.empty:
+        session_event_starts = {pd.Timestamp(e['on_start']) for e in session.events}
         medium = phase_matches[
             (phase_matches['duration'] >= AC_MIN_CYCLE_DURATION) &
-            (phase_matches['duration'] <= AC_MAX_CYCLE_DURATION)
+            (phase_matches['duration'] <= AC_MAX_CYCLE_DURATION) &
+            (~phase_matches['on_start'].isin(session_event_starts))
         ]
         if not medium.empty:
             for event in session.events:
@@ -251,22 +274,13 @@ def _is_boiler_session(session: Session, all_matches: pd.DataFrame) -> bool:
                 if nearby_mask.any():
                     return False
 
-    # Multi-phase check — boilers are single-phase
-    for event in session.events:
-        event_start = pd.Timestamp(event['on_start'])
-        for other_phase in PHASES:
-            if other_phase == session.phase:
-                continue
-            other = all_matches[all_matches['phase'] == other_phase]
-            if other.empty:
-                continue
-            time_diffs = (other['on_start'] - event_start).abs()
-            if hasattr(time_diffs.iloc[0], 'total_seconds'):
-                nearby_mask = (time_diffs.dt.total_seconds() / 60) <= MULTI_PHASE_WINDOW
-            else:
-                nearby_mask = time_diffs <= MULTI_PHASE_WINDOW
-            if nearby_mask.any():
-                return False
+    # NOTE: Multi-phase check is NOT done here.  Boilers are single-phase,
+    # but checking raw matches for simultaneous events on other phases causes
+    # too many false negatives (unrelated appliances on other phases block
+    # legitimate boilers).  Instead, multi-phase overlap is handled as a
+    # post-processing step in _enforce_boiler_phase_exclusivity(), which
+    # keeps only the dominant phase and demotes time-overlapping "boilers"
+    # from other phases.
 
     # AC filter — check for compressor cycling nearby
     for event in session.events:
@@ -295,7 +309,8 @@ def _has_nearby_compressor_cycles(
 
     nearby = phase_matches[
         (phase_matches['on_start'] >= window_start) &
-        (phase_matches['on_start'] <= window_end)
+        (phase_matches['on_start'] <= window_end) &
+        (phase_matches['on_start'] != event_start)  # exclude self
     ]
 
     cycles = nearby[
@@ -380,9 +395,12 @@ def _min_distance_to_medium_events(
     if phase_matches.empty:
         return None
 
+    # Exclude session's own events
+    session_event_starts = {pd.Timestamp(e['on_start']) for e in session.events}
     medium = phase_matches[
         (phase_matches['duration'] >= AC_MIN_CYCLE_DURATION) &
-        (phase_matches['duration'] <= AC_MAX_CYCLE_DURATION)
+        (phase_matches['duration'] <= AC_MAX_CYCLE_DURATION) &
+        (~phase_matches['on_start'].isin(session_event_starts))
     ]
     if medium.empty:
         return None
@@ -400,6 +418,131 @@ def _min_distance_to_medium_events(
     return min_dist if min_dist != float('inf') else None
 
 
+def _magnitude_monotonicity(session: Session) -> float:
+    """Score how monotonic the magnitude trend is across events (0.0–1.0).
+
+    AC compressors show a consistent or gradually-trending magnitude:
+    people set a temperature and the compressor stabilises.  If they adjust
+    the thermostat, magnitude shifts once — but never zig-zags.
+
+    Returns the fraction of consecutive magnitude changes that follow the
+    dominant direction.  A perfectly monotonic sequence returns 1.0, a
+    random sequence returns ~0.5.
+
+    Requires ≥3 events (≥2 consecutive differences).  Returns 1.0 for
+    fewer events (too little data to penalise).
+    """
+    if not session.events or len(session.events) < 3:
+        return 1.0
+
+    sorted_events = sorted(session.events, key=lambda e: e.get('on_start', ''))
+    magnitudes = [abs(float(e.get('on_magnitude', 0))) for e in sorted_events]
+
+    diffs = [magnitudes[i + 1] - magnitudes[i] for i in range(len(magnitudes) - 1)]
+    if not diffs:
+        return 1.0
+
+    n_up = sum(1 for d in diffs if d > 0)
+    n_down = sum(1 for d in diffs if d < 0)
+    n_flat = sum(1 for d in diffs if d == 0)
+    dominant = max(n_up, n_down) + n_flat
+
+    return dominant / len(diffs)
+
+
+def _cycling_regularity(session: Session) -> tuple:
+    """Compute duration CV and gap CV for a session's events.
+
+    Real compressor cycling has consistent cycle durations and regular gaps
+    between cycles.  Random device activity has irregular durations and gaps.
+
+    Returns:
+        (duration_cv, gap_cv) — both 0.0–∞.  Lower = more regular.
+        Returns (0, 0) if too few events to compute.
+    """
+    if not session.events or len(session.events) < 3:
+        return 0.0, 0.0
+
+    sorted_events = sorted(session.events, key=lambda e: e.get('on_start', ''))
+
+    # Duration CV (excluding first event — the initial long run)
+    durations = [
+        e.get('duration', 0) or 0
+        for e in sorted_events[1:]  # skip initial activation
+        if (e.get('duration') or 0) > 0
+    ]
+    if len(durations) >= 2 and np.mean(durations) > 0:
+        duration_cv = float(np.std(durations) / np.mean(durations))
+    else:
+        duration_cv = 0.0
+
+    # Gap CV — time between consecutive events
+    gaps = []
+    for i in range(len(sorted_events) - 1):
+        curr_end = sorted_events[i].get('off_end') or sorted_events[i].get('off_start') or sorted_events[i].get('on_start')
+        next_start = sorted_events[i + 1].get('on_start')
+        if curr_end and next_start:
+            gap = (pd.Timestamp(next_start) - pd.Timestamp(curr_end)).total_seconds() / 60
+            if gap > 0:
+                gaps.append(gap)
+
+    if len(gaps) >= 2 and np.mean(gaps) > 0:
+        gap_cv = float(np.std(gaps) / np.mean(gaps))
+    else:
+        gap_cv = 0.0
+
+    return duration_cv, gap_cv
+
+
+def _session_ac_likeness(session: Session) -> float:
+    """Score how AC-like a single-phase session is (0.0–1.0).
+
+    Used as a component of central AC confidence.
+    Considers: cycle count, magnitude, cycle duration range, magnitude
+    consistency, and monotonicity of magnitude trend.
+    """
+    scores = []
+
+    # Cycle count: 4 → 0.5, ≥10 → 1.0
+    scores.append(_linear_score(session.cycle_count, CENTRAL_AC_MIN_CYCLES, 10))
+
+    # Magnitude: 800W → 0.5, ≥1500W → 1.0
+    scores.append(_linear_score(session.avg_magnitude, CENTRAL_AC_MIN_MAGNITUDE, 1500))
+
+    # Magnitude CV: lower is better. CV=0.30 → 0.5, CV=0 → 1.0
+    scores.append(_inverse_linear_score(session.magnitude_cv, 0, CENTRAL_AC_MAX_MAGNITUDE_CV))
+
+    # Fraction of events with duration in AC range (3-30 min)
+    if session.events:
+        durations = [
+            e.get('duration', 0) or 0
+            for e in session.events
+            if (e.get('duration') or 0) > 0
+        ]
+        if durations:
+            in_range = sum(
+                1 for d in durations
+                if CENTRAL_AC_MIN_CYCLE_DURATION <= d <= CENTRAL_AC_MAX_CYCLE_DURATION
+            )
+            frac_in_range = in_range / len(durations)
+            scores.append(max(0.5, frac_in_range))
+        else:
+            scores.append(0.5)
+    else:
+        scores.append(0.5)
+
+    # Monotonicity: AC magnitudes trend in one direction (not zig-zag)
+    mono = _magnitude_monotonicity(session)
+    scores.append(_linear_score(mono, 0.5, 0.85))
+
+    # Cycling regularity: consistent durations and gaps
+    dur_cv, gap_cv = _cycling_regularity(session)
+    scores.append(_inverse_linear_score(dur_cv, 0, CENTRAL_AC_MAX_DURATION_CV))
+    scores.append(_inverse_linear_score(gap_cv, 0, CENTRAL_AC_MAX_GAP_CV))
+
+    return float(np.mean(scores))
+
+
 def _central_ac_confidence(mp: MultiPhaseSession) -> tuple:
     """Compute confidence score for a central AC session.
 
@@ -407,6 +550,7 @@ def _central_ac_confidence(mp: MultiPhaseSession) -> tuple:
     - phase_count: 2 phases → 0.7, 3 phases → 1.0
     - sync_quality: how tightly the phases overlap in time
     - magnitude_balance: how similar the magnitudes are across phases
+    - ac_likeness: how AC-like the constituent sessions are
     """
     breakdown = {}
 
@@ -433,6 +577,10 @@ def _central_ac_confidence(mp: MultiPhaseSession) -> tuple:
         breakdown['magnitude_balance'] = round(_inverse_linear_score(mag_cv, 0, 0.5), 2)
     else:
         breakdown['magnitude_balance'] = 0.5
+
+    # AC likeness — how AC-like each constituent session is
+    likeness_scores = [_session_ac_likeness(ps) for ps in mp.phase_sessions.values()]
+    breakdown['ac_likeness'] = round(float(np.mean(likeness_scores)), 2) if likeness_scores else 0.5
 
     confidence = round(float(np.mean(list(breakdown.values()))), 2)
     return confidence, breakdown
@@ -485,7 +633,13 @@ def _is_regular_ac_session(session: Session) -> bool:
     Criteria:
     - Average magnitude ≥ 800 W
     - 4+ cycles (1 initial ≥ 15 min + 3 following)
-    - Magnitude CV ≤ 20%
+    - Magnitude CV ≤ 20% (overall or dominant iteration)
+
+    Because the pipeline detects events iteratively at different thresholds
+    (2000, 1500, 1100, 800W), the same compressor appears with different
+    magnitudes across iterations, inflating the overall CV.  When the overall
+    CV exceeds the limit, we fall back to checking the dominant iteration
+    (most events) — if it alone shows AC-like behaviour, that's sufficient.
     """
     if session.avg_magnitude < AC_MIN_MAGNITUDE:
         return False
@@ -501,8 +655,111 @@ def _is_regular_ac_session(session: Session) -> bool:
     if first_duration < AC_MIN_INITIAL_DURATION:
         return False
 
-    # Magnitude consistency
-    if session.magnitude_cv > AC_MAX_MAGNITUDE_CV:
+    # Magnitude consistency — check overall CV first
+    if session.magnitude_cv <= AC_MAX_MAGNITUDE_CV:
+        return True
+
+    # Overall CV is too high — check if a single iteration shows AC cycling.
+    # Multi-threshold detection inflates CV by mixing events of different
+    # magnitudes from different iterations of the same compressor.
+    return _has_ac_pattern_in_dominant_iteration(session)
+
+
+def _has_ac_pattern_in_dominant_iteration(session: Session) -> bool:
+    """Check if any single iteration shows AC-like cycling.
+
+    Groups events by iteration and checks each one with enough events.
+    Accepts if ANY iteration meets regular AC criteria independently.
+
+    Because different devices can contribute events to the same iteration
+    (e.g., an outlier from a different appliance), checking only the
+    dominant iteration may fail.  Checking all iterations catches cases
+    where a smaller but cleaner iteration proves the AC pattern.
+    """
+    if not session.events:
+        return False
+
+    # Group events by iteration
+    by_iter: Dict[int, list] = {}
+    for e in session.events:
+        it = e.get('iteration')
+        if it is not None:
+            by_iter.setdefault(int(it), []).append(e)
+
+    if not by_iter:
+        return False
+
+    # Check each iteration — accept if any one passes
+    min_events = 1 + AC_MIN_FOLLOWING_CYCLES
+    for it_events in by_iter.values():
+        if len(it_events) < min_events:
+            continue
+
+        magnitudes = [abs(float(e.get('on_magnitude', 0))) for e in it_events]
+        if not magnitudes or np.mean(magnitudes) <= 0:
+            continue
+
+        cv = float(np.std(magnitudes) / np.mean(magnitudes))
+        if cv > AC_MAX_MAGNITUDE_CV:
+            continue
+
+        if np.mean(magnitudes) < AC_MIN_MAGNITUDE:
+            continue
+
+        return True
+
+    return False
+
+
+def _is_central_ac_candidate(session: Session) -> bool:
+    """Check if a session shows AC-like compressor cycling.
+
+    Criteria (all must pass):
+    - Magnitude ≥ 800W
+    - ≥ 4 cycles
+    - Majority of events in AC duration range (3-30 min)
+    - Magnitude CV ≤ 30%
+    - Duration CV ≤ 40% (cycle durations should be consistent)
+    - Gap CV ≤ 50% (gaps between cycles should be regular)
+    - Magnitude trend is roughly monotonic (not zig-zagging)
+
+    A session that passes this check exhibits compressor-like cycling, which is
+    a prerequisite for being part of a multi-phase central AC group.
+    """
+    if session.avg_magnitude < CENTRAL_AC_MIN_MAGNITUDE:
+        return False
+
+    if session.cycle_count < CENTRAL_AC_MIN_CYCLES:
+        return False
+
+    # Majority of events must have duration in AC range (3-30 min)
+    if session.events:
+        durations = [
+            e.get('duration', 0) or 0
+            for e in session.events
+            if (e.get('duration') or 0) > 0
+        ]
+        if durations:
+            in_range = sum(
+                1 for d in durations
+                if CENTRAL_AC_MIN_CYCLE_DURATION <= d <= CENTRAL_AC_MAX_CYCLE_DURATION
+            )
+            if in_range < len(durations) * 0.5:
+                return False
+
+    if session.magnitude_cv > CENTRAL_AC_MAX_MAGNITUDE_CV:
+        return False
+
+    # Cycling regularity — durations and gaps must be consistent
+    dur_cv, gap_cv = _cycling_regularity(session)
+    if dur_cv > CENTRAL_AC_MAX_DURATION_CV:
+        return False
+    if gap_cv > CENTRAL_AC_MAX_GAP_CV:
+        return False
+
+    # Magnitude trend must be roughly monotonic (not random zig-zag)
+    mono = _magnitude_monotonicity(session)
+    if mono < 0.6:
         return False
 
     return True

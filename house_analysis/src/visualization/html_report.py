@@ -467,6 +467,227 @@ def _get_month_name(month_num: int) -> str:
     return months[month_num] if 1 <= month_num <= 12 else str(month_num)
 
 
+def _coverage_color(ratio: float) -> str:
+    """Return CSS color string for a coverage ratio (0-1)."""
+    if ratio >= 0.95:
+        return 'color: #155724;'  # dark green
+    elif ratio >= 0.80:
+        return 'color: #28a745;'  # green
+    elif ratio >= 0.65:
+        return 'color: #e67e22;'  # orange
+    else:
+        return 'color: #dc3545;'  # red
+
+
+def _coverage_bg(ratio: float) -> str:
+    """Return CSS background for a coverage ratio (0-1)."""
+    if ratio >= 0.95:
+        return 'background: #d4edda;'  # light green
+    elif ratio >= 0.80:
+        return 'background: #e8f5e9;'  # very light green
+    elif ratio >= 0.65:
+        return 'background: #fff3cd;'  # light yellow
+    else:
+        return 'background: #f8d7da;'  # light red
+
+
+def _score_color(score: float) -> str:
+    """Return CSS color string for a quality score (0-100)."""
+    if score >= 90:
+        return 'color: #155724;'
+    elif score >= 75:
+        return 'color: #004085;'
+    elif score >= 50:
+        return 'color: #856404;'
+    else:
+        return 'color: #721c24;'
+
+
+def _month_coverage_style(ratio: float) -> str:
+    """Return inline style for monthly coverage value with gradient coloring."""
+    if ratio >= 0.95:
+        return 'color: #155724; font-weight: 700;'
+    elif ratio >= 0.80:
+        return 'color: #28a745; font-weight: 600;'
+    elif ratio >= 0.65:
+        return 'color: #e67e22; font-weight: 600;'
+    elif ratio >= 0.50:
+        return 'color: #dc3545; font-weight: 600;'
+    else:
+        return 'color: #dc3545; font-weight: 700; background: #f8d7da; padding: 1px 4px; border-radius: 3px;'
+
+
+def _format_small_pct(pct: float, raw_pct: float = None, has_actual_data: bool = False) -> str:
+    """Format percentage, showing '<0.1%' when value rounds to 0 but isn't truly 0."""
+    if raw_pct is None:
+        raw_pct = pct
+    if pct == 0 and raw_pct > 0 and has_actual_data:
+        return '&lt;0.1%'
+    return f'{pct:.1f}%'
+
+
+def _build_zero_power_warning(quality: Dict[str, Any]) -> str:
+    """Build warning HTML for months with zero power readings."""
+    zero_months = quality.get('zero_power_months', 0)
+    total_months = quality.get('total_months', 0)
+    if zero_months == 0:
+        return ''
+
+    penalty = quality.get('zero_power_penalty', 0)
+    return f'''
+            <div class="card" id="section-zero-power-warning" style="border-left: 4px solid #e67e22;">
+                <h2 style="color: #e67e22;">Zero-Power Month Anomaly</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
+                    <strong>{zero_months} out of {total_months} months</strong> have average power near 0W across all phases.
+                    This indicates sensor offline, power disconnection, or data acquisition failure during these periods.
+                </p>
+                <div style="background: #fff3cd; border-radius: 6px; padding: 12px; font-size: 0.88em; color: #856404;">
+                    These months contain no usable data for device detection.
+                    Coverage percentage may show 100% (rows exist) but with all-zero readings.
+                    Quality score penalized by {penalty:.1f} points.
+                </div>
+            </div>'''
+
+
+def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
+    """Build anomaly warning HTML if extreme values detected."""
+    if not coverage.get('has_anomalies', False):
+        return ''
+
+    anomaly_count = coverage.get('anomaly_count', 0)
+    anomaly_phases = coverage.get('anomaly_phases', {})
+    max_vals = coverage.get('phase_max_values', {})
+
+    phase_details = []
+    for ph, count in anomaly_phases.items():
+        max_v = max_vals.get(ph, 0)
+        phase_details.append(f'{ph}: {count} readings, max {max_v:,.0f}W')
+
+    details_html = '<br>'.join(phase_details)
+
+    return f'''
+            <div class="card" id="section-anomaly-warning" style="border-left: 4px solid #dc3545;">
+                <h2 style="color: #dc3545;">Anomaly Warning</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 8px;">
+                    <strong>{anomaly_count}</strong> readings exceed 20kW per phase &mdash; almost certainly sensor errors.
+                    These extreme values distort all statistics (mean, max, std, CV) and charts.
+                </p>
+                <div style="background: #f8d7da; border-radius: 6px; padding: 12px; font-size: 0.88em; color: #721c24;">
+                    {details_html}
+                </div>
+                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
+                    Consider filtering these outliers before analysis. Quality score penalized by {coverage.get('anomaly_count', 0)} anomalous readings.
+                </p>
+            </div>'''
+
+
+def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
+                          coverage: Dict[str, Any]) -> str:
+    """Build clickable findings tags section for the top of per-house report."""
+
+    # Define all possible findings: (flag_key, label, severity, target_section_id)
+    # severity: 'critical', 'warning', 'info'
+    findings = []
+
+    # --- Critical findings ---
+    if flags.get('has_dead_phase'):
+        dead = quality.get('dead_phases', [])
+        findings.append(('critical', f'Dead Phase ({", ".join(dead)})', 'section-data-loss'))
+
+    if flags.get('has_faulty_nan_phase'):
+        faulty = quality.get('faulty_nan_phases', [])
+        findings.append(('critical', f'Faulty NaN Phase ({", ".join(faulty)})', 'section-data-loss'))
+
+    cov_ratio = coverage.get('coverage_ratio', 1)
+    if cov_ratio < 0.50:
+        findings.append(('critical', f'Very Low Coverage ({cov_ratio:.0%})', 'section-data-overview'))
+
+    nan_cont = quality.get('nan_continuity_label', '')
+    if nan_cont == 'fragmented':
+        loss = quality.get('total_data_loss_pct', 0)
+        findings.append(('critical', f'Fragmented Data ({loss:.0f}% loss)', 'section-data-loss'))
+
+    # --- Warning findings ---
+    if 0.50 <= cov_ratio < 0.70:
+        findings.append(('warning', f'Low Coverage ({cov_ratio:.0%})', 'section-data-overview'))
+
+    if coverage.get('has_anomalies', False):
+        count = coverage.get('anomaly_count', 0)
+        findings.append(('warning', f'Extreme Outliers ({count} readings >20kW)', 'section-anomaly-warning'))
+
+    if nan_cont == 'discontinuous':
+        loss = quality.get('total_data_loss_pct', 0)
+        findings.append(('warning', f'Discontinuous Data ({loss:.0f}% loss)', 'section-data-loss'))
+
+    zero_months = quality.get('zero_power_months', 0)
+    if zero_months > 0:
+        total_m = quality.get('total_months', 0)
+        findings.append(('warning', f'Zero-Power Months ({zero_months}/{total_m})', 'section-zero-power-warning'))
+
+    if flags.get('has_negative_values'):
+        findings.append(('warning', 'Negative Power Values', 'section-power-stats'))
+
+    if flags.get('unbalanced_phases'):
+        ratio = quality.get('phase_balance_ratio', 0)
+        findings.append(('warning', f'Unbalanced Phases', 'section-power-stats'))
+
+    # --- Info findings (low scoring components) ---
+    if flags.get('low_sharp_entry'):
+        findings.append(('info', 'Low Sharp Entry Rate', 'section-charts'))
+
+    if flags.get('low_device_signature'):
+        findings.append(('info', 'Low Device Signature', 'section-charts'))
+
+    if flags.get('low_power_profile'):
+        findings.append(('info', 'Low Power Profile', 'section-charts'))
+
+    if flags.get('low_variability'):
+        findings.append(('info', 'Low Variability', 'section-charts'))
+
+    if flags.get('low_data_volume'):
+        findings.append(('info', 'Low Data Volume', 'section-data-overview'))
+
+    if flags.get('low_data_integrity'):
+        findings.append(('info', 'Low Data Integrity', 'section-data-loss'))
+
+    if not findings:
+        return '''
+            <div class="card findings-section">
+                <h2>Findings</h2>
+                <div class="findings-ok">No significant issues found.</div>
+            </div>'''
+
+    tags_html = ''
+    for severity, label, target in findings:
+        tags_html += f'<a href="#{target}" class="finding-tag finding-tag-{severity}">{label}</a>\n'
+
+    # Penalty summary if anomaly penalties were applied
+    penalty_html = ''
+    penalty_total = quality.get('anomaly_penalties', 0)
+    if penalty_total > 0:
+        base = quality.get('base_quality_score', 0)
+        final = quality.get('quality_score', 0)
+        details = quality.get('anomaly_penalty_details', [])
+        reasons = ', '.join(f'-{d["deduction"]}pts ({d["reason"]})' for d in details)
+        penalty_html = f'''
+                <div class="penalty-summary">
+                    <strong>Score adjusted:</strong> Base {base:.0f} &minus; {penalty_total:.0f} penalty = <strong>{final:.0f}</strong>
+                    <br><span style="font-size: 0.9em;">{reasons}</span>
+                </div>'''
+
+    return f'''
+            <div class="card findings-section">
+                <h2>Findings</h2>
+                <p style="color: #666; font-size: 0.85em; margin-bottom: 8px;">
+                    Click a tag to jump to the relevant section.
+                </p>
+                <div class="findings-tags">
+                    {tags_html}
+                </div>
+                {penalty_html}
+            </div>'''
+
+
 def generate_single_house_html_report(analysis: Dict[str, Any],
                                        output_path: str) -> str:
     """
@@ -530,6 +751,9 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
+    # Build findings tags
+    findings_html = _build_findings_tags(flags, quality, coverage)
+
     # Get years from temporal_by_period
     years_data = temporal_by_period.get('by_year', {})
     years = sorted(years_data.keys())
@@ -575,18 +799,29 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             month_coverage = month_info.get('coverage_ratio', 0)
             mini_chart = create_mini_hourly_chart(month_info.get('hourly_pattern', {}))
 
+            is_zero = month_info.get('is_zero_power', False)
+            zero_reason = month_info.get('zero_power_reason', '')
+            zero_border = 'border: 2px solid #dc3545;' if is_zero else ''
+            zero_badge = f'<span style="display:inline-block; background:#dc3545; color:white; font-size:0.7em; padding:1px 6px; border-radius:3px; margin-left:6px;">ANOMALY</span>' if is_zero else ''
+            zero_overlay = f'''
+                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+                    background:rgba(220,53,69,0.9); color:white; padding:4px 10px; border-radius:4px;
+                    font-size:0.78em; font-weight:600; white-space:nowrap;">{zero_reason}</div>
+            ''' if is_zero else ''
+
             months_cards_html += f"""
-            <div class="month-card">
+            <div class="month-card" style="{zero_border}">
                 <div class="month-header">
-                    <strong>{month_name} {year}</strong>
+                    <strong>{month_name} {year}</strong>{zero_badge}
                 </div>
                 <div class="month-stats">
                     <span>Days: {month_days}</span>
                     <span>Avg: {month_avg:.0f}W</span>
-                    <span>Coverage: {month_coverage:.0%}</span>
+                    <span style="{_month_coverage_style(month_coverage)}">Coverage: {month_coverage:.0%}</span>
                 </div>
-                <div class="mini-chart">
+                <div class="mini-chart" style="position:relative;">
                     {mini_chart}
+                    {zero_overlay}
                 </div>
             </div>
             """
@@ -601,7 +836,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="metric-label">Days of Data</div>
                     </div>
                     <div class="metric">
-                        <div class="metric-value">{year_coverage:.1%}</div>
+                        <div class="metric-value" style="{_coverage_color(year_coverage)}">{year_coverage:.1%}</div>
                         <div class="metric-label">Coverage</div>
                     </div>
                     <div class="metric">
@@ -873,6 +1108,66 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             display: inline-block;
             min-width: 28px;
         }}
+
+        /* Findings tags */
+        .findings-section {{
+            margin-bottom: 20px;
+        }}
+        .findings-tags {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }}
+        .finding-tag {{
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: transform 0.15s, box-shadow 0.15s;
+            display: inline-block;
+        }}
+        .finding-tag:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }}
+        .finding-tag-critical {{
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }}
+        .finding-tag-warning {{
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }}
+        .finding-tag-info {{
+            background: #cce5ff;
+            color: #004085;
+            border: 1px solid #b8daff;
+        }}
+        .findings-ok {{
+            padding: 10px 16px;
+            background: #d4edda;
+            color: #155724;
+            border-radius: 8px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }}
+        .penalty-summary {{
+            margin-top: 10px;
+            padding: 10px 14px;
+            background: #fff3cd;
+            border-radius: 8px;
+            font-size: 0.85em;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }}
+        html {{
+            scroll-behavior: smooth;
+        }}
     </style>
 </head>
 <body>
@@ -897,12 +1192,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 <div class="hero-score">{score:.0f}<span class="hero-max">/100</span></div>
                 <div class="hero-badge"><span class="badge {badge_class}">{badge_text}</span>{nan_badge_html}</div>
                 <div class="hero-subtitle">
-                    Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity
+                    {'Base score: ' + str(round(quality.get('base_quality_score', score))) + ' &minus; ' + str(round(quality.get('anomaly_penalties', 0))) + ' anomaly penalty' if quality.get('anomaly_penalties', 0) > 0 else 'Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity'}
                 </div>
             </div>
 
+            {findings_html}
+
             <!-- Data Overview -->
-            <div class="card">
+            <div class="card" id="section-data-overview">
                 <h2>Data Overview</h2>
                 <div class="overview-grid">
                     <div class="overview-item">
@@ -910,13 +1207,13 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-label">Days of Data</div>
                         <div class="overview-desc">Total calendar days from first to last reading</div>
                     </div>
-                    <div class="overview-item">
-                        <div class="overview-value">{coverage.get('coverage_ratio', 0):.1%}</div>
+                    <div class="overview-item" style="{_coverage_bg(coverage.get('coverage_ratio', 0))}">
+                        <div class="overview-value" style="{_coverage_color(coverage.get('coverage_ratio', 0))}">{coverage.get('coverage_ratio', 0):.1%}</div>
                         <div class="overview-label">Coverage</div>
                         <div class="overview-desc">Minutes with data / total minutes in time span</div>
                     </div>
                     <div class="overview-item" style="{'background: #e8daf0;' if coverage.get('no_data_pct', 0) >= 5 else ''}">
-                        <div class="overview-value" style="color: #6f42c1;">{coverage.get('no_data_pct', 0):.1f}%</div>
+                        <div class="overview-value" style="color: #6f42c1;">{_format_small_pct(coverage.get('no_data_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)}</div>
                         <div class="overview-label" style="color: #4a0e6b;">No Data</div>
                         <div class="overview-desc">Minutes with no reading within the measurement period (gaps + disconnections)</div>
                     </div>
@@ -928,17 +1225,55 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 </div>
             </div>
 
-            <!-- NaN % and Max Gap -->
+            <!-- Data Loss Breakdown: NaN gaps vs No-Data gaps -->
+            <div class="card" id="section-data-loss">
+                <h2>Data Loss Breakdown</h2>
+                <p style="color: #666; font-size: 0.85em; margin-bottom: 12px;">
+                    Two types of data loss: <strong>No-Data gaps</strong> (entire rows missing &mdash; sensor offline)
+                    vs <strong>NaN gaps</strong> (rows exist but values are missing &mdash; sensor reported empty readings).
+                </p>
+                <div class="two-col-grid">
+                    <div class="overview-item" style="{'background: #fce4ec;' if coverage.get('no_data_gap_pct', 0) >= 10 else 'background: #f8f9fa;'}">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">No-Data Gaps (Missing Rows)</div>
+                        <div style="font-size: 1.4em; font-weight: 700; color: {'#dc3545' if coverage.get('no_data_gap_pct', 0) >= 10 else '#6f42c1'};">{_format_small_pct(coverage.get('no_data_gap_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)}</div>
+                        <div class="phase-list" style="margin-top: 6px;">
+                            <div class="phase-row">{coverage.get('no_data_gap_minutes', 0):,} minutes missing</div>
+                            <div class="phase-row">{coverage.get('no_data_gap_count', 0)} separate gaps</div>
+                            <div class="phase-row">Longest gap: {coverage.get('max_no_data_gap_minutes', coverage.get('max_gap_minutes', 0)):,.0f} min</div>
+                        </div>
+                        <div class="overview-desc">Timestamps where the sensor didn't report at all</div>
+                    </div>
+                    <div class="overview-item" style="{'background: #fff3cd;' if coverage.get('nan_gap_pct', 0) >= 5 else 'background: #f8f9fa;'}">
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN Gaps (Empty Values)</div>
+                        <div style="font-size: 1.4em; font-weight: 700; color: {'#e67e22' if coverage.get('nan_gap_pct', 0) >= 5 else '#6f42c1'};">{coverage.get('nan_gap_pct', 0):.1f}%</div>
+                        <div class="phase-list" style="margin-top: 6px;">
+                            <div class="phase-row">{coverage.get('nan_rows_count', 0):,} rows with NaN</div>
+                            <div class="phase-row">w1: {quality.get('w1_nan_pct', 0):.1f}%, w2: {quality.get('w2_nan_pct', 0):.1f}%, w3: {quality.get('w3_nan_pct', 0):.1f}%</div>
+                        </div>
+                        <div class="overview-desc">Rows that exist but have missing values in one or more phases</div>
+                    </div>
+                </div>
+                <div style="margin-top: 10px; padding: 10px; background: #f0f4ff; border-radius: 6px; font-size: 0.85em; color: #555;">
+                    <strong>Total data loss:</strong> {quality.get('total_data_loss_pct', 0):.1f}%
+                    (No-Data {_format_small_pct(coverage.get('no_data_gap_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)} + NaN {coverage.get('nan_gap_pct', 0):.1f}%)
+                    &mdash; Continuity: <span class="badge {nan_cont_class}">{nan_cont_text}</span>
+                </div>
+            </div>
+
+            {_build_anomaly_warning(coverage)}
+            {_build_zero_power_warning(quality)}
+
+            <!-- Per-Phase NaN Details -->
             <div class="card">
                 <div class="two-col-grid">
                     <div class="overview-item">
-                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN %</div>
+                        <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN % per Phase</div>
                         <div class="phase-list">
-                            <div class="phase-row"><span class="phase-name">w1:</span> {quality.get('w1_nan_pct', 0):.1f}%</div>
-                            <div class="phase-row"><span class="phase-name">w2:</span> {quality.get('w2_nan_pct', 0):.1f}%</div>
-                            <div class="phase-row"><span class="phase-name">w3:</span> {quality.get('w3_nan_pct', 0):.1f}%</div>
+                            <div class="phase-row"><span class="phase-name">w1:</span> <span style="{_month_coverage_style(1 - quality.get('w1_nan_pct', 0)/100)}">{quality.get('w1_nan_pct', 0):.1f}%</span></div>
+                            <div class="phase-row"><span class="phase-name">w2:</span> <span style="{_month_coverage_style(1 - quality.get('w2_nan_pct', 0)/100)}">{quality.get('w2_nan_pct', 0):.1f}%</span></div>
+                            <div class="phase-row"><span class="phase-name">w3:</span> <span style="{_month_coverage_style(1 - quality.get('w3_nan_pct', 0)/100)}">{quality.get('w3_nan_pct', 0):.1f}%</span></div>
                         </div>
-                        <div class="overview-desc">% of readings missing per phase</div>
+                        <div class="overview-desc">% of readings missing per phase (within existing rows)</div>
                     </div>
                     <div class="overview-item">
                         <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">Max NaN Gap</div>
@@ -953,7 +1288,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             </div>
 
             <!-- Power Statistics -->
-            <div class="card">
+            <div class="card" id="section-power-stats">
                 <h2>Power Statistics</h2>
                 <div class="overview-grid">
                     <div class="overview-item">
@@ -990,7 +1325,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             </div>
 
             <!-- Charts -->
-            <div class="card">
+            <div class="card" id="section-charts">
                 <h2>Power Patterns & Analysis</h2>
                 <div class="charts-grid">
                     <div class="chart-card chart-full-width">
@@ -1029,7 +1364,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 </div>
             </div>
 
-            <div class="card">
+            <div class="card" id="section-flags">
                 <h2>Issues & Flags</h2>
                 <p class="flags">{flags_html}</p>
             </div>

@@ -139,43 +139,55 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     '''
 
 
-def _parse_activation_row(act: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse a single activation into display-ready fields."""
-    on_start_raw = act.get('on_start')
-    off_end_raw = act.get('off_end') or act.get('off_start')
+def _parse_session_row(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a session (from device_sessions.json) into display-ready fields."""
+    start_raw = session.get('start', '')
+    end_raw = session.get('end', '')
 
-    date_str = on_time_str = off_time_str = ''
+    date_str = start_str = end_str = ''
 
-    if on_start_raw:
-        try:
-            on_dt = datetime.fromisoformat(str(on_start_raw))
-            date_str = on_dt.strftime('%Y-%m-%d')
-            on_time_str = on_dt.strftime('%H:%M')
-        except (ValueError, TypeError):
-            date_str = str(on_start_raw)[:10]
-            on_time_str = str(on_start_raw)[11:16] if len(str(on_start_raw)) > 16 else ''
+    if start_raw:
+        dt = _parse_iso(str(start_raw))
+        if dt:
+            date_str = dt.strftime('%Y-%m-%d')
+            start_str = dt.strftime('%H:%M')
+        else:
+            date_str = str(start_raw)[:10]
+            start_str = str(start_raw)[11:16] if len(str(start_raw)) > 16 else ''
 
-    if off_end_raw:
-        try:
-            off_dt = datetime.fromisoformat(str(off_end_raw))
-            off_time_str = off_dt.strftime('%H:%M')
-        except (ValueError, TypeError):
-            off_time_str = str(off_end_raw)[11:16] if len(str(off_end_raw)) > 16 else ''
+    if end_raw:
+        dt = _parse_iso(str(end_raw))
+        if dt:
+            end_str = dt.strftime('%H:%M')
+        else:
+            end_str = str(end_raw)[11:16] if len(str(end_raw)) > 16 else ''
 
-    duration = act.get('duration', 0) or 0
-    dur_s = _dur_str(duration)
-    magnitude = abs(act.get('on_magnitude', 0) or 0)
-    confidence = act.get('confidence', 0) or 0
+    duration = session.get('duration_minutes', 0) or 0
+    magnitude = session.get('avg_cycle_magnitude_w', 0) or 0
+    confidence = session.get('confidence', 0) or 0
+    cycle_count = session.get('cycle_count', 0) or 0
+    phases = session.get('phases', [])
+    phase_presence = session.get('phase_presence', {})
+    phase_magnitudes = session.get('phase_magnitudes', {})
+
+    # Single phase string for boiler/regular_ac display
+    phase = phases[0] if len(phases) == 1 else ', '.join(phases)
 
     return {
-        'date': date_str, 'start': on_time_str, 'end': off_time_str,
-        'duration': duration, 'dur_str': dur_s,
-        'magnitude': magnitude, 'phase': act.get('phase', ''),
-        'tag': act.get('tag', ''), 'device_type': act.get('device_type') or 'unclassified',
+        'date': date_str, 'start': start_str, 'end': end_str,
+        'duration': duration, 'dur_str': _dur_str(duration),
+        'magnitude': magnitude, 'phase': phase,
+        'device_type': session.get('device_type', 'unknown'),
         'confidence': confidence,
-        'session_id': act.get('session_id', ''),
-        'on_start_iso': str(on_start_raw) if on_start_raw else '',
-        'off_end_iso': str(off_end_raw) if off_end_raw else '',
+        'cycle_count': cycle_count,
+        'session_id': session.get('session_id', ''),
+        'on_start_iso': str(start_raw) if start_raw else '',
+        'off_end_iso': str(end_raw) if end_raw else '',
+        'w1': phase_presence.get('w1', 'X'),
+        'w2': phase_presence.get('w2', 'X'),
+        'w3': phase_presence.get('w3', 'X'),
+        'phase_magnitudes': phase_magnitudes,
+        'constituent_events': session.get('constituent_events', []),
     }
 
 
@@ -257,46 +269,64 @@ def _group_central_ac_for_display(events: List[Dict]) -> List[Dict]:
             'w3': 'V' if 'w3' in phases_present else 'X',
             'cycle_count': len(group),
             'confidence': conf_val,
+            'on_start_iso': min(iso_starts) if iso_starts else '',
+            'off_end_iso': max(iso_ends) if iso_ends else '',
         })
 
     result.sort(key=lambda r: r['date'] + r['start'])
     return result
 
 
-def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
+def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: str = '',
+                                     summarized_data=None,
+                                     all_match_intervals: Optional[Dict[str, list]] = None) -> str:
     """
-    Create detailed device activations tables grouped by device_type.
+    Create detailed device sessions tables grouped by device_type.
 
-    Filters to high-confidence detections using minimum duration per type.
+    Each row represents a full session (not individual ON→OFF pairs).
     Includes sortable columns, per-type Copy Dates, and a Copy All button.
+    When summarized_data is provided, each row is clickable to expand a 3x3
+    power chart grid (original/remaining/segregated x w1/w2/w3).
+    all_match_intervals: {phase: [(start, end, magnitude, duration), ...]}
+        for rendering individual match rectangles in the segregated chart.
     """
-    if not activations:
-        return '<p style="color: #888;">No device activations data available.</p>'
-
-    matched = [a for a in activations if a.get('match_type') == 'matched']
-    if not matched:
-        return '<p style="color: #888;">No matched device activations found.</p>'
+    if not sessions:
+        return '<p style="color: #888;">No session data available.</p>'
 
     MIN_DURATION = {
-        'boiler': 15, 'central_ac': 5, 'regular_ac': 3, 'unclassified': 0,
+        'boiler': 15, 'central_ac': 5, 'regular_ac': 3, 'unknown': 0,
     }
 
     device_groups = {}
     all_copyable = []
-    for act in matched:
-        parsed = _parse_activation_row(act)
+    for session in sessions:
+        parsed = _parse_session_row(session)
         dtype = parsed['device_type']
         min_dur = MIN_DURATION.get(dtype, 0)
         if parsed['duration'] < min_dur:
             continue
         device_groups.setdefault(dtype, []).append(parsed)
-        if parsed['date'] and parsed['start']:
+        # Only collect dates for classified (non-unknown) device types
+        if dtype != 'unknown' and parsed['date'] and parsed['start']:
             all_copyable.append(f"{parsed['date']} {parsed['start']}-{parsed['end']}")
 
     if not any(device_groups.values()):
         return '<p style="color: #888;">No high-confidence device activations found.</p>'
 
-    display_order = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
+    # Chart expansion support
+    has_charts = (summarized_data is not None and hasattr(summarized_data, 'empty')
+                  and not summarized_data.empty)
+    if has_charts:
+        import pandas as pd
+        if not pd.api.types.is_datetime64_any_dtype(summarized_data['timestamp']):
+            summarized_data = summarized_data.copy()
+            summarized_data['timestamp'] = pd.to_datetime(summarized_data['timestamp'])
+        summarized_data = summarized_data.sort_values('timestamp').reset_index(drop=True)
+    all_chart_data = {}
+    global_act_idx = 0
+
+    # Display all device types including unknown
+    display_order = ['boiler', 'central_ac', 'regular_ac', 'unknown']
 
     total_count = sum(len(v) for v in device_groups.values())
     all_copyable_text = ', '.join(all_copyable)
@@ -331,16 +361,20 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         copyable_dates = []
 
         if dtype == 'central_ac':
-            session_rows = _group_central_ac_for_display(events)
-            count = len(session_rows)
-            for i, r in enumerate(session_rows, 1):
+            events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(events)
+            for r in events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            for i, r in enumerate(events, 1):
+                act_idx = global_act_idx
+                global_act_idx += 1
                 conf_val = r.get('confidence', 0)
                 conf_pct = f'{conf_val:.0%}' if conf_val else '-'
                 conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                click_attr = f' style="cursor:pointer;" onclick="toggleActChart({act_idx})"' if has_charts else ''
                 rows += f'''
-            <tr>
+            <tr{click_attr}>
                 <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
                 <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
                 <td style="{_cell} text-align: center;">{r['start']}</td>
@@ -353,6 +387,22 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                 <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
                 <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
             </tr>'''
+                if has_charts:
+                    rows += _build_chart_row_html(act_idx, 11)
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases:
+                        mag = r.get('magnitude', 0)
+                        for ph in ['w1', 'w2', 'w3']:
+                            if r.get(ph) == 'V':
+                                session_phases[ph] = mag
+                    cd = _extract_chart_window(
+                        summarized_data, r.get('on_start_iso', ''),
+                        r.get('off_end_iso', ''), session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
+                    )
+                    if cd:
+                        all_chart_data[str(act_idx)] = cd
 
             table_header = f'''
                         <tr style="background: #f8f9fa;">
@@ -371,14 +421,18 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         else:
             events.sort(key=lambda r: r['date'] + r['start'])
             count = len(events)
-            for i, r in enumerate(events, 1):
+            for r in events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            for i, r in enumerate(events, 1):
+                act_idx = global_act_idx
+                global_act_idx += 1
                 conf_val = r.get('confidence', 0)
                 conf_pct = f'{conf_val:.0%}' if conf_val else '-'
                 conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                click_attr = f' style="cursor:pointer;" onclick="toggleActChart({act_idx})"' if has_charts else ''
                 rows += f'''
-            <tr>
+            <tr{click_attr}>
                 <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
                 <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
                 <td style="{_cell} text-align: center;">{r['start']}</td>
@@ -386,8 +440,22 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                 <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
                 <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
                 <td style="{_cell} text-align: center;">{r['phase']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
                 <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
             </tr>'''
+                if has_charts:
+                    rows += _build_chart_row_html(act_idx, 9)
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases and r.get('phase'):
+                        session_phases = {r['phase']: r['magnitude']}
+                    cd = _extract_chart_window(
+                        summarized_data, r.get('on_start_iso', ''), r.get('off_end_iso', ''),
+                        session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
+                    )
+                    if cd:
+                        all_chart_data[str(act_idx)] = cd
 
             table_header = f'''
                         <tr style="background: #f8f9fa;">
@@ -398,7 +466,8 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center;">Phase</th>
-                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Confidence &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 8, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>'''
 
         copyable_text = ', '.join(copyable_dates)
@@ -432,6 +501,15 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
             </div>
         </div>'''
 
+    # Add expandable chart JavaScript if chart data is available
+    if has_charts and all_chart_data:
+        sections_html += _build_activation_charts_script(all_chart_data)
+        sections_html += '''
+        <div style="margin-top: 8px; padding: 8px 12px; background: #e8f4fd; border: 1px solid #bee3f8; border-radius: 6px; font-size: 0.82em; color: #2a4365;">
+            <strong>Tip:</strong> Click any activation row to expand a 3&times;3 power chart grid
+            showing Original / Remaining / Segregated power per phase (w1, w2, w3).
+        </div>'''
+
     return sections_html
 
 
@@ -450,14 +528,16 @@ def create_session_overview(sessions: List[Dict]) -> str:
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 
-    # Count and energy by device type
+    # Count, minutes, and energy by device type
     counts = defaultdict(int)
+    minutes = defaultdict(float)
     energy = defaultdict(float)  # magnitude * duration (watt-minutes)
     for s in sessions:
         dtype = s.get('device_type', 'unknown')
         counts[dtype] += 1
-        mag = s.get('avg_cycle_magnitude_w', 0) or 0
         dur = s.get('duration_minutes', 0) or 0
+        minutes[dtype] += dur
+        mag = s.get('avg_cycle_magnitude_w', 0) or 0
         energy[dtype] += mag * dur
 
     total = sum(counts.values())
@@ -468,7 +548,7 @@ def create_session_overview(sessions: List[Dict]) -> str:
     # Summary cards
     avg_conf_vals = [s.get('confidence', 0) for s in sessions if s.get('confidence')]
     avg_conf = sum(avg_conf_vals) / len(avg_conf_vals) if avg_conf_vals else 0
-    conf_color = GREEN if avg_conf >= 0.7 else ORANGE if avg_conf >= 0.5 else RED
+    conf_color = GREEN if avg_conf >= 0.8 else ORANGE if avg_conf >= 0.5 else RED
 
     cards_html = f'''
     <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
@@ -520,6 +600,35 @@ def create_session_overview(sessions: List[Dict]) -> str:
         'legend': {'orientation': 'h', 'y': -0.1},
     })
 
+    # Pie chart — minutes by device type
+    min_labels = []
+    min_values = []
+    min_colors = []
+    for dt in display_order:
+        if minutes.get(dt, 0) > 0:
+            min_labels.append(DEVICE_DISPLAY_NAMES.get(dt, dt))
+            min_values.append(round(minutes[dt], 1))
+            min_colors.append(DEVICE_COLORS.get(dt, GRAY))
+
+    min_traces = json.dumps([{
+        'type': 'pie',
+        'labels': min_labels,
+        'values': min_values,
+        'marker': {'colors': min_colors},
+        'textinfo': 'label+percent',
+        'textposition': 'auto',
+        'hovertemplate': '%{label}: %{value:.0f} min (%{percent})<extra></extra>',
+        'hole': 0.35,
+    }])
+    min_layout = json.dumps({
+        'margin': {'l': 20, 'r': 20, 't': 30, 'b': 20},
+        'height': 280,
+        'title': {'text': 'Minutes by Device Type', 'font': {'size': 14}},
+        'paper_bgcolor': 'white',
+        'showlegend': True,
+        'legend': {'orientation': 'h', 'y': -0.1},
+    })
+
     # Bar chart — energy by device type
     bar_labels = []
     bar_values = []
@@ -551,10 +660,14 @@ def create_session_overview(sessions: List[Dict]) -> str:
 
     return f'''
     {cards_html}
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
         <div>
             <div id="session_pie"></div>
             <script>Plotly.newPlot('session_pie', {pie_traces}, {pie_layout}, {{displayModeBar:false}});</script>
+        </div>
+        <div>
+            <div id="minutes_pie"></div>
+            <script>Plotly.newPlot('minutes_pie', {min_traces}, {min_layout}, {{displayModeBar:false}});</script>
         </div>
         <div>
             <div id="session_energy_bar"></div>
@@ -967,8 +1080,8 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
         return '<p style="color: #888;">No classified sessions with confidence scores.</p>'
 
     confidences = [s.get('confidence', 0) for s in classified]
-    high = sum(1 for c in confidences if c >= 0.7)
-    medium = sum(1 for c in confidences if 0.4 <= c < 0.7)
+    high = sum(1 for c in confidences if c >= 0.8)
+    medium = sum(1 for c in confidences if 0.4 <= c < 0.8)
     low = sum(1 for c in confidences if c < 0.4)
     total = len(confidences)
 
@@ -977,11 +1090,11 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;">
         <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{high} ({high/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">High (\u22650.70)</div>
+            <div style="font-size: 0.8em; color: #666;">High (\u22650.80)</div>
         </div>
         <div style="background: #fef3cd; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {ORANGE};">{medium} ({medium/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.70)</div>
+            <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.80)</div>
         </div>
         <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
             <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{low} ({low/total:.0%})</div>
@@ -993,14 +1106,14 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     traces = json.dumps([
         {
             'type': 'histogram',
-            'x': [c for c in confidences if c >= 0.7],
+            'x': [c for c in confidences if c >= 0.8],
             'name': 'High',
             'marker': {'color': GREEN},
             'xbins': {'start': 0, 'end': 1, 'size': 0.05},
         },
         {
             'type': 'histogram',
-            'x': [c for c in confidences if 0.4 <= c < 0.7],
+            'x': [c for c in confidences if 0.4 <= c < 0.8],
             'name': 'Medium',
             'marker': {'color': ORANGE},
             'xbins': {'start': 0, 'end': 1, 'size': 0.05},
@@ -1023,7 +1136,7 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
         'plot_bgcolor': '#f8f9fa',
         'legend': {'orientation': 'h', 'y': -0.2},
         'shapes': [
-            {'type': 'line', 'x0': 0.7, 'x1': 0.7, 'y0': 0, 'y1': 1, 'yref': 'paper',
+            {'type': 'line', 'x0': 0.8, 'x1': 0.8, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
             {'type': 'line', 'x0': 0.4, 'x1': 0.4, 'y0': 0, 'y1': 1, 'yref': 'paper',
              'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
@@ -1048,11 +1161,17 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     """
     if not spike_filter or spike_filter.get('spike_count', 0) == 0:
         kept = spike_filter.get('kept_count', 0) if spike_filter else 0
-        return (
-            f'<p style="color: #888;">No transient events filtered. '
-            f'All {kept} matched events have duration &ge; '
-            f'{spike_filter.get("min_duration_threshold", 3)} min.</p>'
-        )
+        threshold = spike_filter.get('min_duration_threshold', 3) if spike_filter else 3
+        if kept > 0:
+            return (
+                f'<p style="color: #888;">No transient events filtered. '
+                f'All {kept} matched events have duration &ge; {threshold} min.</p>'
+            )
+        else:
+            return (
+                f'<p style="color: #888;">No spike filter data available. '
+                f'Re-run the pipeline to generate spike statistics.</p>'
+            )
 
     spike_count = spike_filter['spike_count']
     kept_count = spike_filter['kept_count']
@@ -1168,7 +1287,77 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     else:
         charts_html = ''
 
-    # Explanation
+    # Pie chart: Event breakdown by duration category
+    # Categories: Spikes (<3 min), Short (3-25 min), Long (>=25 min)
+    short_count = spike_filter.get('short_count', 0)
+    long_count = spike_filter.get('long_count', 0)
+    short_min = spike_filter.get('short_minutes', 0)
+    long_min = spike_filter.get('long_minutes', 0)
+
+    # If short/long aren't in spike_filter, estimate from kept events
+    if short_count == 0 and long_count == 0 and kept_count > 0:
+        # Fallback: we can't distinguish short/long without per-event data
+        short_count = kept_count
+        short_min = kept_min
+
+    pie_labels = []
+    pie_values_count = []
+    pie_values_min = []
+    pie_colors = []
+
+    if spike_count > 0:
+        pie_labels.append(f'Spikes (<{threshold} min)')
+        pie_values_count.append(spike_count)
+        pie_values_min.append(spike_min)
+        pie_colors.append(RED)
+    if short_count > 0:
+        pie_labels.append(f'Short ({threshold}-25 min)')
+        pie_values_count.append(short_count)
+        pie_values_min.append(short_min)
+        pie_colors.append(ORANGE)
+    if long_count > 0:
+        pie_labels.append('Long (>=25 min)')
+        pie_values_count.append(long_count)
+        pie_values_min.append(long_min)
+        pie_colors.append(GREEN)
+
+    pie_html = ''
+    if len(pie_labels) >= 2:
+        count_pie = json.dumps([{
+            'type': 'pie', 'labels': pie_labels, 'values': pie_values_count,
+            'marker': {'colors': pie_colors}, 'textinfo': 'label+percent+value',
+            'textposition': 'auto', 'hole': 0.35,
+            'hovertemplate': '%{label}: %{value} events (%{percent})<extra></extra>',
+        }])
+        count_pie_layout = json.dumps({
+            'margin': {'l': 10, 'r': 10, 't': 30, 'b': 10}, 'height': 250,
+            'title': {'text': 'By Event Count', 'font': {'size': 13}},
+            'paper_bgcolor': 'white', 'showlegend': False,
+        })
+        min_pie = json.dumps([{
+            'type': 'pie', 'labels': pie_labels, 'values': pie_values_min,
+            'marker': {'colors': pie_colors}, 'textinfo': 'label+percent+value',
+            'textposition': 'auto', 'hole': 0.35,
+            'hovertemplate': '%{label}: %{value:.0f} min (%{percent})<extra></extra>',
+        }])
+        min_pie_layout = json.dumps({
+            'margin': {'l': 10, 'r': 10, 't': 30, 'b': 10}, 'height': 250,
+            'title': {'text': 'By Total Minutes', 'font': {'size': 13}},
+            'paper_bgcolor': 'white', 'showlegend': False,
+        })
+        pie_html = f'''
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+            <div>
+                <div id="spike_pie_count"></div>
+                <script>Plotly.newPlot('spike_pie_count', {count_pie}, {count_pie_layout}, {{displayModeBar:false}});</script>
+            </div>
+            <div>
+                <div id="spike_pie_min"></div>
+                <script>Plotly.newPlot('spike_pie_min', {min_pie}, {min_pie_layout}, {{displayModeBar:false}});</script>
+            </div>
+        </div>'''
+
+    # Explanation with clarifications about Unknown and Confidence
     explanation = f'''
     <div style="margin-top: 12px; padding: 12px; background: #fff3cd; border-radius: 6px; font-size: 0.85em; color: #856404;">
         <strong>Why filter spikes?</strong> With 1-minute resolution data and a purely unsupervised approach
@@ -1176,8 +1365,300 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
         Events shorter than {threshold} minutes (microwave, oven, motor starts) cannot be reliably
         identified at this resolution &mdash; no classification rule accepts them
         (boiler &ge;25 min, AC cycle &ge;3 min).
-        While spikes may account for a notable share of event <em>count</em>, they represent
-        a small fraction of total <em>minutes</em> &mdash; the energy impact is minimal.
+    </div>
+    <div style="margin-top: 8px; padding: 12px; background: #e8f4fd; border-radius: 6px; font-size: 0.85em; color: #0c5460;">
+        <strong>Spikes vs Unknown:</strong> Spikes are removed <em>before</em> session grouping and classification.
+        They are <strong>not</strong> part of the Unknown category. Unknown sessions are events that passed the duration
+        filter (&ge;{threshold} min) but did not match any device classification rule.<br>
+        <strong>Confidence scope:</strong> Confidence scores are calculated only for <em>classified</em> sessions
+        (boiler, central AC, regular AC). Unknown sessions do not have confidence scores and are excluded from confidence statistics.
     </div>'''
 
-    return f'{cards_html}{charts_html}{explanation}'
+    return f'{cards_html}{charts_html}{pie_html}{explanation}'
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert hex color to rgba string."""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f'rgba({r},{g},{b},{alpha})'
+
+
+# ---------------------------------------------------------------------------
+# Expandable 3x3 power charts per activation row
+# ---------------------------------------------------------------------------
+
+def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
+                          session_phases: dict, device_type: str,
+                          margin_minutes: int = 60,
+                          all_match_intervals: Optional[Dict[str, list]] = None,
+                          constituent_events: Optional[list] = None) -> Optional[dict]:
+    """Extract power data window for a single activation's expandable charts.
+
+    Args:
+        summarized_data: DataFrame with timestamp, original_wN, remaining_wN
+        on_start_iso: ISO start timestamp
+        off_end_iso: ISO end timestamp
+        session_phases: dict mapping phase -> magnitude (e.g. {'w2': 2500})
+        device_type: device type string for color lookup
+        margin_minutes: minutes of context before/after
+        all_match_intervals: {phase: [(start, end, magnitude, duration), ...]}
+            All matches from all iterations for building match rectangles.
+        constituent_events: List of session's own events for identifying
+            which matches belong to this session.
+
+    Returns:
+        Compact dict with chart data, or None if no data available.
+    """
+    import pandas as pd
+
+    if summarized_data is None or not on_start_iso or not off_end_iso:
+        return None
+
+    try:
+        start = pd.Timestamp(on_start_iso)
+        end = pd.Timestamp(off_end_iso)
+    except (ValueError, TypeError):
+        return None
+
+    margin = pd.Timedelta(minutes=margin_minutes)
+    mask = ((summarized_data['timestamp'] >= start - margin) &
+            (summarized_data['timestamp'] <= end + margin))
+    window = summarized_data[mask]
+
+    if window.empty or len(window) < 3:
+        return None
+
+    result = {
+        'ts': window['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist(),
+        'ss': start.strftime('%Y-%m-%d %H:%M'),
+        'se': end.strftime('%Y-%m-%d %H:%M'),
+        'sp': session_phases,
+        'dc': DEVICE_COLORS.get(device_type, GRAY),
+    }
+
+    for phase in ['w1', 'w2', 'w3']:
+        orig_col = f'original_{phase}'
+        remain_col = f'remaining_{phase}'
+        if orig_col in window.columns:
+            result[f'o_{phase}'] = [
+                int(round(v)) if pd.notna(v) else 0
+                for v in window[orig_col]
+            ]
+        if remain_col in window.columns:
+            result[f'r_{phase}'] = [
+                int(round(v)) if pd.notna(v) else 0
+                for v in window[remain_col]
+            ]
+
+    # Add match rectangles for each phase (individual match shapes)
+    if all_match_intervals:
+        # Build set of session event keys for fast lookup
+        ses_keys = set()
+        for ce in (constituent_events or []):
+            ce_start = ce.get('on_start', '')
+            ce_phase = ce.get('phase', '')
+            if ce_start and ce_phase:
+                try:
+                    normalized = pd.Timestamp(ce_start).strftime('%Y-%m-%dT%H:%M')
+                    ses_keys.add((ce_phase, normalized))
+                except (ValueError, TypeError):
+                    pass
+
+        min_duration_threshold = 3  # spike threshold in minutes
+        win_start = start - margin
+        win_end = end + margin
+
+        for phase in ['w1', 'w2', 'w3']:
+            phase_matches = all_match_intervals.get(phase, [])
+            if not phase_matches:
+                continue
+            rects = []
+            for (m_start, m_end, m_mag, m_dur) in phase_matches:
+                try:
+                    ts_s = pd.Timestamp(m_start)
+                    ts_e = pd.Timestamp(m_end)
+                except (ValueError, TypeError):
+                    continue
+                # Check if within chart window
+                if ts_e < win_start or ts_s > win_end:
+                    continue
+                # Classify: session match, spike, or other device
+                normalized_start = ts_s.strftime('%Y-%m-%dT%H:%M')
+                if (phase, normalized_start) in ses_keys:
+                    cat = 'ses'
+                elif m_dur < min_duration_threshold:
+                    cat = 'spk'
+                else:
+                    cat = 'oth'
+                rects.append({
+                    's': ts_s.strftime('%Y-%m-%d %H:%M'),
+                    'e': ts_e.strftime('%Y-%m-%d %H:%M'),
+                    'm': m_mag,
+                    'c': cat,
+                })
+            if rects:
+                result[f'mt_{phase}'] = rects
+
+    return result
+
+
+def _build_chart_row_html(act_idx: int, colspan: int) -> str:
+    """Build the hidden chart row HTML with 3x3 grid placeholders."""
+    divs = []
+    for row_key, row_label in [('o', 'Original'), ('r', 'Remaining'), ('s', 'Segregated')]:
+        divs.append(
+            f'<div style="grid-column:1/-1;font-weight:600;color:#555;font-size:0.82em;'
+            f'margin:{"8" if row_key != "o" else "0"}px 0 2px 4px;">{row_label} Power</div>'
+        )
+        for phase in ['w1', 'w2', 'w3']:
+            divs.append(f'<div id="act-c-{act_idx}-{row_key}-{phase}"></div>')
+
+    grid_content = '\n                        '.join(divs)
+    return f'''
+            <tr id="chart-row-{act_idx}" style="display:none;">
+                <td colspan="{colspan}" style="padding:0;border-bottom:2px solid #667eea;">
+                    <div id="chart-grid-{act_idx}" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:12px;background:#f8f9fa;">
+                        {grid_content}
+                    </div>
+                </td>
+            </tr>'''
+
+
+def _build_activation_charts_script(all_chart_data: dict) -> str:
+    """Build JavaScript for expandable activation charts with lazy Plotly rendering."""
+    data_json = json.dumps(all_chart_data, separators=(',', ':'))
+
+    return f'''
+    <script>
+    var _actCD = {data_json};
+
+    function toggleActChart(idx) {{
+        var row = document.getElementById('chart-row-' + idx);
+        if (!row) return;
+        if (row.style.display === 'none' || row.style.display === '') {{
+            row.style.display = 'table-row';
+            if (!row.dataset.rendered) {{
+                _renderActCharts(idx);
+                row.dataset.rendered = '1';
+            }}
+        }} else {{
+            row.style.display = 'none';
+        }}
+    }}
+
+    function _hexRgba(hex, a) {{
+        var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+        return 'rgba('+r+','+g+','+b+','+a+')';
+    }}
+
+    function _sessShapes(d) {{
+        return [
+            {{type:'line',x0:d.ss,x1:d.ss,y0:0,y1:1,yref:'paper',
+              line:{{color:'rgba(0,0,0,0.4)',width:1.5,dash:'dash'}}}},
+            {{type:'line',x0:d.se,x1:d.se,y0:0,y1:1,yref:'paper',
+              line:{{color:'rgba(0,0,0,0.4)',width:1.5,dash:'dash'}}}},
+            {{type:'rect',x0:d.ss,x1:d.se,y0:0,y1:1,yref:'paper',
+              fillcolor:'rgba(0,0,0,0.04)',line:{{width:0}}}}
+        ];
+    }}
+
+    function _renderActCharts(idx) {{
+        var d = _actCD[idx];
+        if (!d) return;
+        var phases = ['w1','w2','w3'];
+        var pC = {{w1:'#007bff',w2:'#dc3545',w3:'#28a745'}};
+        var shapes = _sessShapes(d);
+
+        // Compute global Y max across all phases and all rows (original/remaining/segregated)
+        var gMax = 0;
+        phases.forEach(function(ph) {{
+            (d['o_'+ph]||[]).forEach(function(v){{ if(v>gMax) gMax=v; }});
+        }});
+        gMax = Math.ceil(gMax * 1.08 / 100) * 100;  // 8% headroom, round to nearest 100
+        if (gMax < 100) gMax = 100;
+
+        var xRange = [d.ts[0], d.ts[d.ts.length-1]];
+        var bLay = {{
+            margin:{{l:50,r:10,t:28,b:30}},height:200,
+            xaxis:{{tickangle:-30,tickfont:{{size:9}},range:xRange}},
+            yaxis:{{title:'W',titlefont:{{size:10}},range:[0,gMax]}},
+            plot_bgcolor:'#fafafa',paper_bgcolor:'white',
+            shapes:shapes,hovermode:'x unified'
+        }};
+        var cfg = {{displayModeBar:false,responsive:true}};
+
+        phases.forEach(function(ph) {{
+            var orig = d['o_'+ph]||[];
+            var rem = d['r_'+ph]||[];
+            var ts = d.ts;
+            if (!ts || !orig.length) return;
+
+            // Row 1: Original
+            Plotly.newPlot('act-c-'+idx+'-o-'+ph, [{{
+                x:ts,y:orig,type:'scatter',mode:'lines',
+                line:{{color:pC[ph],width:2}},
+                hovertemplate:'%{{y:.0f}}W<extra></extra>'
+            }}], Object.assign({{}},bLay,{{
+                title:{{text:ph.toUpperCase()+' — Original',font:{{size:12}}}}
+            }}), cfg);
+
+            // Row 2: Remaining
+            Plotly.newPlot('act-c-'+idx+'-r-'+ph, [{{
+                x:ts,y:rem,type:'scatter',mode:'lines',
+                line:{{color:pC[ph],width:2}},
+                hovertemplate:'%{{y:.0f}}W<extra></extra>'
+            }}], Object.assign({{}},bLay,{{
+                title:{{text:ph.toUpperCase()+' — Remaining',font:{{size:12}}}}
+            }}), cfg);
+
+            // Row 3: Segregated — individual match rectangles as toself polygons
+            var matchRects = d['mt_'+ph]||[];
+            var sesX=[],sesY=[],spkX=[],spkY=[],othX=[],othY=[];
+            matchRects.forEach(function(r) {{
+                var bx,by;
+                if (r.c==='ses') {{ bx=sesX; by=sesY; }}
+                else if (r.c==='spk') {{ bx=spkX; by=spkY; }}
+                else {{ bx=othX; by=othY; }}
+                bx.push(r.s,r.s,r.e,r.e,r.s,null);
+                by.push(0,r.m,r.m,0,0,null);
+            }});
+
+            var segTraces = [];
+            if (sesX.length) segTraces.push({{
+                x:sesX,y:sesY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:_hexRgba(d.dc,0.55),
+                line:{{color:d.dc,width:1}},
+                name:'This session',legendgroup:'ses',showlegend:true,
+                hovertemplate:'Session: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (spkX.length) segTraces.push({{
+                x:spkX,y:spkY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:'rgba(255,165,0,0.4)',
+                line:{{color:'#e67e22',width:1}},
+                name:'Filtered (<3 min)',legendgroup:'spk',showlegend:true,
+                hovertemplate:'Spike: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (othX.length) segTraces.push({{
+                x:othX,y:othY,type:'scatter',mode:'lines',
+                fill:'toself',fillcolor:'rgba(176,176,176,0.4)',
+                line:{{color:'#aaa',width:1}},
+                name:'Other devices',legendgroup:'oth',showlegend:true,
+                hovertemplate:'Other: %{{y:.0f}}W<extra></extra>'
+            }});
+            if (!segTraces.length) segTraces.push({{
+                x:ts,y:ts.map(function(){{return null;}}),
+                type:'scatter',mode:'lines',line:{{width:0}},
+                showlegend:false,hoverinfo:'skip'
+            }});
+
+            Plotly.newPlot('act-c-'+idx+'-s-'+ph, segTraces,
+            Object.assign({{}},bLay,{{
+                title:{{text:ph.toUpperCase()+' — Segregated',font:{{size:12}}}},
+                margin:{{l:50,r:10,t:28,b:55}},
+                showlegend:true,
+                legend:{{orientation:'h',y:-0.3,font:{{size:10}}}}
+            }}), cfg);
+        }});
+    }}
+    </script>'''

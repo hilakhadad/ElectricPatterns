@@ -36,7 +36,7 @@ WEIGHTS = {
 }
 
 # Confidence tier boundaries
-TIER_HIGH = 0.70
+TIER_HIGH = 0.80
 TIER_MEDIUM = 0.40
 
 

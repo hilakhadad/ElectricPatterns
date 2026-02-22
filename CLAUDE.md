@@ -135,7 +135,7 @@ role_based_segregation_dev/
 | `session_output.py` | `build_session_json()` | Session JSON + backward-compatible activations JSON |
 | `cleanup.py` | `cleanup_intermediate_files()` | Remove intermediate pkl files |
 
-**M2 flow**: Load all matches → Filter spikes (<3 min) → Group into sessions (30-min gap) → Phase sync (central AC) → Classify → Confidence score → JSON output
+**M2 flow**: Load all matches → Filter spikes (<3 min) → Group into sessions (30-min gap) → Split sessions → Classify (boiler → central AC → regular AC) → Confidence score → JSON output
 
 ### pipeline/ — Orchestration
 
@@ -173,7 +173,7 @@ Module 2 — Identification (runs once):
   All matches from all iterations
     → Filter spikes (<3 min)
     → Group into sessions (30-min gap)
-    → Phase synchronization (central AC detection)
+    → Split sessions (isolate prefix events from unrelated devices)
     → Classify (boiler → central AC → regular AC → unknown)
     → Confidence scoring
     → JSON output (device_sessions + device_activations)
@@ -253,7 +253,7 @@ python -m harvesting_data.cli --house 305  # Fetch single house
 - Logging: per-house log files at `{output}/logs/test_{house_id}.log`
 - Visualization: 4 rows (Original, Remaining, Segregated, Events) x 3 columns (w1, w2, w3)
 - Device classification:
-  - **Boiler**: Single-phase, >=25min duration, >=1500W, isolated (no nearby compressor cycles)
+  - **Boiler**: Single-phase, >=15min duration, >=1500W, isolated (no nearby compressor cycles)
   - **Central AC**: 2+ phases synchronized within ±10 min, cycling pattern
   - **Regular AC**: 800W+, 3-30min compressor cycles, single phase
 

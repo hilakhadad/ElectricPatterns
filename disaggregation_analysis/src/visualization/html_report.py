@@ -97,7 +97,7 @@ def _extract_house_data(analyses: List[Dict[str, Any]]) -> list:
         if classification:
             house_data[-1]['classified_rate'] = classification.get('classified_rate', 0)
             house_data[-1]['device_power_pct'] = classification.get('device_power_pct', 0)
-            house_data[-1]['total_explained_power_pct'] = classification.get('total_explained_power_pct', 0)
+            house_data[-1]['total_segregated_power_pct'] = classification.get('total_segregated_power_pct', 0)
             house_data[-1]['device_breakdown'] = classification.get('device_breakdown', {})
             house_data[-1]['has_classification'] = True
         else:
@@ -197,7 +197,7 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
         </div>
         <div class="summary-card" style="border: 2px solid {dev_color}; background: linear-gradient(135deg, #fff 0%, {dev_color}22 100%);">
             <div class="summary-number" style="color: {dev_color};">{avg_device_power:.1%}</div>
-            <div class="summary-label">Device Power Explained</div>
+            <div class="summary-label">Device Power Segregated</div>
             <div style="font-size: 0.7em; color: #888;">classified device W / total W</div>
         </div>
         """
@@ -210,7 +210,7 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
         </div>
         <div class="summary-card" id="summary-th-card" style="border: 2px solid {th_color}; background: linear-gradient(135deg, #fff 0%, {th_color}22 100%);">
             <div class="summary-number" id="summary-th-explanation" style="color: {th_color};">{avg_th_expl:.1%}</div>
-            <div class="summary-label">High-Power Energy Explained</div>
+            <div class="summary-label">High-Power Energy Segregated</div>
             <div id="summary-th-std" style="font-size: 0.8em; color: #666;">(&gt;1300W) \u00b1{std_th_expl:.1%} std</div>
         </div>
         {classification_cards}
@@ -384,13 +384,13 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
     classification_legend = ''
     classification_headers = ''
     if has_classification:
-        col_offset = 7  # classification columns start after column index 6 (High-Power Explained)
+        col_offset = 7  # classification columns start after column index 6 (High-Power Segregated)
         classification_legend = """
         <strong>Classified</strong> = classified matches / total matches |
         <strong>Device Power</strong> = classified device watts / total watts |"""
         classification_headers = f"""
                 <th onclick="sortTable({col_offset})">Classified<br><small>(rate)</small></th>
-                <th onclick="sortTable({col_offset + 1})">Device Power<br><small>(explained)</small></th>"""
+                <th onclick="sortTable({col_offset + 1})">Device Power<br><small>(segregated)</small></th>"""
         # Adjust sort indices for columns after classification
         devices_idx = col_offset + 2
         score_idx = col_offset + 3
@@ -406,7 +406,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         <strong>Match Rate</strong> = matched events / total events |
         <strong>Seg (power)</strong> = segregated watts / original watts |
         <strong>Seg (minutes)</strong> = matched minutes / total data minutes |
-        <strong>High-Power Explained</strong> = % of minutes &gt;1300W where segregation brought remaining below threshold |{classification_legend}
+        <strong>High-Power Segregated</strong> = % of minutes &gt;1300W where segregation brought remaining below threshold |{classification_legend}
         <strong>Exp Score</strong> = 70% match + 30% seg (3-phase avg, damaged=0)
     </p>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 10px;">
@@ -422,7 +422,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
                 <th onclick="sortTable(3)">Match Rate<br><small>(events)</small></th>
                 <th onclick="sortTable(4)">Segmentation<br><small>(power)</small></th>
                 <th onclick="sortTable(5)">Segmentation<br><small>(minutes)</small></th>
-                <th onclick="sortTable(6)">High-Power<br><small>Explained</small></th>{classification_headers}
+                <th onclick="sortTable(6)">High-Power<br><small>Segregated</small></th>{classification_headers}
                 <th onclick="sortTable({devices_idx})">Devices</th>
                 <th onclick="sortTable({score_idx})">Exp Score</th>
                 <th onclick="sortTable({flags_idx})">Flags</th>
@@ -1078,7 +1078,7 @@ def _build_html_document(title: str, summary: str, table: str,
                 ['Matching Rate (events)', matchRates, true],
                 ['Segmentation (power)', segRatios, true],
                 ['Segmentation (minutes)', minRatios, true],
-                ['High-Power Explained', thRates, true],
+                ['High-Power Segregated', thRates, true],
                 ['Overall Score', overallScores, false],
             ];
 
@@ -1474,7 +1474,7 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
             </div>
             <div>
                 <div style="font-size: 2.5em; font-weight: bold; color: {dev_color};">{dev_pwr:.1%}</div>
-                <div style="color: #666;">Device Power Explained</div>
+                <div style="color: #666;">Device Power Segregated</div>
             </div>
         </div>
         <div style="display: flex; justify-content: center; gap: 30px; margin-top: 15px; flex-wrap: wrap;">
@@ -1496,11 +1496,11 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     return f"""
     {classification_html}
     <div class="th-explanation-highlight" style="background: linear-gradient(135deg, #fff 0%, {th_color}22 100%); border: 2px solid {th_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
-        <h3 style="margin: 0 0 10px 0; color: #333;">High-Power Energy Explained (&gt;1300W)</h3>
+        <h3 style="margin: 0 0 10px 0; color: #333;">High-Power Energy Segregated (&gt;1300W)</h3>
         <div style="display: flex; justify-content: center; gap: 50px; flex-wrap: wrap;">
             <div>
                 <div style="font-size: 2.5em; font-weight: bold; color: {th_color};">{th_explanation_rate:.1%}</div>
-                <div style="color: #666;">Explained Rate</div>
+                <div style="color: #666;">Segregated Rate</div>
             </div>
             <div>
                 <div style="font-size: 1.5em; font-weight: bold; color: #333;">{th_minutes_above:,}</div>
@@ -1508,7 +1508,7 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
             </div>
             <div>
                 <div style="font-size: 1.5em; font-weight: bold; color: {th_color};">{th_minutes_explained:,}</div>
-                <div style="color: #666;">Minutes Explained</div>
+                <div style="color: #666;">Minutes Segregated</div>
             </div>
         </div>
     </div>
@@ -1607,13 +1607,13 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
 
     threshold = th_per_iter[0].get('threshold', 1300) if th_per_iter else 1300
     th_table_html = f"""
-    <h4 style="margin-top: 20px; color: #2c3e50;">High-Power Energy Explained per Iteration (&gt;{threshold}W)</h4>
+    <h4 style="margin-top: 20px; color: #2c3e50;">High-Power Energy Segregated per Iteration (&gt;{threshold}W)</h4>
     <table class="data-table" style="max-width: 500px;">
         <thead>
             <tr>
                 <th>Iter</th>
                 <th>Minutes &gt;{threshold}W</th>
-                <th>Minutes Explained</th>
+                <th>Minutes Segregated</th>
                 <th>Rate</th>
             </tr>
         </thead>
@@ -1843,9 +1843,9 @@ def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
     total_color = '#28a745' if total_rate >= 0.8 else '#ffc107' if total_rate >= 0.5 else '#dc3545'
 
     return f"""
-    <h4 style="margin-top: 25px;">Threshold Explanation (&gt;{threshold}W)</h4>
+    <h4 style="margin-top: 25px;">Threshold Segregation (&gt;{threshold}W)</h4>
     <p style="font-size: 0.85em; color: #666; margin-bottom: 15px;">
-        Minutes where power exceeded {threshold}W and were explained by segregation (short/medium/long events).
+        Minutes where power exceeded {threshold}W and were segregated (short/medium/long events).
     </p>
     <div class="summary-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 15px;">
         <div class="summary-card">
@@ -1854,11 +1854,11 @@ def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
         </div>
         <div class="summary-card" style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);">
             <div class="summary-number" style="color: #155724; font-size: 1.6em;">{total_explained:,}</div>
-            <div class="summary-label">Minutes Explained</div>
+            <div class="summary-label">Minutes Segregated</div>
         </div>
         <div class="summary-card" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);">
             <div class="summary-number" style="color: {total_color}; font-size: 1.6em;">{total_rate:.1%}</div>
-            <div class="summary-label">Explanation Rate</div>
+            <div class="summary-label">Segregation Rate</div>
         </div>
     </div>
     <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
@@ -1866,7 +1866,7 @@ def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
             <tr style="background: #f8f9fa;">
                 <th style="padding: 8px 12px; text-align: left;">Phase</th>
                 <th style="padding: 8px 12px; text-align: right;">Above TH</th>
-                <th style="padding: 8px 12px; text-align: right;">Explained</th>
+                <th style="padding: 8px 12px; text-align: right;">Segregated</th>
                 <th style="padding: 8px 12px; text-align: right;">Rate</th>
             </tr>
         </thead>

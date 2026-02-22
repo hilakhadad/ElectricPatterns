@@ -93,11 +93,11 @@ Runs once after all M1 iterations complete.
 1. **Load all matches** from all iterations (all `matches/*.pkl` files)
 2. **Filter spikes** - Remove events < 3 minutes (transient noise from devices not targeted by identification)
 3. **Group into sessions** - Events on the same phase within 30-min gap belong to one session
-4. **Phase synchronization** - Sessions overlapping across 2+ phases within 10 min -> multi-phase session (central AC)
+4. **Split sessions** - If short prefix events precede a significantly longer event (>=3x median, >=10 min), split them into separate sessions
 5. **Classify** (priority order):
-   - **Boiler**: Single-phase, >=1500W, >=25 min, isolated
-   - **Central AC**: 2+ phases synchronized, cycling pattern
-   - **Regular AC**: 800W+, 3-30 min compressor cycles
+   - **Boiler**: >=1500W, >=15 min avg duration, <=2 events, isolated (no medium events nearby). Phase exclusivity enforced as post-processing (one boiler per household = one phase)
+   - **Central AC**: Must first pass AC-candidate pre-filter (>=800W, >=4 cycles, magnitude CV <=30%, duration CV <=40%, gap CV <=50%), then 2+ phases synchronized within 10 min
+   - **Regular AC**: 800W+, >=4 cycles (first >=15 min), magnitude CV <=20%. When overall CV fails due to multi-iteration mixing, falls back to per-iteration check
    - **Unknown**: Doesn't match any criteria
 6. **Confidence scoring** - 0-1 score per session based on how well it matches classification criteria
 7. **JSON output** - `device_sessions_{house_id}.json` + backward-compatible `device_activations_{house_id}.json`
