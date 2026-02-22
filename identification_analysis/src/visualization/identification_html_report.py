@@ -40,7 +40,6 @@ from visualization.identification_charts import (
     create_unclassified_analysis,
     create_device_activations_detail,
     create_spike_analysis,
-    create_session_power_plots,
 )
 from visualization.classification_charts import create_quality_section
 
@@ -176,20 +175,20 @@ def generate_identification_report(
     except Exception as e:
         logger.warning(f"Classification quality failed for house {house_id}: {e}")
 
-    # Per-session power visualization (original / remaining / segregated)
-    session_power_html = ''
+    # Load summarized power data for expandable charts in activations table
+    summarized_data = None
     try:
         summarized_data = _load_summarized_power(experiment_dir, house_id)
-        if summarized_data is not None:
-            session_power_html = create_session_power_plots(sessions, summarized_data)
     except Exception as e:
-        logger.warning(f"Session power visualization failed for house {house_id}: {e}")
+        logger.warning(f"Failed to load summarized power for house {house_id}: {e}")
 
-    # Device activations detail (flat format)
+    # Device activations detail (flat format) with expandable power charts
     activations_detail_html = ''
     if not skip_activations_detail:
         activations = _load_activations(experiment_dir, house_id)
-        activations_detail_html = create_device_activations_detail(activations, house_id=house_id)
+        activations_detail_html = create_device_activations_detail(
+            activations, house_id=house_id, summarized_data=summarized_data,
+        )
 
     # Build HTML
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -207,7 +206,6 @@ def generate_identification_report(
         heatmap_html=heatmap_html,
         quality_html=quality_html,
         unclassified_html=unclassified_html,
-        session_power_html=session_power_html,
         activations_detail_html=activations_detail_html,
         summary=summary,
     )
@@ -236,7 +234,6 @@ def _build_house_html(
     heatmap_html: str,
     quality_html: str,
     unclassified_html: str,
-    session_power_html: str,
     activations_detail_html: str,
     summary: Dict[str, Any],
 ) -> str:
@@ -397,19 +394,6 @@ def _build_house_html(
                 not covered by the current heuristic rules.
             </p>
             {unclassified_html}
-        </section>
-
-        <section>
-            <h2>Session Power Visualization</h2>
-            <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
-                Per-session power traces: <strong>solid line</strong> = original sensor reading,
-                <strong>dashed line</strong> = remaining power after extraction,
-                <strong>filled area</strong> = segregated (extracted) power.
-                Each chart shows 1 hour before and after the session.
-                Vertical dashed lines mark session boundaries.
-                Sessions are sorted by confidence (highest first).
-            </p>
-            {session_power_html}
         </section>
 
         {activations_section_html}
