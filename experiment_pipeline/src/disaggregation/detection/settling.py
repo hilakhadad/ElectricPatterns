@@ -1,12 +1,12 @@
 """
-Inrush spike normalization for ON and OFF events.
+Settling extension for ON and OFF events.
 
-Detects transient inrush spikes at the start of ON events (or end of OFF events)
+Detects transient power spikes at the start of ON events (or end of OFF events)
 and extends event boundaries to include the settling period. This ensures the
 cumsum-based segmentation tracks the correct steady-state device power.
 
-Problem: An AC compressor turns on with a 4000W inrush spike that settles to
-1500W steady state after 1-2 minutes. Without normalization:
+Problem: An AC compressor turns on with a 4000W spike that settles to
+1500W steady state after 1-2 minutes. Without settling extension:
   - ON magnitude = 4000W (spike)
   - Segmentation extracts at 4000W → "pit" in remaining
   - Matching fails (4000W ON vs 1500W OFF → diff > 350W)
@@ -22,7 +22,7 @@ import numpy as np
 from typing import Optional
 
 
-def normalize_inrush_on_events(
+def extend_settling_on_events(
     on_events: pd.DataFrame,
     data_indexed: pd.DataFrame,
     phase: str,
@@ -32,10 +32,10 @@ def normalize_inrush_on_events(
     min_threshold: float = 0,
 ) -> pd.DataFrame:
     """
-    Detect inrush spikes in ON events and extend boundaries to include settling.
+    Detect transient spikes in ON events and extend boundaries to include settling.
 
     For each ON event, looks at the power diffs in the minutes after the event
-    ends. If there's a significant opposite-direction change (>30% of magnitude),
+    ends. If there's a significant opposite-direction change (>25% of magnitude),
     the event boundary is extended to include the settling period, and the
     magnitude is recalculated from actual phase values.
 
@@ -45,13 +45,13 @@ def normalize_inrush_on_events(
         phase: Phase column name (w1, w2, w3)
         off_events: DataFrame with OFF events (to avoid extending into them)
         settling_factor: Minimum ratio of settled/spike magnitude to trigger
-                        normalization. 0.7 means >30% drop triggers it.
+                        extension. 0.75 means >25% drop triggers it.
         max_settling_minutes: Maximum minutes to look ahead for settling
-        min_threshold: Minimum magnitude after normalization (events below
-                      this are not normalized to avoid dropping below threshold)
+        min_threshold: Minimum magnitude after extension (events below
+                      this are not extended to avoid dropping below threshold)
 
     Returns:
-        Modified ON events DataFrame with extended boundaries where inrush detected
+        Modified ON events DataFrame with extended boundaries where settling detected
     """
     if len(on_events) == 0:
         return on_events
@@ -77,7 +77,7 @@ def normalize_inrush_on_events(
     results = []
     for _, event in on_events.iterrows():
         event = event.copy()
-        result = _normalize_single_on_event(
+        result = _extend_single_on_event(
             event, data_indexed, phase, diff_col, occupied,
             settling_factor, max_settling_minutes, min_threshold,
         )
@@ -86,7 +86,7 @@ def normalize_inrush_on_events(
     return pd.DataFrame(results).reset_index(drop=True)
 
 
-def _normalize_single_on_event(
+def _extend_single_on_event(
     event: pd.Series,
     data_indexed: pd.DataFrame,
     phase: str,
@@ -96,7 +96,7 @@ def _normalize_single_on_event(
     max_settling_minutes: int,
     min_threshold: float,
 ) -> pd.Series:
-    """Normalize a single ON event if it has an inrush spike."""
+    """Extend a single ON event if it has a transient spike with settling."""
     on_end = event['end']
     magnitude = abs(event['magnitude'])
 
@@ -142,9 +142,9 @@ def _normalize_single_on_event(
             if consecutive_stable >= 2:
                 break  # Power has stabilized — settling is complete
 
-    # Check if the drop is significant enough to be an inrush
+    # Check if the drop is significant enough to be a transient spike
     if settling_end is None or abs(cumulative_drop) < magnitude * (1 - settling_factor):
-        return event  # No significant inrush detected
+        return event  # No significant settling detected
 
     # Calculate new magnitude from actual phase values
     before_start = event['start'] - pd.Timedelta(minutes=1)
@@ -162,7 +162,7 @@ def _normalize_single_on_event(
 
     new_magnitude = value_at_settling - value_before
 
-    # Safety: don't normalize if new magnitude would be too small
+    # Safety: don't extend if new magnitude would be too small
     if new_magnitude < min_threshold:
         return event
 
@@ -171,15 +171,15 @@ def _normalize_single_on_event(
         return event
 
     # Store original values and extend
-    event['inrush_original_end'] = event['end']
-    event['inrush_original_magnitude'] = event['magnitude']
+    event['settling_original_end'] = event['end']
+    event['settling_original_magnitude'] = event['magnitude']
     event['end'] = settling_end
     event['magnitude'] = new_magnitude
 
     return event
 
 
-def normalize_inrush_off_events(
+def extend_settling_off_events(
     off_events: pd.DataFrame,
     data_indexed: pd.DataFrame,
     phase: str,
@@ -201,9 +201,9 @@ def normalize_inrush_off_events(
         data_indexed: Power DataFrame with timestamp as index
         phase: Phase column name (w1, w2, w3)
         on_events: DataFrame with ON events (to avoid extending into them)
-        settling_factor: Minimum ratio to trigger normalization
+        settling_factor: Minimum ratio to trigger extension
         max_settling_minutes: Maximum minutes to look backward for spike
-        min_threshold: Minimum magnitude after normalization
+        min_threshold: Minimum magnitude after extension
 
     Returns:
         Modified OFF events DataFrame with extended boundaries where spike detected
@@ -232,7 +232,7 @@ def normalize_inrush_off_events(
     results = []
     for _, event in off_events.iterrows():
         event = event.copy()
-        result = _normalize_single_off_event(
+        result = _extend_single_off_event(
             event, data_indexed, phase, diff_col, occupied,
             settling_factor, max_settling_minutes, min_threshold,
         )
@@ -241,7 +241,7 @@ def normalize_inrush_off_events(
     return pd.DataFrame(results).reset_index(drop=True)
 
 
-def _normalize_single_off_event(
+def _extend_single_off_event(
     event: pd.Series,
     data_indexed: pd.DataFrame,
     phase: str,
@@ -251,7 +251,7 @@ def _normalize_single_off_event(
     max_settling_minutes: int,
     min_threshold: float,
 ) -> pd.Series:
-    """Normalize a single OFF event if it has an outgoing spike."""
+    """Extend a single OFF event if it has an outgoing spike."""
     off_start = event['start']
     magnitude = abs(event['magnitude'])
 
@@ -330,8 +330,8 @@ def _normalize_single_off_event(
         return event
 
     # Store original values and extend
-    event['inrush_original_start'] = event['start']
-    event['inrush_original_magnitude'] = event['magnitude']
+    event['settling_original_start'] = event['start']
+    event['settling_original_magnitude'] = event['magnitude']
     event['start'] = spike_start
     event['magnitude'] = new_magnitude
 

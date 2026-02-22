@@ -171,19 +171,34 @@ def classify_sessions(
     # --- Step 4: Unknown --------------------------------------------------
     # Add demoted boiler sessions from non-dominant phases
     for cs in demoted:
+        # Passed boiler classification → not_boiler is low (close to boiler)
+        demoted_breakdown = {
+            'not_boiler': round(1.0 - cs.confidence, 2),
+            'not_ac': 1.0,  # not checked, it was a valid boiler
+        }
+        demoted_breakdown.update({f'boiler_{k}': v for k, v in cs.confidence_breakdown.items()})
         result['unknown'].append(ClassifiedSession(
             session=cs.session,
             device_type='unknown',
-            reason=f"Boiler-like but on non-dominant phase ({cs.session.phase})",
+            reason=(
+                f"not_boiler: {1.0 - cs.confidence:.0%} (non-dominant phase {cs.session.phase}) "
+                f"| not_ac: 100%"
+            ),
+            confidence=round(1.0 - cs.confidence, 2),
+            confidence_breakdown=demoted_breakdown,
         ))
         classified_session_ids.add(cs.session.session_id)
 
     for s in sessions:
         if s.session_id not in classified_session_ids:
+            conf, breakdown = _unknown_confidence(s, all_matches)
+            reason = _unknown_reason(s, breakdown)
             result['unknown'].append(ClassifiedSession(
                 session=s,
                 device_type='unknown',
-                reason="No pattern match",
+                reason=reason,
+                confidence=conf,
+                confidence_breakdown=breakdown,
             ))
 
     n_unknown = len(result['unknown'])
@@ -592,7 +607,7 @@ def _regular_ac_confidence(session: Session) -> tuple:
     Factors:
     - cycle_count: 4 cycles → 0.5, ≥10 cycles → 1.0
     - magnitude_cv: CV=0.20 → 0.5, CV≤0.05 → 1.0
-    - initial_duration: 15min → 0.5, ≥30min → 1.0
+    - initial_duration: anchor event length (≥15min → 0.5, ≥30min → 1.0)
     - magnitude: 800W → 0.5, ≥1500W → 1.0
     """
     breakdown = {}
@@ -607,11 +622,10 @@ def _regular_ac_confidence(session: Session) -> tuple:
         session.magnitude_cv, 0.05, AC_MAX_MAGNITUDE_CV
     ), 2)
 
-    # Initial duration — first activation length
-    sorted_events = sorted(session.events, key=lambda e: e['on_start'])
-    first_dur = sorted_events[0].get('duration', 0) or 0 if sorted_events else 0
+    # Initial duration — anchor event (first long activation, not necessarily first event)
+    anchor_dur = _find_anchor_duration(session)
     breakdown['initial_duration'] = round(_linear_score(
-        first_dur, AC_MIN_INITIAL_DURATION, AC_MIN_INITIAL_DURATION * 2
+        anchor_dur, AC_MIN_INITIAL_DURATION, AC_MIN_INITIAL_DURATION * 2
     ), 2)
 
     # Magnitude — higher magnitude = clearer signal
@@ -621,6 +635,147 @@ def _regular_ac_confidence(session: Session) -> tuple:
 
     confidence = round(float(np.mean(list(breakdown.values()))), 2)
     return confidence, breakdown
+
+
+def _find_anchor_duration(session: Session) -> float:
+    """Return the duration of the first event with duration ≥ AC_MIN_INITIAL_DURATION.
+
+    Falls back to the longest event duration if no event meets the threshold.
+    """
+    if not session.events:
+        return 0
+    sorted_events = sorted(session.events, key=lambda e: e['on_start'])
+    for e in sorted_events:
+        dur = e.get('duration', 0) or 0
+        if dur >= AC_MIN_INITIAL_DURATION:
+            return dur
+    # No anchor found — return longest event
+    return max((e.get('duration', 0) or 0) for e in sorted_events)
+
+
+def _unknown_confidence(
+    session: Session,
+    all_matches: pd.DataFrame,
+) -> tuple:
+    """Compute two exclusion confidences for an unknown session.
+
+    For each known device type, scores how confident we are that the session
+    is **not** that type.  Low ``not_X`` → the session looks like X, might
+    be misclassified.  High ``not_X`` → definitely not X.
+
+    Returns:
+        (confidence, breakdown) where:
+        - confidence = min(not_boiler, not_ac) — how confidently *unknown*
+          (low = borderline, close to some pattern; high = truly unknown).
+        - breakdown contains ``not_boiler``, ``not_ac`` and per-criterion
+          detail scores.
+    """
+    breakdown = {}
+
+    # --- Boiler proximity (how boiler-like is it, 0–1) ---
+    b_dur = round(_linear_score(
+        session.avg_cycle_duration, 0, BOILER_MIN_DURATION
+    ), 2)
+    b_mag = round(_linear_score(
+        session.avg_magnitude, 0, BOILER_MIN_MAGNITUDE
+    ), 2)
+    if session.cycle_count <= 2:
+        b_cycles = 1.0
+    elif session.cycle_count <= 4:
+        b_cycles = 0.5
+    else:
+        b_cycles = max(0.0, 1.0 - session.cycle_count * 0.1)
+
+    min_dist = _min_distance_to_medium_events(session, all_matches)
+    if min_dist is None:
+        b_isolation = 1.0
+    else:
+        b_isolation = round(_linear_score(
+            min_dist, 0, BOILER_ISOLATION_WINDOW
+        ), 2)
+
+    boiler_proximity = float(np.mean([b_dur, b_mag, b_cycles, b_isolation]))
+    not_boiler = round(1.0 - boiler_proximity, 2)
+
+    breakdown['not_boiler'] = not_boiler
+    breakdown['boiler_dur'] = b_dur
+    breakdown['boiler_mag'] = b_mag
+    breakdown['boiler_cycles'] = round(b_cycles, 2)
+    breakdown['boiler_isolation'] = b_isolation
+
+    # --- Regular AC proximity (how AC-like is it, 0–1) ---
+    a_cycles = round(_linear_score(
+        session.cycle_count, 1, 1 + AC_MIN_FOLLOWING_CYCLES
+    ), 2)
+    a_mag = round(_linear_score(
+        session.avg_magnitude, 0, AC_MIN_MAGNITUDE
+    ), 2)
+    anchor_dur = _find_anchor_duration(session)
+    a_initial = round(_linear_score(
+        anchor_dur, 0, AC_MIN_INITIAL_DURATION
+    ), 2)
+    if session.magnitude_cv is not None and session.magnitude_cv >= 0:
+        a_cv = round(_inverse_linear_score(
+            session.magnitude_cv, 0, AC_MAX_MAGNITUDE_CV * 2
+        ), 2)
+    else:
+        a_cv = 0.5
+
+    ac_proximity = float(np.mean([a_cycles, a_mag, a_initial, a_cv]))
+    not_ac = round(1.0 - ac_proximity, 2)
+
+    breakdown['not_ac'] = not_ac
+    breakdown['ac_cycles'] = a_cycles
+    breakdown['ac_mag'] = a_mag
+    breakdown['ac_initial_dur'] = a_initial
+    breakdown['ac_cv'] = a_cv
+
+    # Overall: how confidently "truly unknown" (low = borderline)
+    confidence = round(min(not_boiler, not_ac), 2)
+    return confidence, breakdown
+
+
+def _unknown_reason(session: Session, breakdown: dict) -> str:
+    """Generate descriptive reason for unknown classification.
+
+    Shows both exclusion confidences and which criteria failed for the
+    nearest device type.
+    """
+    not_boiler = breakdown.get('not_boiler', 1.0)
+    not_ac = breakdown.get('not_ac', 1.0)
+
+    parts = []
+
+    # Boiler side
+    boiler_fails = []
+    if session.avg_cycle_duration < BOILER_MIN_DURATION:
+        boiler_fails.append(f"dur={session.avg_cycle_duration:.0f}/{BOILER_MIN_DURATION}min")
+    if session.avg_magnitude < BOILER_MIN_MAGNITUDE:
+        boiler_fails.append(f"mag={session.avg_magnitude:.0f}/{BOILER_MIN_MAGNITUDE}W")
+    if session.cycle_count > 2:
+        boiler_fails.append(f"cycles={session.cycle_count} (max 2)")
+    boiler_str = f"not_boiler: {not_boiler:.0%}"
+    if boiler_fails:
+        boiler_str += f" ({', '.join(boiler_fails)})"
+    parts.append(boiler_str)
+
+    # AC side
+    ac_fails = []
+    if session.cycle_count < (1 + AC_MIN_FOLLOWING_CYCLES):
+        ac_fails.append(f"cycles={session.cycle_count} (min {1 + AC_MIN_FOLLOWING_CYCLES})")
+    if session.avg_magnitude < AC_MIN_MAGNITUDE:
+        ac_fails.append(f"mag={session.avg_magnitude:.0f}/{AC_MIN_MAGNITUDE}W")
+    anchor_dur = _find_anchor_duration(session)
+    if anchor_dur < AC_MIN_INITIAL_DURATION:
+        ac_fails.append(f"init_dur={anchor_dur:.0f}/{AC_MIN_INITIAL_DURATION}min")
+    if session.magnitude_cv > AC_MAX_MAGNITUDE_CV:
+        ac_fails.append(f"CV={session.magnitude_cv:.2f} (max {AC_MAX_MAGNITUDE_CV})")
+    ac_str = f"not_ac: {not_ac:.0%}"
+    if ac_fails:
+        ac_str += f" ({', '.join(ac_fails)})"
+    parts.append(ac_str)
+
+    return ' | '.join(parts)
 
 
 # ============================================================================
@@ -647,21 +802,38 @@ def _is_regular_ac_session(session: Session) -> bool:
     if session.cycle_count < (1 + AC_MIN_FOLLOWING_CYCLES):
         return False
 
-    # First event must be the initial long run
+    # Find the first long activation (≥ AC_MIN_INITIAL_DURATION) — the AC
+    # startup.  Earlier short events may belong to a different device that
+    # happened to be grouped into the same session.
     if not session.events:
         return False
     sorted_events = sorted(session.events, key=lambda e: e['on_start'])
-    first_duration = sorted_events[0].get('duration', 0) or 0
-    if first_duration < AC_MIN_INITIAL_DURATION:
-        return False
+    anchor_idx = None
+    for i, e in enumerate(sorted_events):
+        dur = e.get('duration', 0) or 0
+        if dur >= AC_MIN_INITIAL_DURATION:
+            anchor_idx = i
+            break
 
-    # Magnitude consistency — check overall CV first
-    if session.magnitude_cv <= AC_MAX_MAGNITUDE_CV:
-        return True
+    if anchor_idx is not None:
+        # Anchor found — evaluate from anchor onward
+        following_events = sorted_events[anchor_idx:]
+        if len(following_events) < (1 + AC_MIN_FOLLOWING_CYCLES):
+            return False
 
-    # Overall CV is too high — check if a single iteration shows AC cycling.
-    # Multi-threshold detection inflates CV by mixing events of different
-    # magnitudes from different iterations of the same compressor.
+        mags = [abs(float(e.get('on_magnitude', 0))) for e in following_events]
+        if not mags or np.mean(mags) <= 0:
+            return False
+        anchor_cv = float(np.std(mags) / np.mean(mags))
+
+        if anchor_cv <= AC_MAX_MAGNITUDE_CV:
+            return True
+
+    # No anchor event, or anchor CV too high — fall back to checking
+    # individual iterations.  AC sessions sometimes lack a single long
+    # initial run (e.g. the compressor was already running when detection
+    # started, or the startup wasn't captured).  A single iteration with
+    # consistent cycling is sufficient evidence.
     return _has_ac_pattern_in_dominant_iteration(session)
 
 

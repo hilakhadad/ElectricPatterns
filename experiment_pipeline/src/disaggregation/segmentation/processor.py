@@ -134,6 +134,13 @@ def _process_single_event(
         on_seg = on_cumsum.clip(upper=magnitude)  # Don't extract more than match_magnitude
     else:
         on_seg = data.loc[on_range, diff_col].cumsum()
+        # Clip transient spikes: if cumsum peaks significantly above both its
+        # initial and final values, the overshoot is a transient (not device consumption)
+        # and should stay in remaining. Only triggers for significant spikes (>25%).
+        if len(on_seg) > 1:
+            clip_level = max(on_seg.iloc[0], on_seg.iloc[-1])
+            if on_seg.max() > clip_level * 1.25:
+                on_seg = on_seg.clip(upper=clip_level)
     on_remain = data.loc[on_range, remaining_col] - on_seg
 
     # Track device power continuously via diffs (for standard events)
@@ -167,6 +174,10 @@ def _process_single_event(
     else:
         # OFF ramp: track device power from end of event, clipped to remaining
         off_seg = (device_power + data.loc[off_range, diff_col].cumsum()).clip(lower=0)
+        # Clip pre-shutdown transient spikes: if OFF segment exceeds device_power
+        # significantly, the spike is a transient and should stay in remaining.
+        if off_seg.max() > device_power * 1.25:
+            off_seg = off_seg.clip(upper=device_power)
         off_seg = off_seg.clip(upper=data.loc[off_range, remaining_col])
         off_remain = data.loc[off_range, remaining_col] - off_seg
 

@@ -1505,9 +1505,9 @@ class TestTailExtensionDetection:
 
 
 # ============================================================================
-# Bug #22: Inrush spike normalization
+# Bug #22: Settling extension
 #
-# ON events with inrush spikes have inflated magnitude (e.g., 3000W spike
+# ON events with transient spikes have inflated magnitude (e.g., 3000W spike
 # when actual device power is 1500W). This causes:
 # - Segmentation extracts at spike level → "pit" in remaining signal
 # - Matching fails (spike magnitude doesn't match steady-state OFF)
@@ -1518,21 +1518,21 @@ class TestTailExtensionDetection:
 # Also handles OFF events with outgoing spikes (pre-shutdown power surge).
 # ============================================================================
 
-from disaggregation.detection.inrush import (
-    normalize_inrush_on_events, normalize_inrush_off_events
+from disaggregation.detection.settling import (
+    extend_settling_on_events, extend_settling_off_events
 )
 
 
 def _make_indexed(values, phase='w1'):
-    """Create an indexed power DataFrame suitable for inrush normalization."""
+    """Create an indexed power DataFrame suitable for settling extension."""
     data = make_power_data(values, phase)
     data[f'{phase}_diff'] = data[phase].diff()
     data_indexed = data.set_index('timestamp')
     return data_indexed
 
 
-class TestInrushNormalization:
-    """Bug #22: inrush spikes must be absorbed into ON event boundaries."""
+class TestSettlingExtension:
+    """Bug #22: transient spikes must be absorbed into ON event boundaries."""
 
     def test_on_event_extended_through_settling(self):
         """ON spike 3000W settles to 1500W → ON end extended, magnitude ≈ 1500W.
@@ -1553,7 +1553,7 @@ class TestInrushNormalization:
             'magnitude': 3000.0,
         }])
 
-        result = normalize_inrush_on_events(
+        result = extend_settling_on_events(
             on_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )
@@ -1575,8 +1575,8 @@ class TestInrushNormalization:
         )
 
         # Original values should be preserved
-        assert 'inrush_original_magnitude' in event.index, (
-            "Original magnitude should be stored as inrush_original_magnitude"
+        assert 'settling_original_magnitude' in event.index, (
+            "Original magnitude should be stored as settling_original_magnitude"
         )
 
     def test_on_event_unchanged_when_no_settling(self):
@@ -1597,7 +1597,7 @@ class TestInrushNormalization:
             'magnitude': 1500.0,
         }])
 
-        result = normalize_inrush_on_events(
+        result = extend_settling_on_events(
             on_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )
@@ -1629,7 +1629,7 @@ class TestInrushNormalization:
             'magnitude': 1500.0,
         }])
 
-        result = normalize_inrush_on_events(
+        result = extend_settling_on_events(
             on_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )
@@ -1659,7 +1659,7 @@ class TestInrushNormalization:
             'magnitude': -2500.0,
         }])
 
-        result = normalize_inrush_off_events(
+        result = extend_settling_off_events(
             off_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )
@@ -1676,7 +1676,7 @@ class TestInrushNormalization:
             f"OFF magnitude should include the full drop, got {abs(event['magnitude']):.0f}W"
         )
 
-    def test_inrush_does_not_extend_into_other_events(self):
+    def test_settling_does_not_extend_into_other_events(self):
         """Two ON events close together — extension stops before the next event.
 
         Power profile:
@@ -1702,7 +1702,7 @@ class TestInrushNormalization:
             },
         ])
 
-        result = normalize_inrush_on_events(
+        result = extend_settling_on_events(
             on_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )
@@ -1915,13 +1915,13 @@ class TestSplitOffMerger:
 
 
 # ============================================================================
-# Integration test: Inrush normalization fixes the "pit" problem in segmentation
+# Integration test: Settling extension fixes the "pit" problem in segmentation
 # ============================================================================
 
-class TestInrushSegmentationIntegration:
-    """Verify that inrush normalization prevents pits in remaining power."""
+class TestSettlingSegmentationIntegration:
+    """Verify that settling extension prevents pits in remaining power."""
 
-    def test_no_pit_after_inrush_normalization(self, test_logger):
+    def test_no_pit_after_settling_extension(self, test_logger):
         """After normalizing ON spike, segmentation extracts at steady-state level.
 
         Power profile (same as spike scenario):
@@ -1945,7 +1945,7 @@ class TestInrushSegmentationIntegration:
             'magnitude': 3000.0,
         }])
 
-        normalized = normalize_inrush_on_events(
+        normalized = extend_settling_on_events(
             on_events, data_indexed, 'w1',
             settling_factor=0.7, max_settling_minutes=5
         )

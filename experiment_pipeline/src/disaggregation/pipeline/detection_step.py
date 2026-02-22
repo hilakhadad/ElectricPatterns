@@ -85,12 +85,12 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         tail_noise_tolerance = getattr(config, 'tail_noise_tolerance', 30)
         tail_min_gain = getattr(config, 'tail_min_gain', 100)
         tail_min_residual_fraction = getattr(config, 'tail_min_residual_fraction', 0.05)
-        use_inrush_normalization = getattr(config, 'use_inrush_normalization', True)
-        inrush_settling_factor = getattr(config, 'inrush_settling_factor', 0.7)
-        inrush_max_settling_minutes = getattr(config, 'inrush_max_settling_minutes', 5)
+        use_settling_extension = getattr(config, 'use_settling_extension', True)
+        settling_factor = getattr(config, 'settling_factor', 0.7)
+        settling_max_minutes = getattr(config, 'settling_max_minutes', 5)
         use_split_off_merger = getattr(config, 'use_split_off_merger', True)
         split_off_max_gap_minutes = getattr(config, 'split_off_max_gap_minutes', 2)
-        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}, nan_imputation={use_nan_imputation}, inrush={use_inrush_normalization}, split_off={use_split_off_merger}")
+        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}, nan_imputation={use_nan_imputation}, settling={use_settling_extension}, split_off={use_split_off_merger}")
     else:
         off_threshold_factor = 1.0
         use_gradual = True
@@ -106,9 +106,9 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         tail_noise_tolerance = 30
         tail_min_gain = 100
         tail_min_residual_fraction = 0.05
-        use_inrush_normalization = False
-        inrush_settling_factor = 0.7
-        inrush_max_settling_minutes = 5
+        use_settling_extension = False
+        settling_factor = 0.7
+        settling_max_minutes = 5
         use_split_off_merger = False
         split_off_max_gap_minutes = 2
 
@@ -196,9 +196,9 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
                 tail_noise_tolerance=tail_noise_tolerance,
                 tail_min_gain=tail_min_gain,
                 tail_min_residual_fraction=tail_min_residual_fraction,
-                use_inrush_normalization=use_inrush_normalization,
-                inrush_settling_factor=inrush_settling_factor,
-                inrush_max_settling_minutes=inrush_max_settling_minutes,
+                use_settling_extension=use_settling_extension,
+                settling_factor=settling_factor,
+                settling_max_minutes=settling_max_minutes,
                 use_split_off_merger=use_split_off_merger,
                 split_off_max_gap_minutes=split_off_max_gap_minutes,
             )
@@ -214,7 +214,16 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
             continue
 
         # Filter by minimum magnitude
-        filtered = month_results[abs(month_results['magnitude']) >= partial_threshold].copy()
+        # For settling-extended events, use the original (pre-extension) magnitude
+        # for the threshold check. The event was genuinely detected at this threshold
+        # (its spike exceeded it), but extension corrected to steady-state value.
+        if 'settling_original_magnitude' in month_results.columns:
+            check_mag = abs(month_results['magnitude']).copy()
+            has_original = month_results['settling_original_magnitude'].notna()
+            check_mag[has_original] = abs(month_results.loc[has_original, 'settling_original_magnitude'])
+            filtered = month_results[check_mag >= partial_threshold].copy()
+        else:
+            filtered = month_results[abs(month_results['magnitude']) >= partial_threshold].copy()
         if filtered.empty:
             continue
 
@@ -258,8 +267,8 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
                          use_tail_extension=False, tail_max_minutes=10,
                          tail_min_residual=100, tail_noise_tolerance=30,
                          tail_min_gain=100, tail_min_residual_fraction=0.05,
-                         use_inrush_normalization=True, inrush_settling_factor=0.7,
-                         inrush_max_settling_minutes=5,
+                         use_settling_extension=True, settling_factor=0.7,
+                         settling_max_minutes=5,
                          use_split_off_merger=True, split_off_max_gap_minutes=2):
     """Detect ON and OFF events for a single phase.
 
@@ -389,7 +398,7 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
         if extended > 0:
             logger.info(f"    Tail extended: {extended} OFF events for {phase}")
 
-    # Split-OFF merger (merge split device shutdowns before inrush normalization)
+    # Split-OFF merger (merge split device shutdowns before settling extension)
     if use_split_off_merger and len(results_off) > 1:
         from disaggregation.detection.merger import merge_split_off_events
         before_merge = len(results_off)
@@ -401,36 +410,34 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
         if len(results_off) < before_merge:
             logger.info(f"    Split-OFF merged: {before_merge - len(results_off)} events for {phase}")
 
-    # Inrush normalization (extend ON/OFF boundaries to include inrush settling)
-    if use_inrush_normalization:
-        from disaggregation.detection.inrush import (
-            normalize_inrush_on_events, normalize_inrush_off_events
+    # Settling extension (extend ON/OFF boundaries through transient settling periods)
+    if use_settling_extension:
+        from disaggregation.detection.settling import (
+            extend_settling_on_events, extend_settling_off_events
         )
         if len(results_on) > 0:
             before_mags = results_on['magnitude'].copy()
-            results_on = normalize_inrush_on_events(
+            results_on = extend_settling_on_events(
                 results_on, data_indexed, phase,
                 off_events=results_off,
-                settling_factor=inrush_settling_factor,
-                max_settling_minutes=inrush_max_settling_minutes,
-                min_threshold=threshold * off_threshold_factor,
+                settling_factor=settling_factor,
+                max_settling_minutes=settling_max_minutes,
             )
-            normalized_count = (results_on['magnitude'] != before_mags.values).sum() if len(results_on) == len(before_mags) else 0
-            if normalized_count > 0:
-                logger.info(f"    Inrush normalized: {normalized_count} ON events for {phase}")
+            extended_count = (results_on['magnitude'] != before_mags.values).sum() if len(results_on) == len(before_mags) else 0
+            if extended_count > 0:
+                logger.info(f"    Settling extended: {extended_count} ON events for {phase}")
 
         if len(results_off) > 0:
             before_mags = results_off['magnitude'].copy()
-            results_off = normalize_inrush_off_events(
+            results_off = extend_settling_off_events(
                 results_off, data_indexed, phase,
                 on_events=results_on,
-                settling_factor=inrush_settling_factor,
-                max_settling_minutes=inrush_max_settling_minutes,
-                min_threshold=threshold * off_threshold_factor,
+                settling_factor=settling_factor,
+                max_settling_minutes=settling_max_minutes,
             )
-            normalized_count = (results_off['magnitude'] != before_mags.values).sum() if len(results_off) == len(before_mags) else 0
-            if normalized_count > 0:
-                logger.info(f"    Inrush normalized: {normalized_count} OFF events for {phase}")
+            extended_count = (results_off['magnitude'] != before_mags.values).sum() if len(results_off) == len(before_mags) else 0
+            if extended_count > 0:
+                logger.info(f"    Settling extended: {extended_count} OFF events for {phase}")
 
     # Add duration
     results_on['duration'] = (results_on['end'] - results_on['start']).dt.total_seconds() / 60

@@ -9,7 +9,7 @@ from .near_threshold import detect_near_threshold_events
 from .tail_extension import extend_off_event_tails
 from .merger import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events
 from .expander import expand_event
-from .inrush import normalize_inrush_on_events, normalize_inrush_off_events
+from .settling import extend_settling_on_events, extend_settling_off_events
 
 __all__ = [
     'detect_sharp_events',
@@ -20,6 +20,6 @@ __all__ = [
     'merge_consecutive_on_events',
     'merge_consecutive_off_events',
     'expand_event',
-    'normalize_inrush_on_events',
-    'normalize_inrush_off_events',
+    'extend_settling_on_events',
+    'extend_settling_off_events',
 ]

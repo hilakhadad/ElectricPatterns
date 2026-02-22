@@ -33,9 +33,9 @@ class ExperimentConfig:
     tail_min_residual_fraction: float = 0.05
     threshold_schedule: Optional[List[int]] = None  # Dynamic threshold: list of thresholds per iteration
     use_nan_imputation: bool = False  # Fill short NaN gaps at runtime to prevent false diff() events
-    use_inrush_normalization: bool = False  # Detect and normalize inrush spikes in ON/OFF events
-    inrush_settling_factor: float = 0.7  # Minimum settled/spike ratio to trigger (0.7 = >30% drop)
-    inrush_max_settling_minutes: int = 5  # Maximum minutes to look for settling
+    use_settling_extension: bool = False  # Extend event boundaries through transient settling periods
+    settling_factor: float = 0.75  # Minimum settled/spike ratio to trigger (0.75 = >25% reversal)
+    settling_max_minutes: int = 5  # Maximum minutes to look for settling
     use_split_off_merger: bool = False  # Merge split OFF events from measurement errors
     split_off_max_gap_minutes: int = 2  # Maximum gap between split OFF events
     use_guided_recovery: bool = False  # Search for missed AC cycles at lower threshold (off by default)
@@ -65,9 +65,9 @@ class ExperimentConfig:
             'tail_min_residual_fraction': self.tail_min_residual_fraction,
             'threshold_schedule': self.threshold_schedule,
             'use_nan_imputation': self.use_nan_imputation,
-            'use_inrush_normalization': self.use_inrush_normalization,
-            'inrush_settling_factor': self.inrush_settling_factor,
-            'inrush_max_settling_minutes': self.inrush_max_settling_minutes,
+            'use_settling_extension': self.use_settling_extension,
+            'settling_factor': self.settling_factor,
+            'settling_max_minutes': self.settling_max_minutes,
             'use_split_off_merger': self.use_split_off_merger,
             'split_off_max_gap_minutes': self.split_off_max_gap_minutes,
             'use_guided_recovery': self.use_guided_recovery,
@@ -122,9 +122,9 @@ EXPERIMENTS = {
         use_nan_imputation=True,
     ),
 
-    'exp013_inrush_splitoff': ExperimentConfig(
+    'exp013_settling_splitoff': ExperimentConfig(
         exp_id='exp013',
-        description='exp012 + inrush normalization + split-OFF merger (fixes pits, split shutdowns, improves matching)',
+        description='exp012 + settling extension + split-OFF merger (fixes pits, split shutdowns, improves matching)',
         threshold=2000,
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
@@ -136,7 +136,7 @@ EXPERIMENTS = {
         use_tail_extension=True,
         threshold_schedule=[2000, 1500, 1100, 800],
         use_nan_imputation=True,
-        use_inrush_normalization=True,
+        use_settling_extension=True,
         use_split_off_merger=True,
         use_guided_recovery=True,
     ),

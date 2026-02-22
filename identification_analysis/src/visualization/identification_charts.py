@@ -173,12 +173,18 @@ def _parse_session_row(session: Dict[str, Any]) -> Dict[str, Any]:
     # Single phase string for boiler/regular_ac display
     phase = phases[0] if len(phases) == 1 else ', '.join(phases)
 
+    # Confidence breakdown (used for unknown sessions: not_boiler, not_ac)
+    breakdown = session.get('confidence_breakdown', {})
+    reason = session.get('classification_reason', '')
+
     return {
         'date': date_str, 'start': start_str, 'end': end_str,
         'duration': duration, 'dur_str': _dur_str(duration),
         'magnitude': magnitude, 'phase': phase,
         'device_type': session.get('device_type', 'unknown'),
         'confidence': confidence,
+        'confidence_breakdown': breakdown,
+        'classification_reason': reason,
         'cycle_count': cycle_count,
         'session_id': session.get('session_id', ''),
         'on_start_iso': str(start_raw) if start_raw else '',
@@ -418,7 +424,77 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Cycles &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 10, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>'''
+        elif dtype == 'unknown':
+            # Unknown sessions: show Not Boiler / Not AC instead of single Confidence
+            events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(events)
+            for r in events:
+                if r['date'] and r['start']:
+                    copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            for i, r in enumerate(events, 1):
+                act_idx = global_act_idx
+                global_act_idx += 1
+                bd = r.get('confidence_breakdown', {})
+                not_boiler = bd.get('not_boiler')
+                not_ac = bd.get('not_ac')
+                reason = r.get('classification_reason', '')
+                # Format not_boiler / not_ac cells
+                if not_boiler is not None:
+                    nb_pct = f'{not_boiler:.0%}'
+                    nb_color = '#48bb78' if not_boiler >= 0.7 else '#ecc94b' if not_boiler >= 0.4 else '#fc8181'
+                else:
+                    nb_pct = '-'
+                    nb_color = '#ccc'
+                if not_ac is not None:
+                    na_pct = f'{not_ac:.0%}'
+                    na_color = '#48bb78' if not_ac >= 0.7 else '#ecc94b' if not_ac >= 0.4 else '#fc8181'
+                else:
+                    na_pct = '-'
+                    na_color = '#ccc'
+                click_attr = f' style="cursor:pointer;" onclick="toggleActChart({act_idx})"' if has_charts else ''
+                reason_escaped = reason.replace('"', '&quot;')
+                rows += f'''
+            <tr{click_attr} title="{reason_escaped}">
+                <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
+                <td style="{_cell} text-align: center;">{r['start']}</td>
+                <td style="{_cell} text-align: center;">{r['end']}</td>
+                <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="{_cell} text-align: center;">{r['phase']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
+                <td style="{_cell} text-align: center; color: {nb_color}; font-weight: 600;" data-value="{not_boiler or 0}">{nb_pct}</td>
+                <td style="{_cell} text-align: center; color: {na_color}; font-weight: 600;" data-value="{not_ac or 0}">{na_pct}</td>
+            </tr>'''
+                if has_charts:
+                    rows += _build_chart_row_html(act_idx, 10)
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases and r.get('phase'):
+                        session_phases = {r['phase']: r['magnitude']}
+                    cd = _extract_chart_window(
+                        summarized_data, r.get('on_start_iso', ''), r.get('off_end_iso', ''),
+                        session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
+                    )
+                    if cd:
+                        all_chart_data[str(act_idx)] = cd
+
+            table_header = f'''
+                        <tr style="background: #f8f9fa;">
+                            <th style="{_th} text-align: center; width: 35px;">#</th>
+                            <th style="{_th} text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Start</th>
+                            <th style="{_th} text-align: center;">End</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Phase</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 8, 'num')">Not Boiler &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Not AC &#x25B4;&#x25BE;</th>
+                        </tr>'''
         else:
+            # Boiler / Regular AC
             events.sort(key=lambda r: r['date'] + r['start'])
             count = len(events)
             for r in events:
