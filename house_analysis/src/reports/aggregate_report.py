@@ -114,6 +114,34 @@ def aggregate_all_houses(house_analyses: List[Dict[str, Any]]) -> Dict[str, Any]
                             if a.get('flags', {}).get('has_negative_values', False)],
     }
 
+    # Wave behavior summary
+    from collections import Counter
+    wave_classifications = []
+    wave_scores = []
+    wave_dominant_houses = []
+    has_waves_houses = []
+
+    for analysis in house_analyses:
+        wave = analysis.get('wave_behavior', {})
+        cls = wave.get('wave_classification', 'no_waves')
+        wave_classifications.append(cls)
+        wave_scores.append(wave.get('max_wave_score', 0.0))
+        house_id = analysis.get('house_id', 'unknown')
+        if cls == 'wave_dominant':
+            wave_dominant_houses.append(house_id)
+        elif cls == 'has_waves':
+            has_waves_houses.append(house_id)
+
+    cls_counts = Counter(wave_classifications)
+    report['wave_summary'] = {
+        'n_wave_dominant': cls_counts.get('wave_dominant', 0),
+        'n_has_waves': cls_counts.get('has_waves', 0),
+        'n_no_waves': cls_counts.get('no_waves', 0),
+        'avg_max_wave_score': sum(wave_scores) / len(wave_scores) if wave_scores else 0.0,
+        'wave_dominant_houses': wave_dominant_houses,
+        'has_waves_houses': has_waves_houses,
+    }
+
     return report
 
 

@@ -929,16 +929,16 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
+    # Wave behavior
+    wave_behavior = analysis.get('wave_behavior', {})
+    wave_chart = create_wave_monthly_chart(analysis)
+
     # Build findings tags
     findings_html = _build_findings_tags(flags, quality, coverage, wave_behavior)
 
     # Get years from temporal_by_period
     years_data = temporal_by_period.get('by_year', {})
     years = sorted(years_data.keys())
-
-    # Wave behavior
-    wave_behavior = analysis.get('wave_behavior', {})
-    wave_chart = create_wave_monthly_chart(analysis)
 
     # Create all charts for "All Data" tab
     hourly_chart = create_hourly_pattern_chart(analysis)
