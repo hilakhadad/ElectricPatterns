@@ -30,6 +30,7 @@ from visualization.dynamic_report_charts import (
     create_efficiency_gauge,
     create_threshold_waterfall,
     create_remaining_analysis_chart,
+    create_remaining_events_section,
 )
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,7 @@ def generate_dynamic_house_report(
     efficiency_html = create_efficiency_gauge(metrics)
     waterfall_html = create_threshold_waterfall(metrics)
     remaining_html = create_remaining_analysis_chart(metrics)
+    remaining_events_html = create_remaining_events_section(metrics)
     if show_timing:
         print(f"{prefix} {'Generating charts':<40s} {_time.time() - t0:.1f}s", flush=True)
 
@@ -260,6 +262,7 @@ def generate_dynamic_house_report(
         efficiency_html=efficiency_html,
         waterfall_html=waterfall_html,
         remaining_html=remaining_html,
+        remaining_events_html=remaining_events_html,
         metrics=metrics,
         pre_quality=pre_quality,
     )
@@ -397,6 +400,7 @@ def _build_house_html(
     efficiency_html: str,
     waterfall_html: str,
     remaining_html: str,
+    remaining_events_html: str = '',
     metrics: Dict[str, Any] = None,
     pre_quality=None,
 ) -> str:
@@ -580,6 +584,15 @@ def _build_house_html(
                 Unsegregated power by magnitude: Noise (&lt;200W), Small Events (200-800W), Large Unmatched (&gt;800W).
             </p>
             {remaining_html}
+        </section>
+
+        <section>
+            <h2>Remaining Events (False Negative Check)</h2>
+            <p style="color: #666; margin-bottom: 8px; font-size: 0.82em;">
+                Contiguous regions in remaining power above the minimum threshold.
+                Shows what the pipeline may have missed. Click rows to see time-series.
+            </p>
+            {remaining_events_html}
         </section>
 
         <footer>

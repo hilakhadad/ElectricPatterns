@@ -249,9 +249,6 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             continuity = 'unknown'
         continuity_counts[continuity] += 1
 
-        # Wave classification count
-        wave_counts[wave_cls] = wave_counts.get(wave_cls, 0) + 1
-
         # Link to individual report
         house_link = f'{per_house_dir}/house_{house_id}.html'
 
@@ -262,6 +259,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         # Wave behavior
         wave = a.get('wave_behavior', {})
         wave_cls = wave.get('wave_classification', 'no_waves')
+
+        # Wave classification count (must be after wave_cls assignment)
+        wave_counts[wave_cls] = wave_counts.get(wave_cls, 0) + 1
         wave_score = wave.get('max_wave_score', 0)
         wave_badge_map = {
             'wave_dominant': '<span class="badge badge-orange">Wave Dominant</span>',

@@ -24,6 +24,7 @@ from metrics.classification import (
     _load_pkl_files,
     DEVICE_TYPES,
 )
+from metrics.remaining_events import detect_remaining_events
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,14 @@ def calculate_dynamic_report_metrics(
     )
     timing['remaining'] = time.time() - t0
 
+    # Remaining event detection (false-negative analysis)
+    t0 = time.time()
+    remaining_events = detect_remaining_events(
+        baseline_data, final_data, phases,
+        min_threshold=min_threshold,
+    )
+    timing['remaining_events'] = time.time() - t0
+
     # Device summary from device_activations JSON
     t0 = time.time()
     devices = _load_device_summary(experiment_dir, house_id)
@@ -113,8 +122,11 @@ def calculate_dynamic_report_metrics(
         'totals': totals,
         'per_threshold': per_threshold,
         'remaining_classification': remaining_classification,
+        'remaining_events': remaining_events,
         'devices': devices,
         'data_period': data_period,
+        '_baseline': baseline_data,
+        '_final': final_data,
         '_timing': timing,
     }
 

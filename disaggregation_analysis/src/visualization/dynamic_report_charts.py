@@ -14,6 +14,9 @@ import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+import numpy as np
+import pandas as pd
+
 # Color constants
 GREEN = '#28a745'           # Segregated (success)
 GRAY = '#6c757d'            # Background (baseload)
@@ -848,3 +851,467 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         </div>'''
 
     return sections_html
+
+
+# ---------------------------------------------------------------------------
+# Remaining Events — False-Negative Detection
+# ---------------------------------------------------------------------------
+
+# Shape badge colors
+_SHAPE_COLORS = {
+    'cycling': {'bg': '#fde8cd', 'text': '#7a4510', 'border': ORANGE},
+    'flat':    {'bg': LIGHT_GREEN, 'text': '#155724', 'border': GREEN},
+    'spike':   {'bg': LIGHT_YELLOW, 'text': '#7a6400', 'border': YELLOW},
+    'gradual': {'bg': LIGHT_GRAY, 'text': '#495057', 'border': GRAY},
+}
+
+_SHAPE_DESCRIPTIONS = {
+    'cycling': 'AC-like cycling pattern (high variation, many oscillations)',
+    'flat': 'Constant load (low variation — boiler-like or heater)',
+    'spike': 'Brief spike (≤3 min)',
+    'gradual': 'Ramp / gradual change',
+}
+
+
+def create_remaining_events_section(metrics: Dict[str, Any]) -> str:
+    """
+    Create the Remaining Events section: daily summary table + expandable 3x3 charts.
+
+    Each table row = one day.  Clicking a row expands a 3×3 grid
+    (Original / Remaining / Segregated × w1 / w2 / w3) for the full day,
+    with above-threshold regions highlighted as coloured rectangles.
+    """
+    re_data = metrics.get('remaining_events', {})
+    events = re_data.get('events', [])
+    summary = re_data.get('summary', {})
+
+    if not events:
+        return '<p style="color: #888;">No above-threshold events found in remaining power.</p>'
+
+    baseline = metrics.get('_baseline')
+    final = metrics.get('_final')
+
+    # ---- Group events by date ----
+    from collections import OrderedDict
+    daily: Dict[str, List[Dict]] = OrderedDict()
+    for ev in events:
+        date_key = ev['start'].strftime('%Y-%m-%d') if hasattr(ev['start'], 'strftime') else str(ev['start'])[:10]
+        daily.setdefault(date_key, []).append(ev)
+
+    num_days = len(daily)
+
+    # ---- Summary strip ----
+    total = summary.get('total_events', 0)
+    by_shape = summary.get('by_shape', {})
+    by_phase = summary.get('by_phase', {})
+    total_energy = summary.get('total_energy_wh', 0)
+    energy_kwh = total_energy / 1000
+
+    shape_badges = ''
+    for shape in ['cycling', 'flat', 'spike', 'gradual']:
+        count = by_shape.get(shape, 0)
+        if count == 0:
+            continue
+        sc = _SHAPE_COLORS.get(shape, _SHAPE_COLORS['gradual'])
+        shape_badges += (
+            f'<span style="display:inline-block;padding:2px 10px;border-radius:12px;'
+            f'font-size:0.82em;margin-right:6px;'
+            f'background:{sc["bg"]};color:{sc["text"]};border:1px solid {sc["border"]};"'
+            f' title="{_SHAPE_DESCRIPTIONS.get(shape, "")}">'
+            f'{shape}: {count}</span>'
+        )
+
+    phase_str = ' / '.join(f'{p}: {by_phase.get(p, 0)}' for p in ['w1', 'w2', 'w3'])
+
+    summary_html = f'''
+    <div style="display:flex;align-items:center;gap:15px;flex-wrap:wrap;
+                padding:10px 15px;background:#f8f9fa;border-radius:8px;margin-bottom:15px;">
+        <div style="font-weight:600;color:#2d3748;">
+            {total} events across {num_days} days
+        </div>
+        <div style="color:#666;font-size:0.85em;">({phase_str})</div>
+        <div>{shape_badges}</div>
+        <div style="margin-left:auto;color:#666;font-size:0.85em;">{energy_kwh:.1f} kWh total</div>
+    </div>'''
+
+    # ---- Determine which days get chart data (top 50 by energy) ----
+    MAX_CHART_DAYS = 50
+    day_keys = list(daily.keys())
+    day_energies = {dk: sum(ev['energy_wh'] for ev in daily[dk]) for dk in day_keys}
+    sorted_days = sorted(day_keys, key=lambda dk: day_energies[dk], reverse=True)
+    chart_day_set = set(sorted_days[:MAX_CHART_DAYS])
+
+    # ---- Build chart data ----
+    chart_data_js = _build_daily_chart_data(daily, chart_day_set, baseline, final)
+
+    # ---- Daily table ----
+    table_id = 'rem-evt-table'
+    _th = 'padding:5px 8px;'
+    _cell = 'padding:5px 8px;border-bottom:1px solid #eee;'
+
+    rows_html = ''
+    for i, (date_key, day_events) in enumerate(daily.items()):
+        n_events = len(day_events)
+        total_dur = sum(ev['duration_min'] for ev in day_events)
+        dur_str = f'{total_dur / 60:.1f} hr' if total_dur >= 60 else f'{total_dur} min'
+        day_energy = sum(ev['energy_wh'] for ev in day_events)
+        peak = max(ev['peak_power'] for ev in day_events)
+
+        # Phase breakdown for this day
+        day_phases = set(ev['phase'] for ev in day_events)
+        _phase_clr = {'w1': '#007bff', 'w2': '#dc3545', 'w3': '#28a745'}
+        phase_badges = ' '.join(
+            f'<span style="font-weight:600;color:{_phase_clr[p]}">{p}</span>'
+            for p in ['w1', 'w2', 'w3'] if p in day_phases
+        )
+
+        # Shape breakdown for this day
+        day_shapes = {}
+        for ev in day_events:
+            day_shapes[ev['shape']] = day_shapes.get(ev['shape'], 0) + 1
+        shape_parts = []
+        for shape in ['cycling', 'flat', 'spike', 'gradual']:
+            cnt = day_shapes.get(shape, 0)
+            if cnt == 0:
+                continue
+            sc = _SHAPE_COLORS.get(shape, _SHAPE_COLORS['gradual'])
+            shape_parts.append(
+                f'<span style="display:inline-block;padding:0 6px;border-radius:8px;font-size:0.8em;'
+                f'background:{sc["bg"]};color:{sc["text"]};border:1px solid {sc["border"]};">'
+                f'{shape[0].upper()}:{cnt}</span>'
+            )
+        shape_html = ' '.join(shape_parts)
+
+        has_chart = date_key in chart_day_set
+        onclick = f' onclick="toggleRemEvtChart(\'{date_key}\')"' if has_chart else ''
+        row_cls = ' class="rem-evt-chartable"' if has_chart else ''
+        idx_cell = f'<span style="color:#667eea;" title="Click to expand daily chart">&#x1F4C8;</span> {i + 1}' if has_chart else f'{i + 1}'
+
+        rows_html += f'''
+        <tr{row_cls}{onclick}>
+            <td style="{_cell} text-align:center;color:#aaa;font-size:0.85em;">{idx_cell}</td>
+            <td style="{_cell}" data-value="{date_key}">{date_key}</td>
+            <td style="{_cell} text-align:center;" data-value="{n_events}">{n_events}</td>
+            <td style="{_cell} text-align:center;">{phase_badges}</td>
+            <td style="{_cell} text-align:center;" data-value="{total_dur}">{dur_str}</td>
+            <td style="{_cell} text-align:right;" data-value="{peak}">{peak:,.0f}W</td>
+            <td style="{_cell} text-align:center;">{shape_html}</td>
+            <td style="{_cell} text-align:right;" data-value="{day_energy}">{day_energy:.0f} Wh</td>
+        </tr>'''
+
+        # Hidden chart row with 3x3 grid
+        if has_chart:
+            grid_divs = []
+            for row_key, row_label in [('o', 'Original'), ('r', 'Remaining'), ('s', 'Segregated')]:
+                grid_divs.append(
+                    f'<div style="grid-column:1/-1;font-weight:600;color:#555;font-size:0.82em;'
+                    f'margin:{"8" if row_key != "o" else "0"}px 0 2px 4px;">{row_label} Power</div>'
+                )
+                for phase in ['w1', 'w2', 'w3']:
+                    grid_divs.append(f'<div id="rem-c-{date_key}-{row_key}-{phase}"></div>')
+            grid_content = '\n                        '.join(grid_divs)
+            rows_html += f'''
+        <tr id="rem-chart-row-{date_key}" style="display:none;">
+            <td colspan="8" style="padding:0;border-bottom:2px solid #667eea;">
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;padding:12px;background:#f8f9fa;">
+                    {grid_content}
+                </div>
+            </td>
+        </tr>'''
+
+    # Collapse if many days
+    collapse_table = num_days > 50
+    tbl_display = 'none' if collapse_table else 'block'
+    tbl_arrow = '&#x25B6;' if collapse_table else '&#x25BC;'
+
+    chart_count = len(chart_day_set)
+    tip_html = f'''
+    <div style="margin-bottom:8px;padding:8px 12px;background:#e8f4fd;border:1px solid #bee3f8;
+                border-radius:6px;font-size:0.82em;color:#2a4365;">
+        <strong>Tip:</strong> Click any row marked with &#x1F4C8; to expand a full-day 3&times;3
+        chart grid (Original / Remaining / Segregated &times; w1 / w2 / w3).
+        Above-threshold regions are highlighted in orange.
+        Charts available for the top {chart_count} days by energy.
+    </div>'''
+
+    css_html = '''
+    <style>
+        .rem-evt-chartable {
+            cursor: pointer;
+            border-left: 3px solid #667eea;
+        }
+        .rem-evt-chartable:hover {
+            background-color: #eef2ff !important;
+        }
+    </style>'''
+
+    table_html = css_html + tip_html + f'''
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;"
+         onclick="var tbl=document.getElementById('rem-evt-wrap'); tbl.style.display = tbl.style.display==='none' ? 'block' : 'none'; var arrow=this.querySelector('.toggle-arrow'); arrow.textContent = tbl.style.display==='none' ? '\\u25B6' : '\\u25BC';">
+        <span class="toggle-arrow" style="font-size:0.85em;">{tbl_arrow}</span>
+        <strong style="color:#2d3748;font-size:0.95em;">Daily Breakdown</strong>
+        <span style="background:#667eea;color:white;padding:1px 8px;border-radius:10px;font-size:0.8em;">{num_days} days</span>
+        <span style="color:#888;font-size:0.8em;">(click to {"expand" if collapse_table else "collapse"})</span>
+    </div>
+    <div id="rem-evt-wrap" style="display:{tbl_display};">
+    <table style="width:100%;border-collapse:collapse;font-size:0.85em;" id="{table_id}">
+        <thead>
+            <tr style="background:#f8f9fa;">
+                <th style="{_th} text-align:center;width:35px;">#</th>
+                <th style="{_th} text-align:left;cursor:pointer;" onclick="sortRemEvtTable('{table_id}',1,'str')">Date &#x25B4;&#x25BE;</th>
+                <th style="{_th} text-align:center;cursor:pointer;" onclick="sortRemEvtTable('{table_id}',2,'num')">Events &#x25B4;&#x25BE;</th>
+                <th style="{_th} text-align:center;">Phases</th>
+                <th style="{_th} text-align:center;cursor:pointer;" onclick="sortRemEvtTable('{table_id}',4,'num')">Total Dur &#x25B4;&#x25BE;</th>
+                <th style="{_th} text-align:right;cursor:pointer;" onclick="sortRemEvtTable('{table_id}',5,'num')">Peak &#x25B4;&#x25BE;</th>
+                <th style="{_th} text-align:center;">Shapes</th>
+                <th style="{_th} text-align:right;cursor:pointer;" onclick="sortRemEvtTable('{table_id}',7,'num')">Energy &#x25B4;&#x25BE;</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows_html}
+        </tbody>
+    </table>
+    </div>'''
+
+    # ---- JavaScript: sort + toggle + 3x3 renderer ----
+    js_html = '''
+    <script>
+    var _remEvtSortState = {};
+    function sortRemEvtTable(tableId, colIdx, type) {
+        var table = document.getElementById(tableId);
+        if (!table) return;
+        var tbody = table.querySelector('tbody');
+        var allRows = Array.from(tbody.querySelectorAll('tr'));
+        var groups = [];
+        for (var i = 0; i < allRows.length; i++) {
+            var row = allRows[i];
+            if (row.id && row.id.startsWith('rem-chart-row-')) continue;
+            var group = {data: row, chart: null};
+            if (i + 1 < allRows.length && allRows[i+1].id && allRows[i+1].id.startsWith('rem-chart-row-')) {
+                group.chart = allRows[i+1];
+                i++;
+            }
+            groups.push(group);
+        }
+        var key = tableId + '-' + colIdx;
+        var asc = _remEvtSortState[key] === undefined ? true : !_remEvtSortState[key];
+        _remEvtSortState[key] = asc;
+        groups.sort(function(a, b) {
+            var cellA = a.data.cells[colIdx], cellB = b.data.cells[colIdx];
+            if (type === 'num') {
+                var vA = parseFloat(cellA.getAttribute('data-value') || cellA.textContent.replace(/[^0-9.\\-]/g, '')) || 0;
+                var vB = parseFloat(cellB.getAttribute('data-value') || cellB.textContent.replace(/[^0-9.\\-]/g, '')) || 0;
+                return asc ? (vA - vB) : (vB - vA);
+            } else {
+                var vA = (cellA.getAttribute('data-value') || cellA.textContent).trim();
+                var vB = (cellB.getAttribute('data-value') || cellB.textContent).trim();
+                if (vA < vB) return asc ? -1 : 1;
+                if (vA > vB) return asc ? 1 : -1;
+                return 0;
+            }
+        });
+        groups.forEach(function(g, idx) {
+            g.data.cells[0].textContent = idx + 1;
+            tbody.appendChild(g.data);
+            if (g.chart) tbody.appendChild(g.chart);
+        });
+    }
+
+    var _remEvtCD = ''' + chart_data_js + ''';
+
+    function toggleRemEvtChart(dateKey) {
+        var row = document.getElementById('rem-chart-row-' + dateKey);
+        if (!row) return;
+        if (row.style.display === 'none' || row.style.display === '') {
+            row.style.display = 'table-row';
+            if (!row.dataset.rendered) {
+                _renderRemDayCharts(dateKey);
+                row.dataset.rendered = '1';
+            }
+        } else {
+            row.style.display = 'none';
+        }
+    }
+
+    function _renderRemDayCharts(dateKey) {
+        var d = _remEvtCD[dateKey];
+        if (!d) return;
+        var phases = ['w1','w2','w3'];
+        var pC = {w1:'#007bff', w2:'#dc3545', w3:'#28a745'};
+
+        // Compute global Y max across all phases (original power)
+        var gMax = 0;
+        phases.forEach(function(ph) {
+            (d['o_'+ph]||[]).forEach(function(v){ if(v>gMax) gMax=v; });
+        });
+        gMax = Math.ceil(gMax * 1.08 / 100) * 100;
+        if (gMax < 100) gMax = 100;
+
+        var xRange = [d.ts[0], d.ts[d.ts.length-1]];
+        var cfg = {displayModeBar:false,responsive:true};
+
+        phases.forEach(function(ph) {
+            var orig = d['o_'+ph]||[];
+            var rem = d['r_'+ph]||[];
+            var ts = d.ts;
+            if (!ts || !orig.length) return;
+
+            // Build event highlight shapes for this phase
+            var evtShapes = [];
+            (d['ev_'+ph]||[]).forEach(function(e) {
+                evtShapes.push({
+                    type:'rect',x0:e.s,x1:e.e,y0:0,y1:1,yref:'paper',
+                    fillcolor:'rgba(230,126,34,0.18)',line:{color:'#e67e22',width:1,dash:'dot'}
+                });
+            });
+
+            var bLay = {
+                margin:{l:50,r:10,t:28,b:30},height:200,
+                xaxis:{tickangle:-30,tickfont:{size:9},range:xRange},
+                yaxis:{title:'W',titlefont:{size:10},range:[0,gMax]},
+                plot_bgcolor:'#fafafa',paper_bgcolor:'white',
+                shapes:evtShapes,hovermode:'x unified'
+            };
+
+            // Row 1: Original
+            Plotly.newPlot('rem-c-'+dateKey+'-o-'+ph, [{
+                x:ts,y:orig,type:'scatter',mode:'lines',
+                line:{color:pC[ph],width:1.5},
+                hovertemplate:'%{y:.0f}W<extra></extra>'
+            }], Object.assign({},bLay,{
+                title:{text:ph.toUpperCase()+' — Original',font:{size:12}}
+            }), cfg);
+
+            // Row 2: Remaining (with event regions highlighted)
+            Plotly.newPlot('rem-c-'+dateKey+'-r-'+ph, [{
+                x:ts,y:rem,type:'scatter',mode:'lines',
+                line:{color:pC[ph],width:1.5},
+                hovertemplate:'%{y:.0f}W<extra></extra>'
+            }], Object.assign({},bLay,{
+                title:{text:ph.toUpperCase()+' — Remaining',font:{size:12}}
+            }), cfg);
+
+            // Row 3: Segregated (Original - Remaining)
+            var seg = [];
+            for (var j = 0; j < orig.length; j++) {
+                seg.push(Math.max(0, orig[j] - (rem[j]||0)));
+            }
+            Plotly.newPlot('rem-c-'+dateKey+'-s-'+ph, [{
+                x:ts,y:seg,type:'scatter',mode:'lines',
+                fill:'tozeroy',
+                fillcolor:'rgba(102,126,234,0.25)',
+                line:{color:'#667eea',width:1.5},
+                hovertemplate:'%{y:.0f}W<extra></extra>'
+            }], Object.assign({},bLay,{
+                title:{text:ph.toUpperCase()+' — Segregated',font:{size:12}},
+                margin:{l:50,r:10,t:28,b:55}
+            }), cfg);
+        });
+    }
+    </script>'''
+
+    return summary_html + table_html + js_html
+
+
+def _build_daily_chart_data(
+    daily: Dict[str, List[Dict]],
+    chart_day_set: set,
+    baseline: Optional[pd.DataFrame],
+    final: Optional[pd.DataFrame],
+) -> str:
+    """Build JSON with full-day chart data keyed by date string.
+
+    Format per day:
+      { "2021-03-15": {
+          ts: ["HH:MM", ...],
+          o_w1: [...], o_w2: [...], o_w3: [...],
+          r_w1: [...], r_w2: [...], r_w3: [...],
+          ev_w1: [{s:"HH:MM",e:"HH:MM"}, ...],   // above-threshold event regions
+          ev_w2: [...], ev_w3: [...]
+        }, ... }
+    """
+    if final is None or final.empty or 'timestamp' not in final.columns:
+        return '{}'
+
+    final_ts = pd.to_datetime(final['timestamp'])
+    final_dates = final_ts.dt.date
+
+    has_baseline = baseline is not None and not baseline.empty
+    if has_baseline and 'timestamp' in baseline.columns:
+        baseline_ts = pd.to_datetime(baseline['timestamp'])
+    else:
+        baseline_ts = None
+
+    chart_data = {}
+    for date_key in chart_day_set:
+        try:
+            target_date = pd.Timestamp(date_key).date()
+        except (ValueError, TypeError):
+            continue
+
+        # Full day of remaining data
+        day_mask = final_dates == target_date
+        subset = final.loc[day_mask]
+        if subset.empty or len(subset) < 3:
+            continue
+
+        ts_strs = pd.to_datetime(subset['timestamp']).dt.strftime('%H:%M').tolist()
+
+        entry = {'ts': ts_strs}
+
+        # All 3 phases — remaining power
+        for phase in ['w1', 'w2', 'w3']:
+            remain_col = f'remaining_{phase}'
+            if remain_col in subset.columns:
+                entry[f'r_{phase}'] = [
+                    int(round(v)) if pd.notna(v) else 0
+                    for v in subset[remain_col].clip(lower=0)
+                ]
+
+        # Original power from baseline (same day)
+        if baseline_ts is not None:
+            b_day_mask = baseline_ts.dt.date == target_date
+            b_subset = baseline.loc[b_day_mask]
+            if not b_subset.empty:
+                if len(b_subset) == len(subset):
+                    for phase in ['w1', 'w2', 'w3']:
+                        orig_col = f'original_{phase}'
+                        if orig_col in b_subset.columns:
+                            entry[f'o_{phase}'] = [
+                                int(round(v)) if pd.notna(v) else 0
+                                for v in b_subset[orig_col].clip(lower=0)
+                            ]
+                else:
+                    merged = subset[['timestamp']].merge(
+                        b_subset[['timestamp'] + [
+                            f'original_{p}' for p in ['w1', 'w2', 'w3']
+                            if f'original_{p}' in b_subset.columns
+                        ]],
+                        on='timestamp', how='left',
+                    )
+                    for phase in ['w1', 'w2', 'w3']:
+                        orig_col = f'original_{phase}'
+                        if orig_col in merged.columns:
+                            entry[f'o_{phase}'] = [
+                                int(round(v)) if pd.notna(v) else 0
+                                for v in merged[orig_col].fillna(0).clip(lower=0)
+                            ]
+
+        # Event rectangles per phase (above-threshold regions for this day)
+        day_events = daily.get(date_key, [])
+        for phase in ['w1', 'w2', 'w3']:
+            rects = []
+            for ev in day_events:
+                if ev['phase'] != phase:
+                    continue
+                s = ev['start']
+                e = ev['end']
+                s_str = s.strftime('%H:%M') if hasattr(s, 'strftime') else str(s)[11:16]
+                e_str = e.strftime('%H:%M') if hasattr(e, 'strftime') else str(e)[11:16]
+                rects.append({'s': s_str, 'e': e_str})
+            if rects:
+                entry[f'ev_{phase}'] = rects
+
+        chart_data[date_key] = entry
+
+    return json.dumps(chart_data, separators=(',', ':'))
