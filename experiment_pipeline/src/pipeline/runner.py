@@ -414,11 +414,11 @@ def _run_dynamic_post_pipeline(
         try:
             from identification import (
                 load_all_matches, filter_transient_events,
-                group_into_sessions, classify_sessions,
+                classify_events,
                 build_session_json,
             )
             logger.info(f"{'=' * 60}")
-            logger.info("IDENTIFICATION PIPELINE")
+            logger.info("IDENTIFICATION PIPELINE (classify-first)")
             logger.info(f"{'=' * 60}")
 
             experiment_dir = Path(output_path)
@@ -434,15 +434,10 @@ def _run_dynamic_post_pipeline(
                         f"{len(filtered)} remaining ({time.time() - t0:.1f}s)")
 
             t0 = time.time()
-            sessions = group_into_sessions(filtered)
-            logger.info(f"  Group sessions: {len(sessions)} sessions ({time.time() - t0:.1f}s)")
-
-            t0 = time.time()
-            classified = classify_sessions(sessions, filtered)
-            classified_count = sum(
-                1 for s in classified if getattr(s, 'device_type', 'unknown') != 'unknown'
-            )
-            logger.info(f"  Classify: {classified_count}/{len(classified)} classified "
+            classified = classify_events(filtered)
+            total_classified = sum(len(v) for v in classified.values())
+            non_unknown = total_classified - len(classified.get('unknown', []))
+            logger.info(f"  Classify: {non_unknown}/{total_classified} classified "
                         f"({time.time() - t0:.1f}s)")
 
             t0 = time.time()

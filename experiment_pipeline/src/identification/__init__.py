@@ -17,11 +17,12 @@ from .session_grouper import (
     load_all_matches,
     filter_transient_events,
     group_into_sessions,
+    build_single_event_session,
     Session,
     MultiPhaseSession,
 )
 
-from .session_classifier import classify_sessions, ClassifiedSession
+from .session_classifier import classify_events, classify_sessions, ClassifiedSession
 
 from .session_output import build_session_json
 
@@ -33,6 +34,7 @@ __all__ = [
     'load_all_matches',
     'filter_transient_events',
     'group_into_sessions',
+    'classify_events',
     'classify_sessions',
     'build_session_json',
     'cleanup_intermediate_files',

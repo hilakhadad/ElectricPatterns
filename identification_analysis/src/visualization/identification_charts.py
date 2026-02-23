@@ -25,6 +25,7 @@ LIGHT_GREEN = '#d4edda'
 
 DEVICE_COLORS = {
     'boiler': '#007bff',
+    'three_phase_device': '#6f42c1',
     'central_ac': '#dc3545',
     'regular_ac': '#e67e22',
     'unknown': '#6c757d',
@@ -33,6 +34,7 @@ DEVICE_COLORS = {
 
 DEVICE_DISPLAY_NAMES = {
     'boiler': 'Water Heater (Boiler)',
+    'three_phase_device': '3-Phase Device (Charger?)',
     'central_ac': 'Central AC (Multi-phase)',
     'regular_ac': 'Regular AC (Single-phase)',
     'unknown': 'Unclassified',
@@ -85,7 +87,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
         return '<p style="color: #888;">No matched device activations found.</p>'
 
     rows = ''
-    for dtype in ['boiler', 'central_ac', 'regular_ac', 'unclassified']:
+    for dtype in ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'unclassified']:
         info = types.get(dtype)
         if info is None:
             continue
@@ -332,7 +334,7 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
     global_act_idx = 0
 
     # Display all device types including unknown
-    display_order = ['boiler', 'central_ac', 'regular_ac', 'unknown']
+    display_order = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'unknown']
 
     total_count = sum(len(v) for v in device_groups.values())
     all_copyable_text = ', '.join(all_copyable)
@@ -647,7 +649,7 @@ def create_session_overview(sessions: List[Dict]) -> str:
     </div>'''
 
     # Pie chart — sessions by device type
-    display_order = ['boiler', 'central_ac', 'regular_ac', 'unknown']
+    display_order = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'unknown']
     pie_labels = []
     pie_values = []
     pie_colors = []
@@ -1032,7 +1034,7 @@ def create_temporal_heatmap(sessions: List[Dict]) -> str:
 
     # Per-device breakdown text
     dtype_hour_peaks = {}
-    for dtype in ['boiler', 'central_ac', 'regular_ac']:
+    for dtype in ['boiler', 'three_phase_device', 'central_ac', 'regular_ac']:
         dtype_sessions = [s for s in sessions if s.get('device_type') == dtype]
         if dtype_sessions:
             hour_counts = defaultdict(int)

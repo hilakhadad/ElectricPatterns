@@ -63,8 +63,7 @@ def main():
     from identification import (
         load_all_matches,
         filter_transient_events,
-        group_into_sessions,
-        classify_sessions,
+        classify_events,
         build_session_json,
     )
 
@@ -74,8 +73,7 @@ def main():
         sys.exit(1)
 
     filtered, spike_stats = filter_transient_events(all_matches)
-    sessions = group_into_sessions(filtered, gap_minutes=args.session_gap)
-    classified = classify_sessions(sessions, filtered)
+    classified = classify_events(filtered)
     json_path = build_session_json(
         classified_sessions=classified,
         house_id=args.house_id,

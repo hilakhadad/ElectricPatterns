@@ -60,6 +60,13 @@ AC_FILTER_MIN_CYCLE_MAG = 800       # watts
 AC_FILTER_MAG_RATIO = 0.50          # cycle ≥ 50% of boiler magnitude
 
 # ============================================================================
+# Three-phase device detection (charger / industrial equipment)
+# ============================================================================
+THREE_PHASE_OVERLAP_TOLERANCE = 0.10  # 10% of event duration as overlap margin
+THREE_PHASE_MAX_DURATION_RATIO = 2.0  # max ratio between durations (e.g., 20min vs 40min OK, 20min vs 120min NOT)
+THREE_PHASE_MIN_PHASES = 2            # events on 2+ other phases → three_phase_device
+
+# ============================================================================
 # Multi-phase simultaneity
 # ============================================================================
 MULTI_PHASE_WINDOW = 5              # minutes

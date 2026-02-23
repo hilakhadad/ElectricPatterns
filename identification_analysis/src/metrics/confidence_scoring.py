@@ -249,6 +249,8 @@ def _score_seasonal_fit(activation: Dict, dtype: str) -> float:
         return 0.3  # AC in deep winter
     elif dtype == 'boiler':
         return 0.8  # Boiler is year-round, slight seasonal variation is fine
+    elif dtype == 'three_phase_device':
+        return 0.8  # Three-phase devices (chargers) are year-round
     else:
         return 0.5  # Unclassified/other: neutral
 
@@ -263,7 +265,7 @@ def _score_phase_consistency(
 
     Central AC is multi-phase by definition, so always gets 1.0.
     """
-    if dtype == 'central_ac':
+    if dtype in ('central_ac', 'three_phase_device'):
         return 1.0  # Multi-phase by definition
 
     if dtype not in dominant_phase:

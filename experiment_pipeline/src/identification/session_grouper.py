@@ -517,6 +517,14 @@ def _build_session_from_dicts(event_dicts: list, phase: str) -> Session:
     )
 
 
+def build_single_event_session(event_dict: dict, phase: str) -> Session:
+    """Create a Session from a single event (used for boiler / three_phase_device).
+
+    Boilers are always single-event sessions — no grouping needed.
+    """
+    return _build_session_from_dicts([event_dict], phase)
+
+
 def _find_run_dir(experiment_dir: Path, run_number: int, threshold: int) -> Optional[Path]:
     """Find run directory — supports ``run_N`` and ``run_N_thXXXX`` naming."""
     exact = experiment_dir / f"run_{run_number}_th{threshold}"
