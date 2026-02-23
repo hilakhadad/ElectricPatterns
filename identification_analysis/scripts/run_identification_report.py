@@ -117,7 +117,16 @@ def main():
         "--resume", type=str, default=None,
         help="Resume from existing output dir — only process new houses"
     )
+    parser.add_argument(
+        "--publish", type=str, default=None, metavar="NAME",
+        help="Publish mode: output {NAME}_report.html + {NAME}_reports/house_{id}.html "
+             "(requires --output-dir)"
+    )
     args = parser.parse_args()
+
+    if args.publish and not args.output_dir:
+        print("ERROR: --publish requires --output-dir")
+        sys.exit(1)
 
     # ── Resume mode ───────────────────────────────────────────────
     resume_mode = False
@@ -138,11 +147,19 @@ def main():
             args.experiment = metadata.get('experiment_dir')
 
         # Detect existing reports
-        reports_subdir = resume_dir / "house_reports"
-        scan_dir = reports_subdir if reports_subdir.exists() else resume_dir
-        for html_file in scan_dir.glob("identification_report_*.html"):
-            house_id = html_file.stem.replace("identification_report_", "")
-            if house_id != "aggregate":
+        if args.publish:
+            scan_dir = resume_dir / f"{args.publish}_reports"
+        else:
+            reports_subdir = resume_dir / "house_reports"
+            scan_dir = reports_subdir if reports_subdir.exists() else resume_dir
+        if scan_dir.exists():
+            for html_file in scan_dir.glob("identification_report_*.html"):
+                house_id = html_file.stem.replace("identification_report_", "")
+                if house_id != "aggregate":
+                    existing_houses.add(house_id)
+            # Also detect publish-mode naming (house_*.html)
+            for html_file in scan_dir.glob("house_*.html"):
+                house_id = html_file.stem.replace("house_", "")
                 existing_houses.add(house_id)
 
     # Find experiment directory
@@ -190,8 +207,12 @@ def main():
             house_reports_subdir = None
     elif args.output_dir:
         output_dir = Path(args.output_dir)
-        house_reports_dir = output_dir
-        house_reports_subdir = None
+        if args.publish:
+            house_reports_dir = output_dir / f"{args.publish}_reports"
+            house_reports_subdir = f"{args.publish}_reports"
+        else:
+            house_reports_dir = output_dir
+            house_reports_subdir = None
     else:
         experiment_name = experiment_dir.name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -227,7 +248,10 @@ def main():
 
     for house_id in houses_iter:
         try:
-            out_path = str(house_reports_dir / f"identification_report_{house_id}.html")
+            if args.publish:
+                out_path = str(house_reports_dir / f"house_{house_id}.html")
+            else:
+                out_path = str(house_reports_dir / f"identification_report_{house_id}.html")
             if HAS_TQDM:
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
@@ -270,7 +294,10 @@ def main():
     agg_house_ids = all_house_ids if resume_mode else house_ids
     if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
         try:
-            agg_path = str(output_dir / "identification_report_aggregate.html")
+            if args.publish:
+                agg_path = str(output_dir / f"{args.publish}_report.html")
+            else:
+                agg_path = str(output_dir / "identification_report_aggregate.html")
             print(f"Generating aggregate M2 report ({len(agg_house_ids)} houses)...",
                   flush=True)
             agg_start = time.time()
@@ -280,6 +307,7 @@ def main():
                 show_progress=True,
                 precomputed_metrics=cached_metrics,
                 show_timing=True,
+                per_house_filename_pattern="house_{house_id}.html" if args.publish else None,
             )
             print(f"Aggregate M2 report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

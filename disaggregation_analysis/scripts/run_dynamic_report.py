@@ -156,7 +156,16 @@ def main():
         dest="fast_mode",
         help="Skip expensive pattern analysis (faster reports)"
     )
+    parser.add_argument(
+        "--publish", type=str, default=None, metavar="NAME",
+        help="Publish mode: output {NAME}_report.html + {NAME}_reports/house_{id}.html "
+             "(requires --output-dir)"
+    )
     args = parser.parse_args()
+
+    if args.publish and not args.output_dir:
+        print("ERROR: --publish requires --output-dir")
+        sys.exit(1)
 
     # ── Resume mode: load metadata from previous run ────────────
     resume_mode = False
@@ -180,11 +189,19 @@ def main():
                 args.pre_analysis = metadata['pre_analysis_path']
 
         # Detect existing house reports
-        reports_subdir = resume_dir / "house_reports"
-        scan_dir = reports_subdir if reports_subdir.exists() else resume_dir
-        for html_file in scan_dir.glob("dynamic_report_*.html"):
-            house_id = html_file.stem.replace("dynamic_report_", "")
-            if house_id != "aggregate":
+        if args.publish:
+            scan_dir = resume_dir / f"{args.publish}_reports"
+        else:
+            reports_subdir = resume_dir / "house_reports"
+            scan_dir = reports_subdir if reports_subdir.exists() else resume_dir
+        if scan_dir.exists():
+            for html_file in scan_dir.glob("dynamic_report_*.html"):
+                house_id = html_file.stem.replace("dynamic_report_", "")
+                if house_id != "aggregate":
+                    existing_houses.add(house_id)
+            # Also detect publish-mode naming (house_*.html)
+            for html_file in scan_dir.glob("house_*.html"):
+                house_id = html_file.stem.replace("house_", "")
                 existing_houses.add(house_id)
 
     # Find experiment directory
@@ -261,8 +278,12 @@ def main():
             house_reports_subdir = None
     elif args.output_dir:
         output_dir = Path(args.output_dir)
-        house_reports_dir = output_dir  # Flat: per-house reports go directly here
-        house_reports_subdir = None     # No subdirectory in aggregate links
+        if args.publish:
+            house_reports_dir = output_dir / f"{args.publish}_reports"
+            house_reports_subdir = f"{args.publish}_reports"
+        else:
+            house_reports_dir = output_dir  # Flat: per-house reports go directly here
+            house_reports_subdir = None     # No subdirectory in aggregate links
     else:
         experiment_name = experiment_dir.name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -297,7 +318,10 @@ def main():
 
     for house_id in houses_iter:
         try:
-            out_path = str(house_reports_dir / f"dynamic_report_{house_id}.html")
+            if args.publish:
+                out_path = str(house_reports_dir / f"house_{house_id}.html")
+            else:
+                out_path = str(house_reports_dir / f"dynamic_report_{house_id}.html")
             if HAS_TQDM:
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
@@ -339,7 +363,10 @@ def main():
     agg_house_ids = all_house_ids if resume_mode else house_ids
     if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
         try:
-            agg_path = str(output_dir / "dynamic_report_aggregate.html")
+            if args.publish:
+                agg_path = str(output_dir / f"{args.publish}_report.html")
+            else:
+                agg_path = str(output_dir / "dynamic_report_aggregate.html")
             print(f"Generating aggregate report ({len(agg_house_ids)} houses)...", flush=True)
             agg_start = time.time()
             generate_dynamic_aggregate_report(
@@ -347,6 +374,7 @@ def main():
                 pre_analysis_scores=pre_analysis_scores,
                 house_reports_subdir=house_reports_subdir,
                 show_progress=True,
+                per_house_filename_pattern="house_{house_id}.html" if args.publish else None,
             )
             print(f"Aggregate report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

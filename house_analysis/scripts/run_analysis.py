@@ -5,6 +5,7 @@ Usage:
     python run_analysis.py                    # Analyze all houses
     python run_analysis.py --house 140        # Analyze specific house
     python run_analysis.py --list             # List available houses
+    python run_analysis.py --publish house --output-dir reports/  # Publish mode
 """
 import sys
 import os
@@ -185,14 +186,89 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
                     print(f"  {flag}: {pct:.1f}%")
 
 
+def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
+                     publish_name: str) -> None:
+    """Run analysis in publish mode: structured output for website.
+
+    Output structure:
+        {output_dir}/{publish_name}_report.html          — Aggregate report
+        {output_dir}/{publish_name}_reports/house_{id}.html  — Per-house reports
+        {output_dir}/{publish_name}_reports/analysis_{id}.json — Per-house JSON
+    """
+    from reports import analyze_single_house, generate_house_report
+    from visualization import generate_html_report, generate_single_house_html_report
+
+    per_house_dir = output_dir / f"{publish_name}_reports"
+    os.makedirs(per_house_dir, exist_ok=True)
+
+    print(f"Publish mode: {publish_name}")
+    print(f"  Per-house dir: {per_house_dir}")
+    print(f"  Houses: {len(house_ids)}")
+    print("=" * 60)
+
+    all_analyses = []
+    errors = []
+
+    for house_id in tqdm(house_ids, desc="Analyzing houses", unit="house", mininterval=30):
+        try:
+            house_folder = input_dir / house_id
+            if not house_folder.exists() or not house_folder.is_dir():
+                tqdm.write(f"  House {house_id}: folder not found, skipping")
+                continue
+
+            data = load_house_data_from_folder(house_folder)
+            if data is None or len(data) == 0:
+                tqdm.write(f"  House {house_id}: no data, skipping")
+                continue
+
+            analysis = analyze_single_house(data, house_id)
+
+            # JSON report
+            generate_house_report(analysis, str(per_house_dir), format='json')
+
+            # HTML report
+            html_path = per_house_dir / f"house_{house_id}.html"
+            generate_single_house_html_report(analysis, str(html_path))
+
+            all_analyses.append(analysis)
+        except Exception as e:
+            tqdm.write(f"  Error in house {house_id}: {e}")
+            errors.append({'house_id': house_id, 'error': str(e)})
+
+    print("\n" + "=" * 60)
+    print(f"Completed: {len(all_analyses)} OK, {len(errors)} errors")
+
+    # Generate aggregate report (only with multiple houses)
+    if len(all_analyses) > 1:
+        agg_path = output_dir / f"{publish_name}_report.html"
+        print(f"\nGenerating aggregate report...")
+        generate_html_report(
+            all_analyses, str(agg_path),
+            per_house_dir=f"{publish_name}_reports",
+        )
+        print(f"Aggregate report: {agg_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Analyze household power data')
     parser.add_argument('--house', type=str, help='Specific house ID to analyze')
+    parser.add_argument('--houses', type=str,
+                        help='Comma-separated house IDs to analyze')
     parser.add_argument('--list', action='store_true', help='List available houses')
     parser.add_argument('--input-dir', type=str, help='Input directory with pkl files')
     parser.add_argument('--output-dir', type=str, help='Output directory for reports')
+    parser.add_argument('--publish', type=str, default=None, metavar='NAME',
+                        help='Publish mode: {NAME}_report.html + {NAME}_reports/house_{id}.html '
+                             '(requires --output-dir)')
 
     args = parser.parse_args()
+
+    if args.publish and not args.output_dir:
+        print("ERROR: --publish requires --output-dir")
+        sys.exit(1)
+    if args.house and args.houses:
+        print("ERROR: Use --house OR --houses, not both")
+        sys.exit(1)
 
     input_dir = Path(args.input_dir) if args.input_dir else DEFAULT_INPUT_DIR
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_DIR
@@ -209,7 +285,16 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
 
-    if args.house:
+    if args.publish:
+        # Publish mode: structured output for website
+        if args.houses:
+            house_ids = [h.strip() for h in args.houses.split(',')]
+        elif args.house:
+            house_ids = [args.house]
+        else:
+            house_ids = list_available_houses(input_dir)
+        run_publish_mode(house_ids, input_dir, output_dir, args.publish)
+    elif args.house:
         run_single_house_analysis(args.house, input_dir, output_dir)
     else:
         run_all_houses_analysis(input_dir, output_dir)

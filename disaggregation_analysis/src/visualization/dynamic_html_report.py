@@ -308,6 +308,7 @@ def generate_dynamic_aggregate_report(
     pre_analysis_scores: Optional[Dict[str, Any]] = None,
     house_reports_subdir: Optional[str] = None,
     show_progress: bool = False,
+    per_house_filename_pattern: Optional[str] = None,
 ) -> str:
     """
     Generate aggregate report across multiple houses.
@@ -377,6 +378,7 @@ def generate_dynamic_aggregate_report(
         generated_at=generated_at,
         experiment_dir=str(experiment_dir),
         house_reports_subdir=house_reports_subdir,
+        per_house_filename_pattern=per_house_filename_pattern,
     )
 
     if output_path is None:
@@ -650,6 +652,7 @@ def _build_aggregate_html(
     generated_at: str,
     experiment_dir: str,
     house_reports_subdir: Optional[str] = None,
+    per_house_filename_pattern: Optional[str] = None,
 ) -> str:
     """Build aggregate report for multiple houses (M1 disaggregation only)."""
     # Compute aggregate stats
@@ -697,13 +700,18 @@ def _build_aggregate_html(
         pq_html = _format_pre_quality(pre_quality)
         days = m.get('data_period', {}).get('days', 0)
 
+        if per_house_filename_pattern:
+            house_file = per_house_filename_pattern.replace('{house_id}', hid)
+        else:
+            house_file = f'dynamic_report_{hid}.html'
+
         house_rows += f'''
         <tr data-tier="{tier}" data-continuity="{nan_cont}"
             data-segregated="{t.get('segregated_pct', 0):.1f}" data-background="{t.get('background_pct', 0):.1f}"
             data-aboveth="{t.get('above_th_pct', 0):.1f}" data-subth="{t.get('sub_threshold_pct', 0):.1f}"
             data-nodata="{t.get('no_data_pct', 0):.1f}" data-efficiency="{eff:.1f}">
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee;">
-                <a href="{link_prefix}dynamic_report_{hid}.html" style="color: #667eea; text-decoration: none;">{hid}</a>
+                <a href="{link_prefix}{house_file}" style="color: #667eea; text-decoration: none;">{hid}</a>
             </td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;" data-value="{days}">{days}</td>
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee; text-align: center;">{pq_html}</td>

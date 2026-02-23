@@ -658,6 +658,7 @@ def generate_identification_aggregate_report(
     show_progress: bool = False,
     precomputed_metrics: Optional[Dict[str, dict]] = None,
     show_timing: bool = False,
+    per_house_filename_pattern: Optional[str] = None,
 ) -> str:
     """
     Generate aggregate identification report across multiple houses.
@@ -761,7 +762,11 @@ def generate_identification_aggregate_report(
         quality_score = quality.get('overall_quality_score') if quality else None
         report_link = None
         if house_reports_subdir:
-            report_link = f'{house_reports_subdir}/identification_report_{house_id}.html'
+            if per_house_filename_pattern:
+                per_house_file = per_house_filename_pattern.replace('{house_id}', house_id)
+            else:
+                per_house_file = f'identification_report_{house_id}.html'
+            report_link = f'{house_reports_subdir}/{per_house_file}'
 
         house_summaries.append({
             'house_id': house_id,
