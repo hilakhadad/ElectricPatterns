@@ -76,7 +76,7 @@ def get_houses_sorted_by_size():
 
 # Auto-detect all houses from INPUT directory, sorted by size
 # HOUSE_IDS = get_houses_sorted_by_size()
-HOUSE_IDS = ["305", "1"]
+HOUSE_IDS = ["2008", "221", "1"]
 
 # Auto-detect CPU cores
 # NOTE: More workers != faster! Often 2-4 workers is optimal due to:

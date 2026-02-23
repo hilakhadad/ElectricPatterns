@@ -201,6 +201,7 @@ def generate_dynamic_house_report(
     output_path: Optional[str] = None,
     pre_quality=None,
     skip_activations_detail: bool = False,
+    show_timing: bool = False,
 ) -> str:
     """
     Generate dynamic threshold HTML report for a single house (M1 disaggregation only).
@@ -211,23 +212,40 @@ def generate_dynamic_house_report(
         output_path: Where to save the HTML file (optional, auto-generated if None)
         pre_quality: Pre-analysis quality score (float, 'faulty', or None)
         skip_activations_detail: Unused (kept for backward compatibility)
+        show_timing: If True, print per-step timing to console
 
     Returns:
         Path to generated HTML file
     """
+    import time as _time
+
     experiment_dir = Path(experiment_dir)
+    prefix = f"  [house {house_id}]"
+    total_t0 = _time.time()
 
     # Calculate M1 disaggregation metrics
+    t0 = _time.time()
     metrics = calculate_dynamic_report_metrics(experiment_dir, house_id)
+    if show_timing:
+        # Show internal timing breakdown if available
+        timing = metrics.get('_timing', {})
+        if timing:
+            for step, secs in sorted(timing.items(), key=lambda x: -x[1]):
+                print(f"{prefix}   {step:<36s} {secs:.1f}s", flush=True)
+        print(f"{prefix} {'Loading metrics (total)':<40s} {_time.time() - t0:.1f}s", flush=True)
 
     # Generate M1 chart sections
+    t0 = _time.time()
     summary_html = create_summary_boxes(metrics)
     breakdown_html = create_power_breakdown_bar(metrics)
     efficiency_html = create_efficiency_gauge(metrics)
     waterfall_html = create_threshold_waterfall(metrics)
     remaining_html = create_remaining_analysis_chart(metrics)
+    if show_timing:
+        print(f"{prefix} {'Generating charts':<40s} {_time.time() - t0:.1f}s", flush=True)
 
     # Build HTML document
+    t0 = _time.time()
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     period = metrics.get('data_period', {})
     threshold_schedule = metrics.get('threshold_schedule', [])
@@ -253,6 +271,10 @@ def generate_dynamic_house_report(
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
+
+    if show_timing:
+        print(f"{prefix} {'Building HTML + save':<40s} {_time.time() - t0:.1f}s", flush=True)
+        print(f"{prefix} {'TOTAL':<40s} {_time.time() - total_t0:.1f}s", flush=True)
 
     logger.info(f"Report saved to {output_path}")
     return output_path

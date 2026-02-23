@@ -14,7 +14,8 @@ from metrics import (
     calculate_coverage_metrics,
     calculate_power_statistics,
     calculate_temporal_patterns,
-    calculate_data_quality_metrics
+    calculate_data_quality_metrics,
+    calculate_wave_behavior_metrics
 )
 from metrics.temporal import calculate_flat_segments, calculate_temporal_patterns_by_period
 
@@ -74,6 +75,10 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     # Flat segments
     flat = calculate_flat_segments(data, phase_cols)
     results['flat_segments'] = flat
+
+    # Wave behavior pre-analysis
+    wave_behavior = calculate_wave_behavior_metrics(data, phase_cols)
+    results['wave_behavior'] = wave_behavior
 
     # Summary flags for easy filtering
     results['flags'] = _generate_flags(results)
@@ -135,6 +140,11 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
         for c in ['w1', 'w2', 'w3', '1', '2', '3']
         if f'phase_{c}_flat_pct' in flat
     )
+
+    # Wave behavior flags
+    wave = analysis.get('wave_behavior', {})
+    flags['has_wave_behavior'] = wave.get('has_wave_behavior', False)
+    flags['wave_dominant'] = wave.get('wave_classification') == 'wave_dominant'
 
     # Temporal flags
     flags['unusual_night_ratio'] = any(

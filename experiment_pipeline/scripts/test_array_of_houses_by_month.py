@@ -51,7 +51,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent
 _INPUT_PATH = _PROJECT_ROOT / "INPUT" / "HouseholdData"
 
 # Experiment name (must match one in core/config.py)
-EXPERIMENT_NAME = "exp010_dynamic_threshold"
+EXPERIMENT_NAME = "exp014_wave_recovery"
 
 # Maximum iterations (pipeline runs) per house
 MAX_ITERATIONS = 2

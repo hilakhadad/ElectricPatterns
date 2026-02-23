@@ -151,6 +151,11 @@ def main():
         "--resume", type=str, default=None,
         help="Path to existing analysis output dir — only process new houses, regenerate aggregate"
     )
+    parser.add_argument(
+        "--fast-mode", action="store_true",
+        dest="fast_mode",
+        help="Skip expensive pattern analysis (faster reports)"
+    )
     args = parser.parse_args()
 
     # ── Resume mode: load metadata from previous run ────────────
@@ -304,6 +309,7 @@ def main():
                 str(experiment_dir), house_id, out_path,
                 pre_quality=pre_quality,
                 skip_activations_detail=args.skip_activations,
+                show_timing=True,
             )
 
             successful += 1

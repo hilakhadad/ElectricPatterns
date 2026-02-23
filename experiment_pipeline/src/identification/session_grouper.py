@@ -94,12 +94,31 @@ def load_all_matches(
             except Exception as exc:
                 logger.warning(f"Failed to load {pkl_file}: {exc}")
 
+    # Load wave recovery matches from run_post/ (if any)
+    post_dir = experiment_dir / "run_post" / f"house_{house_id}" / "matches"
+    if post_dir.exists():
+        for pkl_file in sorted(post_dir.glob(f"matches_{house_id}_*.pkl")):
+            try:
+                df = pd.read_pickle(pkl_file)
+                if df.empty:
+                    continue
+                # Wave matches already have iteration/threshold from wave_recovery_step
+                if 'iteration' not in df.columns:
+                    df['iteration'] = len(threshold_schedule)
+                if 'threshold' not in df.columns:
+                    df['threshold'] = 0
+                all_dfs.append(df)
+            except Exception as exc:
+                logger.warning(f"Failed to load wave match {pkl_file}: {exc}")
+
     if not all_dfs:
         logger.info(f"No match files found for house {house_id}")
         return pd.DataFrame()
 
     combined = pd.concat(all_dfs, ignore_index=True)
-    logger.info(f"Loaded {len(combined)} matches across {len(threshold_schedule)} iterations")
+    wave_count = combined['tag'].str.startswith('WAVE-').sum() if 'tag' in combined.columns else 0
+    logger.info(f"Loaded {len(combined)} matches across {len(threshold_schedule)} iterations"
+                f"{f' + {wave_count} wave matches' if wave_count > 0 else ''}")
     return combined
 
 

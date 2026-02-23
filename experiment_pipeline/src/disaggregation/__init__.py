@@ -6,13 +6,15 @@ profiles from the aggregate signal. Pure signal processing with zero
 device knowledge.
 
 Sub-packages:
-    detection/    — Sharp + gradual event detection
-    matching/     — Stage 1-3 ON/OFF pair matching
-    segmentation/ — Power extraction and remaining signal computation
+    rectangle/      — Flat (rectangular) power extraction (original M1 pipeline)
+    wave_recovery/  — Wave-shaped power extraction (Post-M1 recovery step)
+
+Legacy shim packages (detection/, matching/, segmentation/, pipeline/) re-export
+from rectangle/ for backward compatibility.
 """
 
-# Re-export from sub-packages (now live here after Phase 2 move)
-from .detection import (
+# Re-export from rectangle sub-package for backward compatibility
+from .rectangle.detection import (
     detect_sharp_events,
     detect_gradual_events,
     detect_near_threshold_events,
@@ -23,18 +25,18 @@ from .detection import (
     expand_event,
 )
 
-from .matching.stage1 import find_match as find_clean_match
-from .matching.stage2 import find_noisy_match
-from .matching.stage3 import find_partial_match
-from .matching.validator import is_valid_event_removal, build_match_tag
+from .rectangle.matching.stage1 import find_match as find_clean_match
+from .rectangle.matching.stage2 import find_noisy_match
+from .rectangle.matching.stage3 import find_partial_match
+from .rectangle.matching.validator import is_valid_event_removal, build_match_tag
 
-from .segmentation.processor import process_phase_segmentation
-from .segmentation.summarizer import summarize_segmentation
-from .segmentation.evaluation import calculate_phase_metrics
-from .segmentation.restore import restore_skipped_to_unmatched
+from .rectangle.segmentation.processor import process_phase_segmentation
+from .rectangle.segmentation.summarizer import summarize_segmentation
+from .rectangle.segmentation.evaluation import calculate_phase_metrics
+from .rectangle.segmentation.restore import restore_skipped_to_unmatched
 
 # Note: Pipeline orchestration steps (process_detection, process_matching, etc.)
-# live at disaggregation/pipeline/*_step.py and are re-exported from pipeline/__init__.py.
+# live at disaggregation/pipeline/*_step.py (shims) → disaggregation/rectangle/pipeline/*_step.py
 
 __all__ = [
     # Detection

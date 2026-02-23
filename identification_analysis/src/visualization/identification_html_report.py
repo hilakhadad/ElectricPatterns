@@ -181,14 +181,11 @@ def _load_spike_intervals(experiment_dir: Path, house_id: str) -> dict:
                 if spikes.empty:
                     continue
                 # Deduplicate: same physical event may appear in multiple runs
-                new_rows = []
-                for _, row in spikes.iterrows():
-                    key = (row['phase'], str(row['on_start']))
-                    if key not in seen:
-                        seen.add(key)
-                        new_rows.append(row)
-                if new_rows:
-                    all_spikes.append(pd.DataFrame(new_rows))
+                spikes['_key'] = spikes['phase'] + '_' + spikes['on_start'].astype(str)
+                new_spikes = spikes[~spikes['_key'].isin(seen)]
+                if not new_spikes.empty:
+                    seen.update(new_spikes['_key'].tolist())
+                    all_spikes.append(new_spikes.drop(columns=['_key']))
             except Exception:
                 continue
 
@@ -201,11 +198,19 @@ def _load_spike_intervals(experiment_dir: Path, house_id: str) -> dict:
         phase_spikes = combined[combined['phase'] == phase]
         if phase_spikes.empty:
             continue
-        intervals = []
-        for _, row in phase_spikes.iterrows():
-            s = pd.Timestamp(row['on_start']).isoformat()
-            e = pd.Timestamp(row.get('off_end') or row.get('off_start') or row['on_start']).isoformat()
-            intervals.append((s, e))
+        starts = pd.to_datetime(phase_spikes['on_start'])
+        # Use off_end if available, fallback to off_start, then on_start
+        if 'off_end' in phase_spikes.columns:
+            ends = pd.to_datetime(phase_spikes['off_end'].fillna(
+                phase_spikes.get('off_start', phase_spikes['on_start'])))
+        elif 'off_start' in phase_spikes.columns:
+            ends = pd.to_datetime(phase_spikes['off_start'])
+        else:
+            ends = starts
+        intervals = list(zip(
+            starts.apply(lambda x: x.isoformat()),
+            ends.apply(lambda x: x.isoformat()),
+        ))
         result[phase] = sorted(intervals)
 
     logger.info(f"Loaded {sum(len(v) for v in result.values())} spike intervals for house {house_id}")
@@ -260,15 +265,12 @@ def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
         pm = combined[combined['phase'] == phase]
         if pm.empty:
             continue
-        intervals = []
-        for _, row in pm.iterrows():
-            intervals.append((
-                pd.Timestamp(row['on_start']).isoformat(),
-                pd.Timestamp(row['off_end']).isoformat(),
-                int(round(abs(float(row['on_magnitude'])))),
-                round(float(row['duration']), 1) if pd.notna(row.get('duration', None)) else 0.0,
-            ))
-        result[phase] = sorted(intervals)
+        starts = pd.to_datetime(pm['on_start']).apply(lambda x: x.isoformat())
+        ends = pd.to_datetime(pm['off_end']).apply(lambda x: x.isoformat())
+        mags = pm['on_magnitude'].abs().round().astype(int)
+        durs = pm['duration'].fillna(0).round(1)
+        intervals = sorted(zip(starts, ends, mags, durs))
+        result[phase] = intervals
 
     logger.info(f"Loaded {sum(len(v) for v in result.values())} match intervals for house {house_id}")
     return result
@@ -300,7 +302,8 @@ def generate_identification_report(
     house_id: str,
     output_path: Optional[str] = None,
     skip_activations_detail: bool = False,
-) -> str:
+    show_timing: bool = False,
+) -> dict:
     """
     Generate device identification HTML report for a single house.
 
@@ -309,18 +312,37 @@ def generate_identification_report(
         house_id: House ID
         output_path: Where to save the HTML file (optional)
         skip_activations_detail: If True, omit the Device Activations Detail section
+        show_timing: If True, print per-step timing to console
 
     Returns:
-        Path to generated HTML file
+        dict with keys: 'path' (str), 'quality' (dict or None), 'confidence' (dict or None)
     """
+    import time as _time
+
     experiment_dir = Path(experiment_dir)
+    prefix = f"  [house {house_id}]"
+    total_t0 = _time.time()
+
+    def _step(label):
+        """Helper: print timing for previous step, start new one."""
+        now = _time.time()
+        if _step._prev is not None:
+            elapsed = now - _step._start
+            if show_timing:
+                print(f"{prefix} {_step._prev:<40s} {elapsed:.1f}s", flush=True)
+        _step._prev = label
+        _step._start = now
+    _step._prev = None
+    _step._start = total_t0
 
     # Load data
+    _step("Loading sessions...")
     sessions_data = _load_sessions(experiment_dir, house_id)
     sessions = sessions_data.get('sessions', [])
     threshold_schedule = sessions_data.get('threshold_schedule', [])
 
     # Generate chart sections
+    _step("Creating overview charts...")
     spike_filter = sessions_data.get('spike_filter', {})
     spike_html = create_spike_analysis(spike_filter)
     overview_html = create_session_overview(sessions)
@@ -331,7 +353,10 @@ def generate_identification_report(
     unclassified_html = create_unclassified_analysis(sessions)
 
     # Classification quality metrics (reuse existing M2 metrics)
+    _step("Classification quality metrics...")
     quality_html = ''
+    quality = None
+    confidence = None
     try:
         quality = calculate_classification_quality(experiment_dir, house_id)
         confidence = calculate_confidence_scores(experiment_dir, house_id)
@@ -340,6 +365,7 @@ def generate_identification_report(
         logger.warning(f"Classification quality failed for house {house_id}: {e}")
 
     # Load summarized power data for expandable charts in activations table
+    _step("Loading summarized power...")
     summarized_data = None
     try:
         summarized_data = _load_summarized_power(experiment_dir, house_id)
@@ -347,6 +373,7 @@ def generate_identification_report(
         logger.warning(f"Failed to load summarized power for house {house_id}: {e}")
 
     # Load all match intervals for chart visualization (individual match rectangles)
+    _step("Loading match intervals...")
     all_match_intervals = {}
     try:
         all_match_intervals = _load_all_match_intervals(experiment_dir, house_id)
@@ -356,12 +383,16 @@ def generate_identification_report(
     # Device activations detail (session-level) with expandable power charts
     activations_detail_html = ''
     if not skip_activations_detail:
+        _step("Device activations detail...")
         activations_detail_html = create_device_activations_detail(
             sessions, house_id=house_id, summarized_data=summarized_data,
             all_match_intervals=all_match_intervals,
         )
+    else:
+        _step("Skipping activations detail...")
 
     # Build HTML
+    _step("Building HTML...")
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     summary = sessions_data.get('summary', {})
 
@@ -389,8 +420,14 @@ def generate_identification_report(
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
+    # Final timing
+    _step("Done")
+    total_elapsed = _time.time() - total_t0
+    if show_timing:
+        print(f"{prefix} {'TOTAL':<40s} {total_elapsed:.1f}s", flush=True)
+
     logger.info(f"Identification report saved to {output_path}")
-    return output_path
+    return {'path': output_path, 'quality': quality, 'confidence': confidence}
 
 
 def _build_house_html(
@@ -619,6 +656,8 @@ def generate_identification_aggregate_report(
     output_path: Optional[str] = None,
     house_reports_subdir: Optional[str] = None,
     show_progress: bool = False,
+    precomputed_metrics: Optional[Dict[str, dict]] = None,
+    show_timing: bool = False,
 ) -> str:
     """
     Generate aggregate identification report across multiple houses.
@@ -629,11 +668,17 @@ def generate_identification_aggregate_report(
         output_path: Where to save (optional)
         house_reports_subdir: Subdirectory for per-house report links
         show_progress: Show tqdm progress bar
+        precomputed_metrics: Optional dict {house_id: {'quality': ..., 'confidence': ...}}
+                             from per-house phase — avoids recalculating
+        show_timing: If True, print timing info
 
     Returns:
         Path to generated HTML file
     """
+    import time as _time
+
     experiment_dir = Path(experiment_dir)
+    precomputed_metrics = precomputed_metrics or {}
 
     all_quality = []
     all_confidence = []
@@ -642,6 +687,9 @@ def generate_identification_aggregate_report(
     houses_iter = house_ids
     if show_progress and _HAS_TQDM:
         houses_iter = _tqdm(house_ids, desc="Aggregate M2 metrics", unit="house")
+
+    t0 = _time.time()
+    reused = 0
 
     for house_id in houses_iter:
         sessions_data = _load_sessions(experiment_dir, house_id)
@@ -686,18 +734,29 @@ def generate_identification_aggregate_report(
         days_span = (max_date - min_date).days + 1 if min_date and max_date else 0
         sessions_per_day = total / days_span if days_span > 0 else 0
 
-        # Quality + confidence metrics
-        try:
-            quality = calculate_classification_quality(experiment_dir, house_id)
-            all_quality.append(quality)
-        except Exception:
-            quality = None
+        # Quality + confidence metrics — reuse from per-house phase if available
+        cached = precomputed_metrics.get(house_id, {})
+        quality = cached.get('quality')
+        confidence = cached.get('confidence')
 
-        try:
-            confidence = calculate_confidence_scores(experiment_dir, house_id)
+        if quality is None:
+            try:
+                quality = calculate_classification_quality(experiment_dir, house_id)
+            except Exception:
+                quality = None
+        else:
+            reused += 1
+
+        if confidence is None:
+            try:
+                confidence = calculate_confidence_scores(experiment_dir, house_id)
+            except Exception:
+                confidence = None
+
+        if quality:
+            all_quality.append(quality)
+        if confidence:
             all_confidence.append(confidence)
-        except Exception:
-            confidence = None
 
         quality_score = quality.get('overall_quality_score') if quality else None
         report_link = None
@@ -718,15 +777,25 @@ def generate_identification_aggregate_report(
             'spike_count': spike_count,
         })
 
+    if show_timing:
+        metrics_time = _time.time() - t0
+        cache_msg = f", {reused} reused from cache" if reused else ""
+        print(f"  Aggregate: collected metrics for {len(house_summaries)} houses "
+              f"({metrics_time:.1f}s{cache_msg})", flush=True)
+
     # Population statistics
+    t1 = _time.time()
     population_stats = {}
     if all_quality and all_confidence:
         try:
             population_stats = compute_population_statistics(all_quality, all_confidence)
         except Exception as e:
             logger.warning(f"Population statistics failed: {e}")
+    if show_timing:
+        print(f"  Aggregate: population statistics ({_time.time() - t1:.1f}s)", flush=True)
 
     # Build HTML
+    t2 = _time.time()
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     html = _build_aggregate_html(
         generated_at=generated_at,
@@ -742,6 +811,9 @@ def generate_identification_aggregate_report(
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
+
+    if show_timing:
+        print(f"  Aggregate: built HTML + saved ({_time.time() - t2:.1f}s)", flush=True)
 
     logger.info(f"Aggregate identification report saved to {output_path}")
     return output_path

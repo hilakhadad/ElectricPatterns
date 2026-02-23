@@ -41,6 +41,12 @@ class ExperimentConfig:
     use_guided_recovery: bool = False  # Search for missed AC cycles at lower threshold (off by default)
     guided_recovery_threshold_factor: float = 0.6  # Recovery threshold = avg_magnitude * factor
     guided_recovery_min_cycles: int = 3  # Minimum matched cycles to establish template
+    use_wave_recovery: bool = False  # Post-M1: detect wave-shaped patterns (sharp rise → gradual decay)
+    wave_min_rise_watts: int = 500  # Minimum sharp rise to trigger wave detection
+    wave_min_duration_minutes: int = 3  # Minimum wave duration
+    wave_max_duration_minutes: int = 45  # Maximum wave duration
+    wave_monotonic_tolerance: float = 0.15  # Fraction of points allowed to be non-monotonic
+    wave_min_decay_fraction: float = 0.3  # Must decay at least 30% from peak to qualify
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -73,6 +79,12 @@ class ExperimentConfig:
             'use_guided_recovery': self.use_guided_recovery,
             'guided_recovery_threshold_factor': self.guided_recovery_threshold_factor,
             'guided_recovery_min_cycles': self.guided_recovery_min_cycles,
+            'use_wave_recovery': self.use_wave_recovery,
+            'wave_min_rise_watts': self.wave_min_rise_watts,
+            'wave_min_duration_minutes': self.wave_min_duration_minutes,
+            'wave_max_duration_minutes': self.wave_max_duration_minutes,
+            'wave_monotonic_tolerance': self.wave_monotonic_tolerance,
+            'wave_min_decay_fraction': self.wave_min_decay_fraction,
         }
 
     def to_json(self, file_path: str):
@@ -139,6 +151,26 @@ EXPERIMENTS = {
         use_settling_extension=True,
         use_split_off_merger=True,
         use_guided_recovery=True,
+    ),
+
+    'exp014_wave_recovery': ExperimentConfig(
+        exp_id='exp014',
+        description='exp013 + post-M1 wave recovery (detects gradual-decay compressor cycles missed by rectangle matching)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
     ),
 }
 
@@ -212,8 +244,8 @@ LEGACY_EXPERIMENTS = {
 }
 
 
-# Default experiment — Dynamic Threshold (exp010) is the standard pipeline
-DEFAULT_EXPERIMENT = 'exp010_dynamic_threshold'
+# Default experiment — Settling + split-OFF + guided recovery (exp013)
+DEFAULT_EXPERIMENT = 'exp014_wave_recovery'
 
 
 def get_experiment(exp_name: str, include_legacy: bool = True) -> ExperimentConfig:

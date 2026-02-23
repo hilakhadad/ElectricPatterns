@@ -346,6 +346,27 @@ def run_pipeline(
                 logger.error(f"Error in guided recovery: {e}")
                 logger.error(traceback.format_exc())
 
+        # Wave recovery: detect wave-shaped patterns missed by rectangle matching
+        use_wave_recovery = getattr(exp_config, 'use_wave_recovery', False)
+        if use_wave_recovery:
+            try:
+                from disaggregation.wave_recovery.pipeline.wave_recovery_step import process_wave_recovery
+                logger.info(f"{'=' * 60}")
+                logger.info("WAVE RECOVERY")
+                logger.info(f"{'=' * 60}")
+                t0_wave = time.time()
+                wave_result = process_wave_recovery(
+                    output_path=output_path,
+                    house_id=house_id,
+                    threshold_schedule=threshold_schedule,
+                    config=exp_config,
+                    run_logger=logger,
+                )
+                logger.info(f"Wave recovery complete ({time.time() - t0_wave:.1f}s): {wave_result}")
+            except Exception as e:
+                logger.error(f"Error in wave recovery: {e}")
+                logger.error(traceback.format_exc())
+
         _run_dynamic_post_pipeline(
             output_path=output_path,
             house_id=house_id,
@@ -396,11 +417,35 @@ def _run_dynamic_post_pipeline(
                 group_into_sessions, classify_sessions,
                 build_session_json,
             )
+            logger.info(f"{'=' * 60}")
+            logger.info("IDENTIFICATION PIPELINE")
+            logger.info(f"{'=' * 60}")
+
             experiment_dir = Path(output_path)
+
+            t0 = time.time()
             all_matches = load_all_matches(experiment_dir, house_id, threshold_schedule)
+            logger.info(f"  Load matches: {len(all_matches)} matches ({time.time() - t0:.1f}s)")
+
+            t0 = time.time()
             filtered, spike_stats = filter_transient_events(all_matches)
+            spike_count = spike_stats.get('spike_count', 0) if isinstance(spike_stats, dict) else 0
+            logger.info(f"  Filter spikes: {spike_count} removed, "
+                        f"{len(filtered)} remaining ({time.time() - t0:.1f}s)")
+
+            t0 = time.time()
             sessions = group_into_sessions(filtered)
+            logger.info(f"  Group sessions: {len(sessions)} sessions ({time.time() - t0:.1f}s)")
+
+            t0 = time.time()
             classified = classify_sessions(sessions, filtered)
+            classified_count = sum(
+                1 for s in classified if getattr(s, 'device_type', 'unknown') != 'unknown'
+            )
+            logger.info(f"  Classify: {classified_count}/{len(classified)} classified "
+                        f"({time.time() - t0:.1f}s)")
+
+            t0 = time.time()
             json_path = build_session_json(
                 classified_sessions=classified,
                 house_id=house_id,
@@ -409,7 +454,8 @@ def _run_dynamic_post_pipeline(
                 device_profiles=all_device_profiles,
                 spike_stats=spike_stats,
             )
-            logger.info(f"Device sessions JSON saved to {json_path}")
+            logger.info(f"  Save JSON output ({time.time() - t0:.1f}s)")
+            logger.info(f"  Device sessions JSON saved to {json_path}")
         except Exception as e:
             logger.error(f"Error in identification pipeline: {e}")
             logger.error(traceback.format_exc())

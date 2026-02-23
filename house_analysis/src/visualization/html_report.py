@@ -23,6 +23,8 @@ from visualization.charts import (
     create_mini_hourly_chart,
     create_year_hourly_chart,
     create_year_heatmap,
+    create_wave_monthly_chart,
+    create_wave_comparison_chart,
 )
 
 
@@ -44,8 +46,8 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     """
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
-    table_html, tier_counts, continuity_counts = _generate_comparison_table(analyses, per_house_dir)
-    filter_bar_html = _build_filter_bar(tier_counts, continuity_counts)
+    table_html, tier_counts, continuity_counts, wave_counts = _generate_comparison_table(analyses, per_house_dir)
+    filter_bar_html = _build_filter_bar(tier_counts, continuity_counts, wave_counts)
     charts_html = _generate_charts_section(analyses)
     quality_tiers_html = _generate_quality_tiers_section(analyses)
 
@@ -87,6 +89,11 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     n_negative = sum(1 for a in analyses if a.get('flags', {}).get('has_negative_values', False))
     n_duplicates = sum(1 for a in analyses if a.get('flags', {}).get('has_duplicate_timestamps', False))
 
+    # Wave behavior counts
+    n_wave_dominant = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'wave_dominant')
+    n_has_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'has_waves')
+    n_no_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'no_waves')
+
     return f"""
     <div class="summary-grid">
         <div class="summary-card">
@@ -104,6 +111,20 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
         <div class="summary-card">
             <div class="summary-number" id="summary-total-days">{total_days:,}</div>
             <div class="summary-label">Total Days of Data</div>
+        </div>
+    </div>
+    <div class="summary-grid" style="margin-top: 10px;">
+        <div class="summary-card" style="background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);">
+            <div class="summary-number" style="color: #e67e22;">{n_wave_dominant}</div>
+            <div class="summary-label">Wave Dominant</div>
+        </div>
+        <div class="summary-card" style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);">
+            <div class="summary-number" style="color: #3498db;">{n_has_waves}</div>
+            <div class="summary-label">Has Waves</div>
+        </div>
+        <div class="summary-card" style="background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);">
+            <div class="summary-number" style="color: #95a5a6;">{n_no_waves}</div>
+            <div class="summary-label">No Waves</div>
         </div>
     </div>
     <div class="summary-alerts">
@@ -131,7 +152,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
     """Generate sortable comparison table HTML with links to individual reports.
 
     Returns:
-        Tuple of (html_string, tier_counts, continuity_counts)
+        Tuple of (html_string, tier_counts, continuity_counts, wave_counts)
     """
     # Friendly flag names for display
     flag_display_names = {
@@ -164,6 +185,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                    'faulty_dead': 0, 'faulty_nan': 0, 'faulty_both': 0}
     continuity_counts = {'continuous': 0, 'minor_gaps': 0,
                          'discontinuous': 0, 'fragmented': 0, 'unknown': 0}
+    wave_counts = {'wave_dominant': 0, 'has_waves': 0, 'no_waves': 0}
     rows = []
 
     for a in analyses:
@@ -227,6 +249,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             continuity = 'unknown'
         continuity_counts[continuity] += 1
 
+        # Wave classification count
+        wave_counts[wave_cls] = wave_counts.get(wave_cls, 0) + 1
+
         # Link to individual report
         house_link = f'{per_house_dir}/house_{house_id}.html'
 
@@ -234,8 +259,20 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         no_data_pct = coverage.get('no_data_pct', 0)
         days_span = coverage.get('days_span', 0)
 
+        # Wave behavior
+        wave = a.get('wave_behavior', {})
+        wave_cls = wave.get('wave_classification', 'no_waves')
+        wave_score = wave.get('max_wave_score', 0)
+        wave_badge_map = {
+            'wave_dominant': '<span class="badge badge-orange">Wave Dominant</span>',
+            'has_waves': '<span class="badge badge-blue">Has Waves</span>',
+            'no_waves': '<span style="color: #95a5a6;">No Waves</span>',
+        }
+        wave_badge = wave_badge_map.get(wave_cls, '')
+
         rows.append(f"""
-        <tr data-tier="{tier_key}" data-continuity="{continuity}" data-house-id="{house_id}"
+        <tr data-tier="{tier_key}" data-continuity="{continuity}" data-wave="{wave_cls}"
+            data-house-id="{house_id}"
             data-excluded="false" data-score="{score:.1f}" data-coverage="{cov_ratio:.4f}"
             data-nan="{no_data_pct:.2f}" data-days="{days_span}"
             onclick="toggleExcludeRow(event, this)">
@@ -244,6 +281,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             <td>{cov_ratio:.1%}</td>
             <td style="color: {'#6f42c1' if no_data_pct >= 10 else 'inherit'};">{no_data_pct:.1f}%</td>
             <td>{score:.0f} {badge}</td>
+            <td>{wave_score:.2f} {wave_badge}</td>
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
             <td>{temporal.get('total_night_day_ratio', 0):.2f}</td>
@@ -279,9 +317,10 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 <th onclick="sortTable(2)">Coverage<br><small>(completeness)</small></th>
                 <th onclick="sortTable(3)">No Data<br><small>(% of span)</small></th>
                 <th onclick="sortTable(4)">Quality<br><small>(0-100)</small></th>
-                <th onclick="sortTable(5)">Avg Power<br><small>(Watts)</small></th>
-                <th onclick="sortTable(6)">Phase Balance<br><small>(max/min)</small></th>
-                <th onclick="sortTable(7)">Night/Day<br><small>(power ratio)</small></th>
+                <th onclick="sortTable(5)">Wave<br><small>(score)</small></th>
+                <th onclick="sortTable(6)">Avg Power<br><small>(Watts)</small></th>
+                <th onclick="sortTable(7)">Phase Balance<br><small>(max/min)</small></th>
+                <th onclick="sortTable(8)">Night/Day<br><small>(power ratio)</small></th>
                 <th>Issues</th>
             </tr>
         </thead>
@@ -291,12 +330,13 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
     </table>
     </div>
     """
-    return html, tier_counts, continuity_counts
+    return html, tier_counts, continuity_counts, wave_counts
 
 
 def _build_filter_bar(tier_counts: Dict[str, int],
-                      continuity_counts: Dict[str, int]) -> str:
-    """Build the filter bar with tier and NaN continuity checkboxes."""
+                      continuity_counts: Dict[str, int],
+                      wave_counts: Dict[str, int] = None) -> str:
+    """Build the filter bar with tier, NaN continuity, and wave checkboxes."""
     tier_labels = {
         'excellent': ('Excellent', '#28a745'),
         'good': ('Good', '#007bff'),
@@ -339,6 +379,31 @@ def _build_filter_bar(tier_counts: Dict[str, int],
             {label} <span class="filter-count">({count})</span>
         </label>"""
 
+    # Wave classification checkboxes
+    wave_labels = {
+        'wave_dominant': ('Wave Dominant', '#e67e22'),
+        'has_waves': ('Has Waves', '#3498db'),
+        'no_waves': ('No Waves', '#95a5a6'),
+    }
+    wave_html = ''
+    if wave_counts:
+        for key, (label, color) in wave_labels.items():
+            count = wave_counts.get(key, 0)
+            if count == 0:
+                continue
+            wave_html += f"""
+            <label class="filter-checkbox" style="border-color: {color};">
+                <input type="checkbox" checked onchange="updateFilter()" data-filter-wave="{key}">
+                <span class="filter-dot" style="background: {color};"></span>
+                {label} <span class="filter-count">({count})</span>
+            </label>"""
+
+    wave_group = f"""
+        <div class="filter-group">
+            <span class="filter-group-label">Wave Behavior:</span>
+            {wave_html}
+        </div>""" if wave_html else ''
+
     return f"""
     <div class="filter-bar">
         <div class="filter-group">
@@ -349,14 +414,16 @@ def _build_filter_bar(tier_counts: Dict[str, int],
             <span class="filter-group-label">NaN Continuity:</span>
             {cont_html}
         </div>
+        {wave_group}
     </div>
     """
 
 
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
-    """Generate all charts HTML (3 charts: quality distribution, phase balance, issues)."""
+    """Generate all charts HTML."""
     charts = [
         create_quality_distribution_chart(analyses),
+        create_wave_comparison_chart(analyses),
         create_phase_balance_chart(analyses),
         create_issues_heatmap(analyses),
     ]
@@ -582,7 +649,8 @@ def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
 
 
 def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
-                          coverage: Dict[str, Any]) -> str:
+                          coverage: Dict[str, Any],
+                          wave: Dict[str, Any] = None) -> str:
     """Build clickable findings tags section for the top of per-house report."""
 
     # Define all possible findings: (flag_key, label, severity, target_section_id)
@@ -650,6 +718,16 @@ def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
     if flags.get('low_data_integrity'):
         findings.append(('info', 'Low Data Integrity', 'section-data-loss'))
 
+    # Wave behavior findings
+    if wave is None:
+        wave = {}
+    wave_cls = wave.get('wave_classification', 'no_waves')
+    if wave_cls == 'wave_dominant':
+        dom = ', '.join(wave.get('dominant_phases', []))
+        findings.append(('info', f'Wave Dominant ({dom})', 'section-wave-behavior'))
+    elif wave_cls == 'has_waves':
+        findings.append(('info', 'Wave Behavior Detected', 'section-wave-behavior'))
+
     if not findings:
         return '''
             <div class="card findings-section">
@@ -686,6 +764,106 @@ def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
                 </div>
                 {penalty_html}
             </div>'''
+
+
+def _build_wave_behavior_section(wave: Dict[str, Any], wave_chart: str) -> str:
+    """Build the wave behavior card content for per-house report."""
+    wave_cls = wave.get('wave_classification', 'no_waves')
+    max_score = wave.get('max_wave_score', 0)
+    dominant_phases = wave.get('dominant_phases', [])
+    peak_season = wave.get('peak_season')
+
+    # Classification badge
+    cls_badge_map = {
+        'wave_dominant': '<span class="badge badge-orange">Wave Dominant</span>',
+        'has_waves': '<span class="badge badge-blue">Has Waves</span>',
+        'no_waves': '<span style="padding:5px 12px; border-radius:15px; background:#e9ecef; color:#6c757d; font-weight:bold;">No Waves</span>',
+    }
+    cls_badge = cls_badge_map.get(wave_cls, '')
+
+    # Season display
+    season_map = {
+        'summer': 'Summer (Jun-Sep)',
+        'winter': 'Winter (Dec-Mar)',
+        'seasonal': 'Seasonal',
+        'year_round': 'Year Round',
+    }
+    season_text = season_map.get(peak_season, '—')
+
+    # Per-phase table rows
+    phases = wave.get('phases', {})
+    phase_rows = ''
+    for col in ['w1', 'w2', 'w3', '1', '2', '3']:
+        if col not in phases:
+            continue
+        p = phases[col]
+        ws = p.get('wave_score', 0)
+        period = p.get('dominant_period_minutes')
+        period_str = f'{period} min' if period else '—'
+        prevalence = p.get('wave_prevalence_pct', 0)
+        wave_mins = p.get('total_wave_minutes', 0)
+        amplitude = p.get('avg_amplitude', 0)
+
+        # Color the score
+        if ws >= 0.50:
+            score_style = 'color: #e67e22; font-weight: bold;'
+        elif ws >= 0.25:
+            score_style = 'color: #3498db; font-weight: bold;'
+        else:
+            score_style = 'color: #95a5a6;'
+
+        display_name = f'Phase {col.replace("w", "")}'
+        phase_rows += f"""
+        <tr>
+            <td><strong>{display_name}</strong></td>
+            <td style="{score_style}">{ws:.3f}</td>
+            <td>{period_str}</td>
+            <td>{prevalence:.1f}%</td>
+            <td>{wave_mins:,}</td>
+            <td>{amplitude:.0f}W</td>
+        </tr>"""
+
+    return f"""
+    <div class="overview-grid">
+        <div class="overview-item">
+            <div class="overview-value">{cls_badge}</div>
+            <div class="overview-label">Classification</div>
+        </div>
+        <div class="overview-item">
+            <div class="overview-value" style="color: {'#e67e22' if max_score >= 0.5 else '#3498db' if max_score >= 0.25 else '#95a5a6'};">{max_score:.3f}</div>
+            <div class="overview-label">Max Wave Score</div>
+            <div class="overview-desc">0 = no cycling, 1 = perfect regular cycling</div>
+        </div>
+        <div class="overview-item">
+            <div class="overview-value">{', '.join(dominant_phases) if dominant_phases else '—'}</div>
+            <div class="overview-label">Dominant Phases</div>
+            <div class="overview-desc">Phases with wave score &ge; 0.25</div>
+        </div>
+        <div class="overview-item">
+            <div class="overview-value">{season_text}</div>
+            <div class="overview-label">Peak Season</div>
+            <div class="overview-desc">When wave activity concentrates</div>
+        </div>
+    </div>
+    <table style="width:100%; border-collapse:collapse; margin-top:15px; font-size:0.9em;">
+        <thead>
+            <tr style="background:#f8f9fa; text-align:left;">
+                <th style="padding:8px 12px;">Phase</th>
+                <th style="padding:8px 12px;">Wave Score</th>
+                <th style="padding:8px 12px;">Cycle Period</th>
+                <th style="padding:8px 12px;">Prevalence</th>
+                <th style="padding:8px 12px;">Wave Minutes</th>
+                <th style="padding:8px 12px;">Avg Amplitude</th>
+            </tr>
+        </thead>
+        <tbody>
+            {phase_rows}
+        </tbody>
+    </table>
+    <div class="chart-card" style="margin-top:15px;">
+        {wave_chart}
+    </div>
+    """
 
 
 def generate_single_house_html_report(analysis: Dict[str, Any],
@@ -752,11 +930,15 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
     # Build findings tags
-    findings_html = _build_findings_tags(flags, quality, coverage)
+    findings_html = _build_findings_tags(flags, quality, coverage, wave_behavior)
 
     # Get years from temporal_by_period
     years_data = temporal_by_period.get('by_year', {})
     years = sorted(years_data.keys())
+
+    # Wave behavior
+    wave_behavior = analysis.get('wave_behavior', {})
+    wave_chart = create_wave_monthly_chart(analysis)
 
     # Create all charts for "All Data" tab
     hourly_chart = create_hourly_pattern_chart(analysis)
@@ -1322,6 +1504,17 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-desc">Average night power / average day power</div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Wave Behavior Pre-Analysis -->
+            <div class="card" id="section-wave-behavior">
+                <h2>Wave Behavior Pre-Analysis</h2>
+                <p style="color: #666; font-size: 0.88em; margin-bottom: 15px;">
+                    Detects periodic cycling patterns (AC compressor) in raw power data.
+                    Uses autocorrelation of minute-to-minute diffs at lags 3&ndash;30 min.
+                    High wave score = regular ON/OFF cycling within 800&ndash;4000W windows.
+                </p>
+                {_build_wave_behavior_section(wave_behavior, wave_chart)}
             </div>
 
             <!-- Charts -->
@@ -1898,15 +2091,23 @@ def _build_html_document(title: str, summary: str, filter_bar: str,
                 if (cb.checked) checkedCont.push(cb.getAttribute('data-filter-continuity'));
             }});
 
+            // Get checked wave classifications
+            var checkedWave = [];
+            document.querySelectorAll('[data-filter-wave]').forEach(function(cb) {{
+                if (cb.checked) checkedWave.push(cb.getAttribute('data-filter-wave'));
+            }});
+
             // Show/hide rows
             var rows = document.querySelectorAll('#comparison-table tbody tr');
             rows.forEach(function(row) {{
                 var tier = row.getAttribute('data-tier');
                 var cont = row.getAttribute('data-continuity');
+                var wave = row.getAttribute('data-wave');
                 var tierMatch = checkedTiers.length === 0 || checkedTiers.indexOf(tier) !== -1;
                 var contMatch = checkedCont.length === 0 || checkedCont.indexOf(cont) !== -1;
+                var waveMatch = checkedWave.length === 0 || checkedWave.indexOf(wave) !== -1;
 
-                if (tierMatch && contMatch) {{
+                if (tierMatch && contMatch && waveMatch) {{
                     row.classList.remove('row-hidden');
                 }} else {{
                     row.classList.add('row-hidden');

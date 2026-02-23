@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Any, Optional
 
+from metrics.wave_behavior import WAVE_PRESENT_THRESHOLD, WAVE_DOMINANT_THRESHOLD
+
 
 def create_days_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     """
@@ -1155,6 +1157,140 @@ def create_year_hourly_chart(hourly_pattern: Dict[str, Any], year: int) -> str:
                    ticktext=[f'{h}:00' for h in range(0, 24, 2)]),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_wave_monthly_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create grouped bar chart showing wave prevalence % by month per phase.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    wave = analysis.get('wave_behavior', {})
+    phases_data = wave.get('phases', {})
+
+    if not phases_data:
+        return "<p>No wave behavior data available</p>"
+
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    phase_colors = {'w1': '#1f77b4', 'w2': '#ff7f0e', 'w3': '#2ca02c',
+                    '1': '#1f77b4', '2': '#ff7f0e', '3': '#2ca02c'}
+
+    fig = go.Figure()
+
+    for col, p_data in phases_data.items():
+        monthly = p_data.get('monthly_minutes', {})
+        if not monthly:
+            continue
+
+        total_minutes = sum(monthly.values())
+        if total_minutes == 0:
+            continue
+
+        months = list(range(1, 13))
+        values = [monthly.get(m, 0) for m in months]
+
+        display_name = f'Phase {col.replace("w", "")}'
+        fig.add_trace(go.Bar(
+            x=month_names,
+            y=values,
+            name=display_name,
+            marker_color=phase_colors.get(col, '#999'),
+            hovertemplate=f'{display_name}<br>%{{x}}: %{{y}} min<extra></extra>'
+        ))
+
+    fig.update_layout(
+        title='Wave Activity by Month (minutes)',
+        xaxis_title='Month',
+        yaxis_title='Wave Minutes',
+        barmode='group',
+        height=300,
+        legend=dict(orientation='h', yanchor='bottom', y=-0.25, xanchor='center', x=0.5),
+        margin=dict(b=80),
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_wave_comparison_chart(analyses: List[Dict[str, Any]]) -> str:
+    """
+    Create scatter plot: quality score vs wave score, colored by classification.
+
+    Args:
+        analyses: List of house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    cls_colors = {
+        'wave_dominant': '#e67e22',
+        'has_waves': '#3498db',
+        'no_waves': '#95a5a6',
+    }
+    cls_labels = {
+        'wave_dominant': 'Wave Dominant',
+        'has_waves': 'Has Waves',
+        'no_waves': 'No Waves',
+    }
+
+    fig = go.Figure()
+
+    for cls_key, color in cls_colors.items():
+        house_ids = []
+        quality_scores = []
+        wave_scores = []
+        dominant_phases_list = []
+
+        for a in analyses:
+            wave = a.get('wave_behavior', {})
+            if wave.get('wave_classification', 'no_waves') != cls_key:
+                continue
+            house_ids.append(str(a.get('house_id', '?')))
+            quality_scores.append(a.get('data_quality', {}).get('quality_score', 0))
+            wave_scores.append(wave.get('max_wave_score', 0))
+            dominant_phases_list.append(', '.join(wave.get('dominant_phases', [])) or 'None')
+
+        if not house_ids:
+            continue
+
+        fig.add_trace(go.Scatter(
+            x=quality_scores,
+            y=wave_scores,
+            mode='markers+text',
+            marker=dict(size=12, color=color, line=dict(width=1, color='white')),
+            text=house_ids,
+            textposition='top center',
+            textfont=dict(size=9),
+            name=cls_labels[cls_key],
+            hovertemplate=(
+                'House %{text}<br>'
+                'Quality: %{x:.1f}<br>'
+                'Wave Score: %{y:.3f}<br>'
+                'Phases: %{customdata}<extra></extra>'
+            ),
+            customdata=dominant_phases_list,
+        ))
+
+    fig.update_layout(
+        title='Wave Behavior vs Data Quality',
+        xaxis_title='Quality Score',
+        yaxis_title='Max Wave Score',
+        height=450,
+        legend=dict(orientation='h', yanchor='bottom', y=-0.2, xanchor='center', x=0.5),
+        margin=dict(b=80),
+    )
+
+    # Threshold lines
+    fig.add_hline(y=WAVE_PRESENT_THRESHOLD, line_dash='dot', line_color='#3498db',
+                  opacity=0.5, annotation_text='Has Waves (0.25)')
+    fig.add_hline(y=WAVE_DOMINANT_THRESHOLD, line_dash='dot', line_color='#e67e22',
+                  opacity=0.5, annotation_text='Wave Dominant (0.50)')
 
     return fig.to_html(full_html=False, include_plotlyjs=False)
 

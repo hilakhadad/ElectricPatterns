@@ -219,6 +219,7 @@ def main():
     successful = 0
     failed = 0
     failed_houses = []
+    cached_metrics = {}  # house_id -> {'quality': ..., 'confidence': ...}
 
     houses_iter = house_ids
     if HAS_TQDM:
@@ -231,25 +232,29 @@ def main():
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
                 print(f"  [{successful+failed+1}/{len(house_ids)}] house {house_id}...",
-                      end=" ", flush=True)
+                      flush=True)
 
-            generate_identification_report(
+            result = generate_identification_report(
                 str(experiment_dir), house_id, out_path,
                 skip_activations_detail=args.skip_activations,
+                show_timing=True,
             )
+            # Cache quality/confidence for aggregate phase
+            cached_metrics[house_id] = {
+                'quality': result.get('quality'),
+                'confidence': result.get('confidence'),
+            }
             successful += 1
 
             if HAS_TQDM:
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
-            else:
-                print("OK", flush=True)
         except Exception as e:
             failed += 1
             failed_houses.append((house_id, str(e)))
             if HAS_TQDM:
                 houses_iter.set_postfix(house=house_id, ok=successful, fail=failed)
             else:
-                print(f"FAILED: {e}", flush=True)
+                print(f"  FAILED: {e}", flush=True)
 
     phase1_time = time.time() - start_time
     print(f"\nPer-house M2 reports: {successful} OK, {failed} failed ({phase1_time:.1f}s)",
@@ -273,6 +278,8 @@ def main():
                 str(experiment_dir), agg_house_ids, agg_path,
                 house_reports_subdir=house_reports_subdir,
                 show_progress=True,
+                precomputed_metrics=cached_metrics,
+                show_timing=True,
             )
             print(f"Aggregate M2 report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:
