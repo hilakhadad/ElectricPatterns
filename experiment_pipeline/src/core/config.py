@@ -172,6 +172,26 @@ EXPERIMENTS = {
         use_guided_recovery=True,
         use_wave_recovery=True,
     ),
+
+    'exp015_hole_repair': ExperimentConfig(
+        exp_id='exp015',
+        description='exp014 + hole repair (fixes rectangle matches that extracted wave-shaped patterns as flat rectangles)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
+    ),
 }
 
 # ============================================================================
@@ -245,7 +265,7 @@ LEGACY_EXPERIMENTS = {
 
 
 # Default experiment — Settling + split-OFF + guided recovery (exp013)
-DEFAULT_EXPERIMENT = 'exp014_wave_recovery'
+DEFAULT_EXPERIMENT = 'exp015_hole_repair'
 
 
 def get_experiment(exp_name: str, include_legacy: bool = True) -> ExperimentConfig:
