@@ -76,6 +76,18 @@ mkdir -p "$REPORTS_DIR"
 TIMING_FILE="${EXPERIMENT_OUTPUT}/house_timing.csv"
 echo "house_id,n_months,start_time,end_time,elapsed_seconds,elapsed_human,status" > "$TIMING_FILE"
 
+# Pre-create experiment metadata (once, from login node — avoids race condition
+# when multiple SBATCH jobs call save_experiment_metadata simultaneously)
+cd "${PROJECT_ROOT}/experiment_pipeline"
+python -c "
+import sys; sys.path.insert(0, 'src')
+from core.config import get_experiment, save_experiment_metadata
+exp = get_experiment('${EXPERIMENT_NAME}')
+save_experiment_metadata(exp, '${EXPERIMENT_OUTPUT}')
+print('Experiment metadata saved to ${EXPERIMENT_OUTPUT}')
+"
+cd "${PROJECT_ROOT}"
+
 # Load completed houses into associative array
 declare -A COMPLETED
 if [ -f "$COMPLETED_HOUSES_FILE" ]; then
@@ -249,7 +261,7 @@ else
     STATUS="FAIL(exit=\${EXIT_CODE})"
 fi
 
-flock -x "${TIMING_FILE}.lock" -c "echo '${house_id},${N_MONTHS},'\"\$START_TIME\"','\"\$END_TIME\"','\"\$ELAPSED\"','\"\$ELAPSED_HUMAN\"','\"\$STATUS\"'' >> ${TIMING_FILE}"
+echo "${house_id},${N_MONTHS},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${TIMING_FILE}
 
 echo "========================================"
 echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
@@ -396,7 +408,7 @@ else
     STATUS="FAIL-MONTHLY(exit=\${EXIT_CODE})"
 fi
 
-flock -x "${TIMING_FILE}.lock" -c "echo '${house_id},${N_MONTHS},'\"\$START_TIME\"','\"\$END_TIME\"','\"\$ELAPSED\"','\"\$ELAPSED_HUMAN\"','\"\$STATUS\"'' >> ${TIMING_FILE}"
+echo "${house_id},${N_MONTHS},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${TIMING_FILE}
 
 echo "========================================"
 echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
