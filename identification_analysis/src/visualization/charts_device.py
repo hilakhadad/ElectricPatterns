@@ -570,6 +570,125 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Cycles &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 10, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>'''
+        elif dtype == 'recurring_pattern':
+            # Recurring patterns — separate table per pattern_id
+            # Group events by pattern_id from confidence_breakdown
+            pattern_groups = {}
+            for r in events:
+                pid = r.get('confidence_breakdown', {}).get('pattern_id', 0)
+                pattern_groups.setdefault(pid, []).append(r)
+
+            for pid in sorted(pattern_groups.keys()):
+                p_events = pattern_groups[pid]
+                p_events.sort(key=lambda r: r['date'] + r['start'])
+                p_count = len(p_events)
+                p_section_id = f'device-detail-{section_idx}'
+                section_idx += 1
+
+                # Extract cluster characteristics from first session's breakdown
+                bd = p_events[0].get('confidence_breakdown', {})
+                avg_mag = bd.get('avg_magnitude_w', 0)
+                avg_dur = bd.get('avg_duration_min', 0)
+                cluster_conf = p_events[0].get('confidence', 0)
+                phase_set = set(r['phase'] for r in p_events if r.get('phase'))
+                phase_str = ', '.join(sorted(phase_set)) if phase_set else '?'
+
+                global_name = bd.get('global_pattern_name')
+                if global_name:
+                    p_name = f'{global_name} — Recurring Pattern #{pid}'
+                else:
+                    p_name = f'Recurring Pattern #{pid}'
+                global_desc = bd.get('global_descriptive_name', '')
+                p_subtitle = f'~{avg_mag:,.0f}W, ~{avg_dur:.0f}min, phase {phase_str}, confidence {cluster_conf:.0%}'
+                if global_desc:
+                    p_subtitle = f'{global_desc} | {p_subtitle}'
+
+                p_rows = ''
+                p_copyable = []
+                for r in p_events:
+                    if r['date'] and r['start']:
+                        p_copyable.append(f"{r['date']} {r['start']}-{r['end']}")
+                        all_copyable.append(f"{r['date']} {r['start']}-{r['end']}")
+                for i, r in enumerate(p_events, 1):
+                    act_idx = global_act_idx
+                    global_act_idx += 1
+                    conf_val = r.get('confidence', 0)
+                    conf_pct = f'{conf_val:.0%}' if conf_val else '-'
+                    conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                    click_attr = f' style="cursor:pointer;" onclick="toggleActChart({act_idx})"' if has_charts else ''
+                    p_rows += f'''
+            <tr{click_attr}>
+                <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
+                <td style="{_cell} text-align: center;">{r['start']}</td>
+                <td style="{_cell} text-align: center;">{r['end']}</td>
+                <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="{_cell} text-align: center;">{r['phase']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
+                <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
+            </tr>'''
+                    if has_charts:
+                        p_rows += _build_chart_row_html(act_idx, 9)
+                        session_phases = r.get('phase_magnitudes', {})
+                        if not session_phases and r.get('phase'):
+                            session_phases = {r['phase']: r['magnitude']}
+                        cd = _extract_chart_window(
+                            summarized_data, r.get('on_start_iso', ''), r.get('off_end_iso', ''),
+                            session_phases, dtype,
+                            all_match_intervals=all_match_intervals,
+                            constituent_events=r.get('constituent_events', []),
+                        )
+                        if cd:
+                            all_chart_data[str(act_idx)] = cd
+
+                p_header = f'''
+                        <tr style="background: #f8f9fa;">
+                            <th style="{_th} text-align: center; width: 35px;">#</th>
+                            <th style="{_th} text-align: left; cursor: pointer;" onclick="sortDeviceTable('{p_section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Start</th>
+                            <th style="{_th} text-align: center;">End</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{p_section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{p_section_id}-table', 5, 'num')">Power &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Phase</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{p_section_id}-table', 7, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{p_section_id}-table', 8, 'num')">Confidence &#x25B4;&#x25BE;</th>
+                        </tr>'''
+
+                p_copyable_text = ', '.join(p_copyable)
+                sections_html += f'''
+        <div style="margin-bottom: 15px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; cursor: pointer;"
+                 onclick="var tbl=document.getElementById('{p_section_id}'); tbl.style.display = tbl.style.display==='none' ? 'block' : 'none'; var arrow=this.querySelector('.toggle-arrow'); arrow.textContent = tbl.style.display==='none' ? '\\u25B6' : '\\u25BC';">
+                <span class="toggle-arrow" style="font-size: 0.85em;">&#x25BC;</span>
+                <strong style="color: #17a2b8; font-size: 0.95em;">{p_name}</strong>
+                <span style="background: #17a2b8; color: white; padding: 1px 8px; border-radius: 10px; font-size: 0.8em;">{p_count}</span>
+            </div>
+            <div style="margin-left: 20px; margin-bottom: 6px; font-size: 0.82em; color: #666;">{p_subtitle}</div>
+            <div id="{p_section_id}">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.85em;" id="{p_section_id}-table">
+                    <thead>
+                        {p_header}
+                    </thead>
+                    <tbody>
+                        {p_rows}
+                    </tbody>
+                </table>
+                <div style="margin-top: 5px;">
+                    <button onclick="var ta=document.getElementById('{p_section_id}-dates'); ta.style.display = ta.style.display==='none' ? 'block' : 'none';"
+                            style="padding: 3px 10px; border: 1px solid #ccc; border-radius: 4px; background: #f8f9fa; cursor: pointer; font-size: 0.8em;">
+                        Copy Dates ({p_count})
+                    </button>
+                    <textarea id="{p_section_id}-dates" readonly
+                              style="display: none; width: 100%; margin-top: 4px; padding: 6px; font-size: 0.8em; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa; resize: vertical; min-height: 50px;"
+                              onclick="this.select();">{p_copyable_text}</textarea>
+                </div>
+            </div>
+        </div>'''
+
+            # All sub-sections built directly — skip standard section assembly
+            continue
+
         else:
             # Boiler / Regular AC
             events.sort(key=lambda r: r['date'] + r['start'])

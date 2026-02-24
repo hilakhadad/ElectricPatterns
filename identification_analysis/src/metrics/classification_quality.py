@@ -22,7 +22,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 DEVICE_TYPES = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'recurring_pattern', 'unclassified']
-CLASSIFIED_TYPES = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac']
+CLASSIFIED_TYPES = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'recurring_pattern']
 
 # Israeli seasons: warm = May-October, cool = November-April
 WARM_MONTHS = {5, 6, 7, 8, 9, 10}

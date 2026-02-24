@@ -8,6 +8,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+from visualization.charts_device import _parse_iso, _dur_str
+
 # Color constants (consistent with classification_charts.py)
 GREEN = '#28a745'
 GRAY = '#6c757d'

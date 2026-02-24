@@ -332,8 +332,37 @@ def main():
             print(f"  house {hid}: {err}")
         print(flush=True)
 
-    # ── Phase 2: Aggregate report ─────────────────────────────────
+    # ── Phase 1.5: Cross-house pattern matching ─────────────────────
+    cross_house_result = None
     agg_house_ids = all_house_ids if resume_mode else house_ids
+    if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
+        try:
+            from metrics.cross_house_patterns import (
+                match_patterns_across_houses,
+                update_house_jsons,
+                save_cross_house_summary,
+            )
+            print("Cross-house pattern matching...", flush=True)
+            cross_house_start = time.time()
+            cross_house_result = match_patterns_across_houses(
+                experiment_dir, agg_house_ids,
+            )
+            n_global = cross_house_result['summary']['total_global_patterns']
+            if n_global > 0:
+                n_updated = update_house_jsons(
+                    experiment_dir, cross_house_result['house_updates'],
+                )
+                save_cross_house_summary(experiment_dir, cross_house_result)
+                print(f"  Found {n_global} cross-house patterns, "
+                      f"updated {n_updated} sessions ({time.time() - cross_house_start:.1f}s)",
+                      flush=True)
+            else:
+                print(f"  No cross-house patterns found ({time.time() - cross_house_start:.1f}s)",
+                      flush=True)
+        except Exception as e:
+            print(f"  Cross-house pattern matching failed: {e}", flush=True)
+
+    # ── Phase 2: Aggregate report ─────────────────────────────────
     if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
         try:
             if args.publish:
@@ -351,6 +380,7 @@ def main():
                 show_timing=True,
                 per_house_filename_pattern="house_{house_id}.html" if args.publish else None,
                 pre_analysis_scores=pre_analysis_scores,
+                cross_house_result=cross_house_result,
             )
             print(f"Aggregate M2 report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:

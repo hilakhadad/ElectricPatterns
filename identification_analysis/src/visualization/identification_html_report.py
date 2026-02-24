@@ -754,6 +754,7 @@ def generate_identification_aggregate_report(
     show_timing: bool = False,
     per_house_filename_pattern: Optional[str] = None,
     pre_analysis_scores: Optional[Dict[str, Any]] = None,
+    cross_house_result: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Generate aggregate identification report across multiple houses.
@@ -940,6 +941,7 @@ def generate_identification_aggregate_report(
         house_summaries=house_summaries,
         population_stats=population_stats,
         experiment_dir=str(experiment_dir),
+        cross_house_result=cross_house_result,
     )
 
     # Save
@@ -962,6 +964,7 @@ def _build_aggregate_html(
     house_summaries: List[Dict],
     population_stats: Dict[str, Any],
     experiment_dir: str,
+    cross_house_result: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build complete aggregate HTML document."""
     n = len(house_summaries)
@@ -991,6 +994,10 @@ def _build_aggregate_html(
 
     # Population stats section
     pop_html = _build_population_section(population_stats) if population_stats else ''
+
+    # Cross-house patterns section
+    from .identification_html_aggregate import _build_cross_house_section
+    cross_house_html = _build_cross_house_section(cross_house_result) if cross_house_result else ''
 
     # Per-house table rows
     _td = 'padding:8px 10px;border-bottom:1px solid #eee;'
@@ -1149,6 +1156,8 @@ def _build_aggregate_html(
         </section>
 
         {pop_html}
+
+        {cross_house_html}
 
         <section>
             <h2>Per-House Results</h2>

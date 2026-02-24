@@ -43,6 +43,7 @@ def generate_identification_aggregate_report(
     show_timing: bool = False,
     per_house_filename_pattern: Optional[str] = None,
     pre_analysis_scores: Optional[Dict[str, Any]] = None,
+    cross_house_result: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Generate aggregate identification report across multiple houses.
@@ -229,6 +230,7 @@ def generate_identification_aggregate_report(
         house_summaries=house_summaries,
         population_stats=population_stats,
         experiment_dir=str(experiment_dir),
+        cross_house_result=cross_house_result,
     )
 
     # Save
@@ -251,6 +253,7 @@ def _build_aggregate_html(
     house_summaries: List[Dict],
     population_stats: Dict[str, Any],
     experiment_dir: str,
+    cross_house_result: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build complete aggregate HTML document."""
     n = len(house_summaries)
@@ -280,6 +283,7 @@ def _build_aggregate_html(
 
     # Population stats section
     pop_html = _build_population_section(population_stats) if population_stats else ''
+    cross_house_html = _build_cross_house_section(cross_house_result) if cross_house_result else ''
 
     # Per-house table rows
     _td = 'padding:8px 10px;border-bottom:1px solid #eee;'
@@ -448,6 +452,8 @@ def _build_aggregate_html(
 
         {pop_html}
 
+        {cross_house_html}
+
         <section>
             <h2>Per-House Results</h2>
             <div class="filter-bar">
@@ -550,6 +556,135 @@ def _build_aggregate_html(
     </script>
 </body>
 </html>"""
+
+
+def _build_cross_house_section(cross_house_result: Optional[Dict[str, Any]]) -> str:
+    """Build HTML section for cross-house recurring pattern matches."""
+    if not cross_house_result:
+        return ''
+
+    summary = cross_house_result.get('summary', {})
+    global_patterns = cross_house_result.get('global_patterns', [])
+    unmatched = cross_house_result.get('unmatched_patterns', [])
+    n_global = summary.get('total_global_patterns', 0)
+    n_unmatched = summary.get('total_unmatched', 0)
+    n_houses = summary.get('houses_with_patterns', 0)
+    n_sigs = summary.get('total_signatures', 0)
+
+    if n_sigs == 0:
+        return ''
+
+    # Build pattern cards
+    pattern_cards = ''
+    for gp in global_patterns:
+        name = gp['global_name']
+        desc = gp['descriptive_name']
+        n_h = gp.get('n_houses', len(gp.get('houses', [])))
+        quality = gp.get('match_quality', 0)
+        q_color = '#48bb78' if quality >= 0.7 else '#ecc94b' if quality >= 0.5 else '#fc8181'
+
+        house_rows = ''
+        for h in gp.get('houses', []):
+            house_rows += f'''
+                <tr>
+                    <td style="padding:4px 8px;">{h['house_id']}</td>
+                    <td style="padding:4px 8px;text-align:center;">#{h['pattern_id']}</td>
+                    <td style="padding:4px 8px;text-align:right;">{h['avg_magnitude_w']:,.0f}W</td>
+                    <td style="padding:4px 8px;text-align:right;">{h['avg_duration_min']:.1f} min</td>
+                    <td style="padding:4px 8px;text-align:center;">{h['n_sessions']}</td>
+                    <td style="padding:4px 8px;text-align:center;">{h['confidence']:.0%}</td>
+                </tr>'''
+
+        pattern_cards += f'''
+        <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:14px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <strong style="font-size:1.1em;color:#0d9488;">{name}</strong>
+                <span style="font-size:0.85em;color:#666;">{desc}</span>
+                <span style="background:#17a2b8;color:white;padding:1px 8px;border-radius:10px;font-size:0.8em;">{n_h} houses</span>
+                <span style="color:{q_color};font-weight:600;font-size:0.85em;">Match: {quality:.0%}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+                <thead>
+                    <tr style="background:#e6fffa;">
+                        <th style="padding:4px 8px;text-align:left;">House</th>
+                        <th style="padding:4px 8px;text-align:center;">Pattern</th>
+                        <th style="padding:4px 8px;text-align:right;">Avg Power</th>
+                        <th style="padding:4px 8px;text-align:right;">Avg Duration</th>
+                        <th style="padding:4px 8px;text-align:center;">Sessions</th>
+                        <th style="padding:4px 8px;text-align:center;">Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>{house_rows}
+                </tbody>
+            </table>
+        </div>'''
+
+    # Unmatched summary (collapsed)
+    unmatched_html = ''
+    if unmatched:
+        unmatched_rows = ''
+        for u in unmatched:
+            unmatched_rows += f'''
+                <tr>
+                    <td style="padding:3px 8px;">{u['house_id']}</td>
+                    <td style="padding:3px 8px;text-align:center;">#{u['pattern_id']}</td>
+                    <td style="padding:3px 8px;text-align:right;">{u['avg_magnitude_w']:,.0f}W</td>
+                    <td style="padding:3px 8px;text-align:right;">{u['avg_duration_min']:.1f} min</td>
+                    <td style="padding:3px 8px;text-align:center;">{u['n_sessions']}</td>
+                </tr>'''
+        unmatched_html = f'''
+        <div style="margin-top:12px;">
+            <div style="cursor:pointer;font-size:0.85em;color:#888;"
+                 onclick="var el=document.getElementById('cross-house-unmatched');el.style.display=el.style.display==='none'?'block':'none';this.querySelector('.arrow').textContent=el.style.display==='none'?'\\u25B6':'\\u25BC';">
+                <span class="arrow" style="font-size:0.8em;">&#x25B6;</span>
+                {n_unmatched} house-unique patterns (no cross-house match)
+            </div>
+            <div id="cross-house-unmatched" style="display:none;margin-top:6px;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.82em;">
+                    <thead>
+                        <tr style="background:#f8f9fa;">
+                            <th style="padding:3px 8px;text-align:left;">House</th>
+                            <th style="padding:3px 8px;text-align:center;">Pattern</th>
+                            <th style="padding:3px 8px;text-align:right;">Avg Power</th>
+                            <th style="padding:3px 8px;text-align:right;">Avg Duration</th>
+                            <th style="padding:3px 8px;text-align:center;">Sessions</th>
+                        </tr>
+                    </thead>
+                    <tbody>{unmatched_rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>'''
+
+    return f'''
+        <section>
+            <h2>Cross-House Recurring Patterns</h2>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:15px;">
+                <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;text-align:center;">
+                    <div style="font-size:1.5em;font-weight:700;color:#0d9488;">{n_global}</div>
+                    <div style="font-size:0.82em;color:#666;">Cross-House Patterns</div>
+                </div>
+                <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;text-align:center;">
+                    <div style="font-size:1.5em;font-weight:700;color:#0d9488;">{n_houses}</div>
+                    <div style="font-size:0.82em;color:#666;">Houses with Patterns</div>
+                </div>
+                <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;text-align:center;">
+                    <div style="font-size:1.5em;font-weight:700;color:#0d9488;">{n_sigs}</div>
+                    <div style="font-size:0.82em;color:#666;">Total Pattern Signatures</div>
+                </div>
+                <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;text-align:center;">
+                    <div style="font-size:1.5em;font-weight:700;color:#0d9488;">{n_unmatched}</div>
+                    <div style="font-size:0.82em;color:#666;">House-Unique Patterns</div>
+                </div>
+            </div>
+            <p style="font-size:0.85em;color:#666;margin-bottom:12px;">
+                Recurring patterns discovered independently per-house are compared across all houses.
+                Patterns with similar power (&le;20%) and duration (&le;30%) are grouped under a shared name
+                (Device A, B, ...).
+            </p>
+            {pattern_cards}
+            {unmatched_html}
+        </section>'''
 
 
 def _build_population_section(population_stats: Dict[str, Any]) -> str:

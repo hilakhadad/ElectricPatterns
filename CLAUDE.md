@@ -69,10 +69,10 @@ role_based_segregation_dev/
 │   └── scripts/               # run_analysis.py, run_dynamic_report.py
 ├── identification_analysis/   # Post-run M2 analysis & HTML reports
 │   ├── src/
-│   │   ├── metrics/           # classification_quality, confidence_scoring, population_statistics
-│   │   └── visualization/     # identification_html_report, identification_charts, classification_charts
-│   ├── scripts/               # run_identification_report.py
-│   └── tests/                 # test_classification_quality, test_population_statistics
+│   │   ├── metrics/           # classification_quality, confidence_scoring, population_statistics, cross_house_patterns
+│   │   └── visualization/     # identification_html_report/aggregate, charts_device/session/spike/confidence
+│   ├── scripts/               # run_identification_report.py (Phase 1→1.5→2)
+│   └── tests/                 # test_classification_quality, test_population_statistics, test_cross_house_patterns
 ├── house_analysis/            # Pre-analysis (data quality checks)
 │   ├── src/
 │   │   ├── metrics/           # coverage, quality, temporal, power_stats
@@ -140,11 +140,14 @@ role_based_segregation_dev/
 |------|-------------|-------------|
 | `config.py` | `IdentificationConfig`, `MIN_EVENT_DURATION_MINUTES=3` | Constants for session grouping and classification |
 | `session_grouper.py` | `load_all_matches()`, `filter_transient_events()`, `group_into_sessions()` | Load matches from all iterations, filter spikes (<3 min), group by 30-min gap |
-| `session_classifier.py` | `classify_sessions()`, `ClassifiedSession` | Priority: boiler → central AC → regular AC → unknown. Phase exclusivity for boilers. |
+| `session_builder.py` | `build_sessions()` | Converts grouped activations into structured session objects |
+| `session_classifier.py` | `classify_sessions()`, `ClassifiedSession` | Priority: boiler → central AC → regular AC → recurring_pattern → unknown |
+| `classifiers/` | `BoilerClassifier`, `CentralACClassifier`, `RegularACClassifier`, `RecurringPatternClassifier` | Per-device-type classifiers. Recurring pattern uses DBSCAN on magnitude+duration. |
 | `session_output.py` | `build_session_json()` | Session JSON + backward-compatible activations JSON |
+| `spike_stats.py` | `compute_spike_stats()` | Spike statistics per house/phase for reports |
 | `cleanup.py` | `cleanup_intermediate_files()` | Remove intermediate pkl files |
 
-**M2 flow**: Load all matches → Filter spikes (<3 min) → Group into sessions (30-min gap) → Split sessions → Classify (boiler → central AC → regular AC) → Confidence score → JSON output
+**M2 flow**: Load all matches → Filter spikes (<3 min) → Group into sessions (30-min gap) → Split sessions → Classify (boiler → central AC → regular AC → recurring_pattern) → Confidence score → JSON output
 
 ### pipeline/ — Orchestration
 
@@ -167,6 +170,11 @@ Pipeline steps live at `disaggregation/pipeline/*_step.py` and are re-exported f
 - `unmatched_on/off_{id}_{MM}_{YYYY}.pkl` — unmatched events
 - `summarized_{id}_{MM}_{YYYY}.pkl` — remaining power after extraction
 
+**Output JSON** (M2 identification):
+- `device_sessions_{house_id}.json` — all classified sessions with confidence_breakdown
+- `device_activations_{house_id}.json` — backward-compatible activations format
+- `cross_house_patterns.json` — global patterns found across multiple houses (generated at report time)
+
 **3 phases**: `w1`, `w2`, `w3` represent a 3-phase electrical system in Israeli households.
 
 ## Pipeline Flow
@@ -184,8 +192,18 @@ Module 2 — Identification (runs once):
     → Group into sessions (30-min gap)
     → Split sessions (isolate prefix events from unrelated devices)
     → Classify (boiler → central AC → regular AC → unknown)
+    → Discover recurring patterns (DBSCAN clustering on magnitude + duration)
     → Confidence scoring
     → JSON output (device_sessions + device_activations)
+
+Cross-house matching (runs at report time, after all houses complete):
+  All device_sessions_{house_id}.json files
+    → Extract recurring_pattern signatures (avg magnitude + duration per pattern)
+    → Match across houses (relative tolerance: 20% magnitude, 30% duration)
+    → Connected components grouping (BFS)
+    → Assign global names (Device A, B, C... sorted by magnitude)
+    → Update per-house JSONs with global_pattern_name
+    → Save cross_house_patterns.json
 ```
 
 ## Experiments (core/config.py)
@@ -261,10 +279,11 @@ python -m harvesting_data.cli --house 305  # Fetch single house
 - Monthly data: pipeline processes per-month files and stores per-month results
 - Logging: per-house log files at `{output}/logs/test_{house_id}.log`
 - Visualization: 4 rows (Original, Remaining, Segregated, Events) x 3 columns (w1, w2, w3)
-- Device classification:
+- Device classification (priority order):
   - **Boiler**: Single-phase, >=15min duration, >=1500W, isolated (no nearby compressor cycles)
   - **Central AC**: 2+ phases synchronized within ±10 min, cycling pattern
   - **Regular AC**: 800W+, 3-30min compressor cycles, single phase
+  - **Recurring Pattern**: DBSCAN-discovered clusters of sessions with similar magnitude+duration (pattern_id per cluster). Cross-house matching assigns global names (Device A, B...) when same pattern appears in 2+ houses.
 
 ## Known Issues & Bug History
 
