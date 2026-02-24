@@ -1,7 +1,7 @@
 """
 Tests for classification quality metrics and confidence scoring.
 
-Tests the core computation logic using synthetic activation data,
+Tests the core computation logic using synthetic session/activation data,
 without requiring actual experiment output files.
 """
 import sys
@@ -32,7 +32,7 @@ from metrics.confidence_scoring import (
 
 
 # ============================================================================
-# Fixtures: synthetic activations
+# Fixtures: synthetic activations (for confidence scoring tests)
 # ============================================================================
 
 def _make_activation(device_type='boiler', phase='w1', magnitude=2100,
@@ -54,28 +54,49 @@ def _make_activation(device_type='boiler', phase='w1', magnitude=2100,
     }
 
 
-def _boiler_activations_12_months():
-    """12 months of boiler activations, one per month."""
-    acts = []
+# ============================================================================
+# Fixtures: synthetic sessions (for classification quality tests)
+# ============================================================================
+
+def _make_session(device_type='boiler', phases=None, avg_magnitude=2100,
+                  duration_minutes=45, start='2024-06-15 08:30:00',
+                  end='2024-06-15 09:15:00', confidence=0.85):
+    if phases is None:
+        phases = ['w1']
+    return {
+        'device_type': device_type,
+        'phases': phases,
+        'avg_cycle_magnitude_w': avg_magnitude,
+        'duration_minutes': duration_minutes,
+        'start': start,
+        'end': end,
+        'confidence': confidence,
+    }
+
+
+def _boiler_sessions_12_months():
+    """12 months of boiler sessions, one per month."""
+    sessions = []
     for m in range(1, 13):
-        acts.append(_make_activation(
-            device_type='boiler', phase='w1', magnitude=2100 + m * 10,
-            duration=40 + m, on_start=f'2024-{m:02d}-15 08:30:00',
+        sessions.append(_make_session(
+            device_type='boiler', phases=['w1'], avg_magnitude=2100 + m * 10,
+            duration_minutes=40 + m, start=f'2024-{m:02d}-15 08:30:00',
+            end=f'2024-{m:02d}-15 09:15:00',
         ))
-    return acts
+    return sessions
 
 
-def _ac_activations_summer():
-    """AC activations only in warm months (May-Oct)."""
-    acts = []
+def _ac_sessions_summer():
+    """AC sessions only in warm months (May-Oct)."""
+    sessions = []
     for m in [5, 6, 7, 8, 9, 10]:
         for day in [5, 15, 25]:
-            acts.append(_make_activation(
-                device_type='regular_ac', phase='w2', magnitude=1200,
-                duration=15, on_start=f'2024-{m:02d}-{day:02d} 14:00:00',
-                tag='CLOSE-MEDIUM',
+            sessions.append(_make_session(
+                device_type='regular_ac', phases=['w2'], avg_magnitude=1200,
+                duration_minutes=120, start=f'2024-{m:02d}-{day:02d} 14:00:00',
+                end=f'2024-{m:02d}-{day:02d} 16:00:00',
             ))
-    return acts
+    return sessions
 
 
 # ============================================================================
@@ -84,7 +105,7 @@ def _ac_activations_summer():
 
 class TestTemporalConsistency:
     def test_boiler_12_months(self):
-        by_type = {'boiler': _boiler_activations_12_months()}
+        by_type = {'boiler': _boiler_sessions_12_months()}
         months = {(m, 2024) for m in range(1, 13)}
         result = _metric_temporal_consistency(by_type, months)
 
@@ -94,7 +115,7 @@ class TestTemporalConsistency:
         assert result['boiler']['flag'] is None
 
     def test_ac_seasonal(self):
-        by_type = {'regular_ac': _ac_activations_summer()}
+        by_type = {'regular_ac': _ac_sessions_summer()}
         months = {(m, 2024) for m in range(1, 13)}
         result = _metric_temporal_consistency(by_type, months)
 
@@ -104,8 +125,8 @@ class TestTemporalConsistency:
 
     def test_boiler_low_consistency_flags(self):
         # Boiler only in 4 months
-        acts = [_make_activation(on_start=f'2024-{m:02d}-15 08:00:00') for m in [1, 2, 3, 4]]
-        by_type = {'boiler': acts}
+        sessions = [_make_session(start=f'2024-{m:02d}-15 08:00:00') for m in [1, 2, 3, 4]]
+        by_type = {'boiler': sessions}
         months = {(m, 2024) for m in range(1, 13)}
         result = _metric_temporal_consistency(by_type, months)
 
@@ -119,8 +140,8 @@ class TestTemporalConsistency:
 
 class TestMagnitudeStability:
     def test_stable_boiler(self):
-        acts = [_make_activation(magnitude=2100 + i * 5) for i in range(20)]
-        by_type = {'boiler': acts}
+        sessions = [_make_session(avg_magnitude=2100 + i * 5) for i in range(20)]
+        by_type = {'boiler': sessions}
         result = _metric_magnitude_stability(by_type)
 
         assert 'boiler' in result
@@ -129,21 +150,21 @@ class TestMagnitudeStability:
 
     def test_unstable_boiler_flags(self):
         # Magnitudes vary from 1500 to 4000
-        acts = [_make_activation(magnitude=m) for m in [1500, 2000, 3000, 4000, 1800]]
-        by_type = {'boiler': acts}
+        sessions = [_make_session(avg_magnitude=m) for m in [1500, 2000, 3000, 4000, 1800]]
+        by_type = {'boiler': sessions}
         result = _metric_magnitude_stability(by_type)
 
         assert result['boiler']['cv'] > 0.30
         assert result['boiler']['flag'] == 'MAGNITUDE_UNSTABLE'
 
     def test_phase_switching_detected(self):
-        acts = []
+        sessions = []
         for i in range(10):
-            acts.append(_make_activation(phase='w1', magnitude=2100))
+            sessions.append(_make_session(phases=['w1'], avg_magnitude=2100))
         # Add 5 on different phase
         for i in range(5):
-            acts.append(_make_activation(phase='w2', magnitude=2100))
-        by_type = {'boiler': acts}
+            sessions.append(_make_session(phases=['w2'], avg_magnitude=2100))
+        by_type = {'boiler': sessions}
         result = _metric_magnitude_stability(by_type)
 
         # 15 total, 10 on w1 → switching rate = 1 - 10/15 = 0.333
@@ -157,8 +178,8 @@ class TestMagnitudeStability:
 
 class TestDurationPlausibility:
     def test_normal_boiler_durations(self):
-        acts = [_make_activation(duration=d) for d in [35, 40, 45, 50, 55, 42, 38]]
-        by_type = {'boiler': acts}
+        sessions = [_make_session(duration_minutes=d) for d in [35, 40, 45, 50, 55, 42, 38]]
+        by_type = {'boiler': sessions}
         result = _metric_duration_plausibility(by_type)
 
         assert 'boiler' in result
@@ -166,8 +187,8 @@ class TestDurationPlausibility:
         assert 30 < result['boiler']['median'] < 60
 
     def test_boiler_too_long_flags(self):
-        acts = [_make_activation(duration=d) for d in [200, 210, 250, 300, 190]]
-        by_type = {'boiler': acts}
+        sessions = [_make_session(duration_minutes=d) for d in [250, 260, 280, 300, 270]]
+        by_type = {'boiler': sessions}
         result = _metric_duration_plausibility(by_type)
 
         assert result['boiler']['flag'] == 'DURATION_ANOMALY'
@@ -179,7 +200,7 @@ class TestDurationPlausibility:
 
 class TestSeasonalCoherence:
     def test_ac_summer_bias(self):
-        by_type = {'regular_ac': _ac_activations_summer()}
+        by_type = {'regular_ac': _ac_sessions_summer()}
         months = {(m, 2024) for m in range(1, 13)}
         result = _metric_seasonal_coherence(by_type, months)
 
@@ -190,13 +211,13 @@ class TestSeasonalCoherence:
 
     def test_ac_inverted_flags(self):
         # More AC in winter than summer
-        winter_acts = [_make_activation(device_type='regular_ac',
-                                        on_start=f'2024-{m:02d}-15 14:00:00')
-                       for m in [1, 2, 3, 12] for _ in range(5)]
-        summer_acts = [_make_activation(device_type='regular_ac',
-                                        on_start=f'2024-{m:02d}-15 14:00:00')
-                       for m in [7, 8]]
-        by_type = {'regular_ac': winter_acts + summer_acts}
+        winter_sessions = [_make_session(device_type='regular_ac',
+                                         start=f'2024-{m:02d}-15 14:00:00')
+                           for m in [1, 2, 3, 12] for _ in range(5)]
+        summer_sessions = [_make_session(device_type='regular_ac',
+                                         start=f'2024-{m:02d}-15 14:00:00')
+                           for m in [7, 8]]
+        by_type = {'regular_ac': winter_sessions + summer_sessions}
         months = {(m, 2024) for m in range(1, 13)}
         result = _metric_seasonal_coherence(by_type, months)
 
@@ -210,17 +231,14 @@ class TestSeasonalCoherence:
 
 class TestEnergyConservation:
     def test_no_overlaps(self):
-        acts = [
-            _make_activation(on_start='2024-01-15 08:00:00', iteration=0),
-            _make_activation(on_start='2024-01-15 10:00:00', iteration=0),
+        sessions = [
+            _make_session(start='2024-01-15 08:00:00', end='2024-01-15 09:00:00'),
+            _make_session(start='2024-01-15 10:00:00', end='2024-01-15 11:00:00'),
         ]
-        # Assign off_end for overlap check
-        acts[0]['off_end'] = '2024-01-15 09:00:00'
-        acts[1]['off_end'] = '2024-01-15 11:00:00'
-        by_type = {'boiler': acts}
-        result = _metric_energy_conservation(acts, by_type)
+        by_type = {'boiler': sessions}
+        result = _metric_energy_conservation(sessions, by_type)
 
-        assert result['cross_iteration_overlaps'] == 0
+        assert result['session_overlaps'] == 0
         assert result['flag'] is None
 
 

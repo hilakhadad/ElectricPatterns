@@ -680,8 +680,8 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
 
 def create_session_overview(sessions: List[Dict]) -> str:
     """
-    Session Overview Dashboard: pie chart of sessions by device type +
-    summary cards (total sessions, classified %, energy attributed).
+    Session Overview Dashboard: duration and energy breakdown by device type.
+    Focuses on segregated minutes and estimated energy rather than session counts.
 
     Args:
         sessions: List of session dicts from device_sessions JSON.
@@ -689,79 +689,58 @@ def create_session_overview(sessions: List[Dict]) -> str:
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 
-    # Count, minutes, and energy by device type
-    counts = defaultdict(int)
+    # Minutes and energy by device type
     minutes = defaultdict(float)
     energy = defaultdict(float)  # magnitude * duration (watt-minutes)
     for s in sessions:
         dtype = s.get('device_type', 'unknown')
-        counts[dtype] += 1
         dur = s.get('duration_minutes', 0) or 0
         minutes[dtype] += dur
         mag = s.get('avg_cycle_magnitude_w', 0) or 0
         energy[dtype] += mag * dur
 
-    total = sum(counts.values())
-    classified = sum(c for dt, c in counts.items() if dt not in ('unknown', 'unclassified'))
-    classified_pct = (classified / total * 100) if total > 0 else 0
-    total_energy = sum(energy.values())
+    total_minutes = sum(minutes.values())
+    classified_minutes = sum(m for dt, m in minutes.items() if dt not in ('unknown', 'unclassified'))
+    classified_pct = (classified_minutes / total_minutes * 100) if total_minutes > 0 else 0
+    total_energy_kwh = sum(energy.values()) / 60000  # watt-minutes to kWh
 
-    # Summary cards
-    avg_conf_vals = [s.get('confidence', 0) for s in sessions if s.get('confidence')]
-    avg_conf = sum(avg_conf_vals) / len(avg_conf_vals) if avg_conf_vals else 0
+    # Avg confidence of classified sessions only
+    classified_conf_vals = [
+        s.get('confidence', 0)
+        for s in sessions
+        if s.get('confidence') and s.get('device_type', 'unknown') not in ('unknown', 'unclassified')
+    ]
+    avg_conf = sum(classified_conf_vals) / len(classified_conf_vals) if classified_conf_vals else 0
     conf_color = GREEN if avg_conf >= 0.8 else ORANGE if avg_conf >= 0.5 else RED
+
+    # Device type count (excluding unknown)
+    device_types = set(
+        s.get('device_type', 'unknown') for s in sessions
+        if s.get('device_type', 'unknown') not in ('unknown', 'unclassified')
+    )
 
     cards_html = f'''
     <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
         <div style="background: #f0f4ff; border: 1px solid #c3d4ff; border-radius: 8px; padding: 16px; text-align: center;">
-            <div style="font-size: 2em; font-weight: 700; color: #2d3748;">{total}</div>
-            <div style="font-size: 0.85em; color: #666;">Total Sessions</div>
+            <div style="font-size: 2em; font-weight: 700; color: #2d3748;">{total_minutes:,.0f}</div>
+            <div style="font-size: 0.85em; color: #666;">Total Segregated Minutes</div>
         </div>
         <div style="background: {LIGHT_GREEN}; border: 1px solid #c3e6cb; border-radius: 8px; padding: 16px; text-align: center;">
             <div style="font-size: 2em; font-weight: 700; color: {GREEN};">{classified_pct:.0f}%</div>
-            <div style="font-size: 0.85em; color: #666;">Classified</div>
+            <div style="font-size: 0.85em; color: #666;">Classified (by minutes)</div>
         </div>
         <div style="background: #f0f4ff; border: 1px solid #c3d4ff; border-radius: 8px; padding: 16px; text-align: center;">
             <div style="font-size: 2em; font-weight: 700; color: {conf_color};">{avg_conf:.0%}</div>
-            <div style="font-size: 0.85em; color: #666;">Avg Confidence</div>
+            <div style="font-size: 0.85em; color: #666;">Avg Classified Confidence</div>
         </div>
         <div style="background: #f0f4ff; border: 1px solid #c3d4ff; border-radius: 8px; padding: 16px; text-align: center;">
-            <div style="font-size: 2em; font-weight: 700; color: #2d3748;">{len(counts)}</div>
+            <div style="font-size: 2em; font-weight: 700; color: #2d3748;">{len(device_types)}</div>
             <div style="font-size: 0.85em; color: #666;">Device Types</div>
         </div>
     </div>'''
 
-    # Pie chart — sessions by device type
-    display_order = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'unknown']
-    pie_labels = []
-    pie_values = []
-    pie_colors = []
-    for dt in display_order:
-        if counts.get(dt, 0) > 0:
-            pie_labels.append(DEVICE_DISPLAY_NAMES.get(dt, dt))
-            pie_values.append(counts[dt])
-            pie_colors.append(DEVICE_COLORS.get(dt, GRAY))
-
-    pie_traces = json.dumps([{
-        'type': 'pie',
-        'labels': pie_labels,
-        'values': pie_values,
-        'marker': {'colors': pie_colors},
-        'textinfo': 'label+percent',
-        'textposition': 'auto',
-        'hovertemplate': '%{label}: %{value} sessions (%{percent})<extra></extra>',
-        'hole': 0.35,
-    }])
-    pie_layout = json.dumps({
-        'margin': {'l': 20, 'r': 20, 't': 30, 'b': 20},
-        'height': 280,
-        'title': {'text': 'Sessions by Device Type', 'font': {'size': 14}},
-        'paper_bgcolor': 'white',
-        'showlegend': True,
-        'legend': {'orientation': 'h', 'y': -0.1},
-    })
-
     # Pie chart — minutes by device type
+    display_order = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'unknown']
     min_labels = []
     min_values = []
     min_colors = []
@@ -821,11 +800,7 @@ def create_session_overview(sessions: List[Dict]) -> str:
 
     return f'''
     {cards_html}
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-        <div>
-            <div id="session_pie"></div>
-            <script>Plotly.newPlot('session_pie', {pie_traces}, {pie_layout}, {{displayModeBar:false}});</script>
-        </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
         <div>
             <div id="minutes_pie"></div>
             <script>Plotly.newPlot('minutes_pie', {min_traces}, {min_layout}, {{displayModeBar:false}});</script>
@@ -846,17 +821,18 @@ def create_boiler_analysis(sessions: List[Dict]) -> str:
     if not boilers:
         return '<p style="color: #888;">No boiler sessions detected.</p>'
 
-    # Extract hours and months from start timestamps
-    hours = []
-    months = defaultdict(int)  # 'YYYY-MM' -> count
+    # Extract hours, minutes, and months from start timestamps
+    hour_minutes = defaultdict(float)  # hour -> total segregated minutes
+    month_minutes = defaultdict(float)  # 'YYYY-MM' -> total segregated minutes
     magnitudes = []
     phases = defaultdict(int)
 
     for s in boilers:
         dt = _parse_iso(s.get('start', ''))
+        dur = s.get('duration_minutes', 0) or 0
         if dt:
-            hours.append(dt.hour)
-            months[dt.strftime('%Y-%m')] += 1
+            hour_minutes[dt.hour] += dur
+            month_minutes[dt.strftime('%Y-%m')] += dur
         mag = s.get('avg_cycle_magnitude_w', 0)
         if mag:
             magnitudes.append(mag)
@@ -867,46 +843,44 @@ def create_boiler_analysis(sessions: List[Dict]) -> str:
     dominant_phase = max(phases, key=phases.get) if phases else 'N/A'
     phase_str = ', '.join(f'{ph}: {cnt}' for ph, cnt in sorted(phases.items()))
 
-    # Hour histogram
-    hour_counts = [0] * 24
-    for h in hours:
-        hour_counts[h] += 1
+    # Hour histogram — segregated minutes per start hour
+    hour_values = [round(hour_minutes.get(h, 0), 1) for h in range(24)]
 
     hour_traces = json.dumps([{
         'type': 'bar',
         'x': list(range(24)),
-        'y': hour_counts,
+        'y': hour_values,
         'marker': {'color': BLUE},
-        'hovertemplate': 'Hour %{x}: %{y} sessions<extra></extra>',
+        'hovertemplate': 'Hour %{x}: %{y:.0f} min<extra></extra>',
     }])
     hour_layout = json.dumps({
         'margin': {'l': 40, 'r': 10, 't': 30, 'b': 40},
         'height': 220,
         'title': {'text': 'Boiler Usage by Hour of Day', 'font': {'size': 13}},
         'xaxis': {'title': 'Hour', 'dtick': 2, 'range': [-0.5, 23.5]},
-        'yaxis': {'title': 'Sessions'},
+        'yaxis': {'title': 'Segregated Minutes'},
         'paper_bgcolor': 'white',
         'plot_bgcolor': '#f8f9fa',
     })
 
-    # Monthly bar chart
-    sorted_months = sorted(months.keys())
+    # Monthly bar chart — segregated minutes per month
+    sorted_months = sorted(month_minutes.keys())
     month_labels = sorted_months
-    month_values = [months[m] for m in sorted_months]
+    month_values = [round(month_minutes[m], 1) for m in sorted_months]
 
     month_traces = json.dumps([{
         'type': 'bar',
         'x': month_labels,
         'y': month_values,
         'marker': {'color': BLUE},
-        'hovertemplate': '%{x}: %{y} sessions<extra></extra>',
+        'hovertemplate': '%{x}: %{y:.0f} min<extra></extra>',
     }])
     month_layout = json.dumps({
         'margin': {'l': 40, 'r': 10, 't': 30, 'b': 60},
         'height': 220,
-        'title': {'text': 'Boiler Sessions per Month', 'font': {'size': 13}},
+        'title': {'text': 'Boiler Minutes per Month', 'font': {'size': 13}},
         'xaxis': {'title': '', 'tickangle': -45},
-        'yaxis': {'title': 'Sessions'},
+        'yaxis': {'title': 'Segregated Minutes'},
         'paper_bgcolor': 'white',
         'plot_bgcolor': '#f8f9fa',
     })
@@ -989,20 +963,22 @@ def create_ac_analysis(sessions: List[Dict]) -> str:
 
     parts = [cards_html]
 
-    # Seasonal pattern (monthly counts for both AC types)
+    # Seasonal pattern (monthly minutes for both AC types)
     all_ac = central + regular
-    month_central = defaultdict(int)
-    month_regular = defaultdict(int)
+    month_central = defaultdict(float)
+    month_regular = defaultdict(float)
 
     for s in central:
         dt = _parse_iso(s.get('start', ''))
+        dur = s.get('duration_minutes', 0) or 0
         if dt:
-            month_central[dt.strftime('%Y-%m')] += 1
+            month_central[dt.strftime('%Y-%m')] += dur
 
     for s in regular:
         dt = _parse_iso(s.get('start', ''))
+        dur = s.get('duration_minutes', 0) or 0
         if dt:
-            month_regular[dt.strftime('%Y-%m')] += 1
+            month_regular[dt.strftime('%Y-%m')] += dur
 
     all_months = sorted(set(list(month_central.keys()) + list(month_regular.keys())))
     if all_months:
@@ -1010,23 +986,25 @@ def create_ac_analysis(sessions: List[Dict]) -> str:
         if central:
             traces.append({
                 'type': 'bar', 'name': 'Central AC',
-                'x': all_months, 'y': [month_central.get(m, 0) for m in all_months],
+                'x': all_months, 'y': [round(month_central.get(m, 0), 1) for m in all_months],
                 'marker': {'color': RED},
+                'hovertemplate': '%{x}: %{y:.0f} min<extra></extra>',
             })
         if regular:
             traces.append({
                 'type': 'bar', 'name': 'Regular AC',
-                'x': all_months, 'y': [month_regular.get(m, 0) for m in all_months],
+                'x': all_months, 'y': [round(month_regular.get(m, 0), 1) for m in all_months],
                 'marker': {'color': ORANGE},
+                'hovertemplate': '%{x}: %{y:.0f} min<extra></extra>',
             })
 
         seasonal_layout = json.dumps({
             'barmode': 'group',
             'margin': {'l': 40, 'r': 10, 't': 30, 'b': 60},
             'height': 250,
-            'title': {'text': 'AC Sessions by Month (Seasonal Pattern)', 'font': {'size': 13}},
+            'title': {'text': 'AC Minutes by Month (Seasonal Pattern)', 'font': {'size': 13}},
             'xaxis': {'tickangle': -45},
-            'yaxis': {'title': 'Sessions'},
+            'yaxis': {'title': 'Segregated Minutes'},
             'paper_bgcolor': 'white',
             'plot_bgcolor': '#f8f9fa',
             'legend': {'orientation': 'h', 'y': -0.25},
@@ -1230,84 +1208,180 @@ def create_unclassified_analysis(sessions: List[Dict]) -> str:
 
 def create_confidence_overview(sessions: List[Dict]) -> str:
     """
-    Confidence distribution overview: histogram of confidence scores across all sessions,
-    broken down by tier (high/medium/low).
+    Confidence distribution overview with three histograms:
+    1. Classified sessions — confidence score weighted by minutes
+    2. Unknown sessions — "Not Boiler" exclusion confidence
+    3. Unknown sessions — "Not AC" exclusion confidence
     """
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 
     classified = [s for s in sessions if s.get('device_type') not in ('unknown', 'unclassified')]
-    if not classified:
-        return '<p style="color: #888;">No classified sessions with confidence scores.</p>'
+    unknowns = [s for s in sessions if s.get('device_type') in ('unknown', 'unclassified')]
 
-    confidences = [s.get('confidence', 0) for s in classified]
-    high = sum(1 for c in confidences if c >= 0.8)
-    medium = sum(1 for c in confidences if 0.4 <= c < 0.8)
-    low = sum(1 for c in confidences if c < 0.4)
-    total = len(confidences)
+    if not classified and not unknowns:
+        return '<p style="color: #888;">No sessions with confidence scores.</p>'
 
-    # Summary cards
-    cards_html = f'''
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;">
-        <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
-            <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{high} ({high/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">High (\u22650.80)</div>
-        </div>
-        <div style="background: #fef3cd; border-radius: 6px; padding: 12px; text-align: center;">
-            <div style="font-size: 1.3em; font-weight: 700; color: {ORANGE};">{medium} ({medium/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.80)</div>
-        </div>
-        <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
-            <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{low} ({low/total:.0%})</div>
-            <div style="font-size: 0.8em; color: #666;">Low (&lt;0.40)</div>
-        </div>
-    </div>'''
+    parts = []
 
-    # Histogram with tier coloring
-    traces = json.dumps([
-        {
-            'type': 'histogram',
-            'x': [c for c in confidences if c >= 0.8],
-            'name': 'High',
-            'marker': {'color': GREEN},
-            'xbins': {'start': 0, 'end': 1, 'size': 0.05},
-        },
-        {
-            'type': 'histogram',
-            'x': [c for c in confidences if 0.4 <= c < 0.8],
-            'name': 'Medium',
-            'marker': {'color': ORANGE},
-            'xbins': {'start': 0, 'end': 1, 'size': 0.05},
-        },
-        {
-            'type': 'histogram',
-            'x': [c for c in confidences if c < 0.4],
-            'name': 'Low',
-            'marker': {'color': RED},
-            'xbins': {'start': 0, 'end': 1, 'size': 0.05},
-        },
-    ])
-    layout = json.dumps({
-        'barmode': 'stack',
-        'margin': {'l': 40, 'r': 20, 't': 10, 'b': 40},
-        'height': 220,
-        'xaxis': {'title': 'Confidence Score', 'range': [0, 1]},
-        'yaxis': {'title': 'Sessions'},
-        'paper_bgcolor': 'white',
-        'plot_bgcolor': '#f8f9fa',
-        'legend': {'orientation': 'h', 'y': -0.2},
-        'shapes': [
-            {'type': 'line', 'x0': 0.8, 'x1': 0.8, 'y0': 0, 'y1': 1, 'yref': 'paper',
-             'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
-            {'type': 'line', 'x0': 0.4, 'x1': 0.4, 'y0': 0, 'y1': 1, 'yref': 'paper',
-             'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
-        ],
-    })
+    # --- Classified confidence (weighted by minutes) ---
+    if classified:
+        # Tier cards weighted by minutes
+        high_min = sum(
+            (s.get('duration_minutes', 0) or 0)
+            for s in classified if (s.get('confidence', 0) or 0) >= 0.8
+        )
+        medium_min = sum(
+            (s.get('duration_minutes', 0) or 0)
+            for s in classified if 0.4 <= (s.get('confidence', 0) or 0) < 0.8
+        )
+        low_min = sum(
+            (s.get('duration_minutes', 0) or 0)
+            for s in classified if (s.get('confidence', 0) or 0) < 0.4
+        )
+        total_classified_min = high_min + medium_min + low_min
+        h_pct = (high_min / total_classified_min * 100) if total_classified_min > 0 else 0
+        m_pct = (medium_min / total_classified_min * 100) if total_classified_min > 0 else 0
+        l_pct = (low_min / total_classified_min * 100) if total_classified_min > 0 else 0
 
-    return f'''
-    {cards_html}
-    <div id="confidence_hist"></div>
-    <script>Plotly.newPlot('confidence_hist', {traces}, {layout}, {{displayModeBar:false}});</script>'''
+        cards_html = f'''
+        <h3 style="color: #2a4365; margin-bottom: 10px;">Classified Sessions</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px;">
+            <div style="background: #d4edda; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 1.3em; font-weight: 700; color: {GREEN};">{h_pct:.0f}%</div>
+                <div style="font-size: 0.8em; color: #666;">High (\u22650.80) — {high_min:.0f} min</div>
+            </div>
+            <div style="background: #fef3cd; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 1.3em; font-weight: 700; color: {ORANGE};">{m_pct:.0f}%</div>
+                <div style="font-size: 0.8em; color: #666;">Medium (0.40\u20130.80) — {medium_min:.0f} min</div>
+            </div>
+            <div style="background: #f8d7da; border-radius: 6px; padding: 12px; text-align: center;">
+                <div style="font-size: 1.3em; font-weight: 700; color: {RED};">{l_pct:.0f}%</div>
+                <div style="font-size: 0.8em; color: #666;">Low (&lt;0.40) — {low_min:.0f} min</div>
+            </div>
+        </div>'''
+
+        confidences = [s.get('confidence', 0) for s in classified]
+        traces = json.dumps([
+            {
+                'type': 'histogram',
+                'x': [c for c in confidences if c >= 0.8],
+                'name': 'High',
+                'marker': {'color': GREEN},
+                'xbins': {'start': 0, 'end': 1, 'size': 0.05},
+            },
+            {
+                'type': 'histogram',
+                'x': [c for c in confidences if 0.4 <= c < 0.8],
+                'name': 'Medium',
+                'marker': {'color': ORANGE},
+                'xbins': {'start': 0, 'end': 1, 'size': 0.05},
+            },
+            {
+                'type': 'histogram',
+                'x': [c for c in confidences if c < 0.4],
+                'name': 'Low',
+                'marker': {'color': RED},
+                'xbins': {'start': 0, 'end': 1, 'size': 0.05},
+            },
+        ])
+        layout = json.dumps({
+            'barmode': 'stack',
+            'margin': {'l': 40, 'r': 20, 't': 10, 'b': 40},
+            'height': 220,
+            'xaxis': {'title': 'Confidence Score', 'range': [0, 1]},
+            'yaxis': {'title': 'Sessions'},
+            'paper_bgcolor': 'white',
+            'plot_bgcolor': '#f8f9fa',
+            'legend': {'orientation': 'h', 'y': -0.2},
+            'shapes': [
+                {'type': 'line', 'x0': 0.8, 'x1': 0.8, 'y0': 0, 'y1': 1, 'yref': 'paper',
+                 'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
+                {'type': 'line', 'x0': 0.4, 'x1': 0.4, 'y0': 0, 'y1': 1, 'yref': 'paper',
+                 'line': {'color': '#888', 'dash': 'dot', 'width': 1}},
+            ],
+        })
+        parts.append(f'''
+        {cards_html}
+        <div id="confidence_hist"></div>
+        <script>Plotly.newPlot('confidence_hist', {traces}, {layout}, {{displayModeBar:false}});</script>''')
+
+    # --- Unknown sessions: exclusion confidence histograms ---
+    if unknowns:
+        not_boiler_scores = []
+        not_ac_scores = []
+        for s in unknowns:
+            bd = s.get('confidence_breakdown', {}) or {}
+            nb = bd.get('not_boiler')
+            na = bd.get('not_ac')
+            if nb is not None:
+                not_boiler_scores.append(nb)
+            if na is not None:
+                not_ac_scores.append(na)
+
+        if not_boiler_scores or not_ac_scores:
+            parts.append(f'''
+            <h3 style="color: #2a4365; margin: 24px 0 8px 0;">Unknown Sessions — Exclusion Confidence</h3>
+            <p style="color: #666; font-size: 0.85em; margin-bottom: 12px;">
+                How confidently each unknown session was excluded from known device types.
+                High "Not Boiler" = clearly not a boiler. Low = borderline, might be a boiler missed by rules.
+            </p>''')
+
+            hist_parts = []
+
+            if not_boiler_scores:
+                nb_traces = json.dumps([{
+                    'type': 'histogram',
+                    'x': not_boiler_scores,
+                    'marker': {'color': '#6c757d'},
+                    'xbins': {'start': 0, 'end': 1, 'size': 0.05},
+                    'hovertemplate': 'Score %{{x:.2f}}: %{{y}} sessions<extra></extra>',
+                }])
+                nb_layout = json.dumps({
+                    'margin': {'l': 40, 'r': 20, 't': 10, 'b': 40},
+                    'height': 200,
+                    'xaxis': {'title': 'Not Boiler Score', 'range': [0, 1]},
+                    'yaxis': {'title': 'Sessions'},
+                    'paper_bgcolor': 'white',
+                    'plot_bgcolor': '#f8f9fa',
+                })
+                hist_parts.append(f'''
+                <div>
+                    <div id="not_boiler_hist"></div>
+                    <script>Plotly.newPlot('not_boiler_hist', {nb_traces}, {nb_layout}, {{displayModeBar:false}});</script>
+                </div>''')
+
+            if not_ac_scores:
+                na_traces = json.dumps([{
+                    'type': 'histogram',
+                    'x': not_ac_scores,
+                    'marker': {'color': '#6c757d'},
+                    'xbins': {'start': 0, 'end': 1, 'size': 0.05},
+                    'hovertemplate': 'Score %{{x:.2f}}: %{{y}} sessions<extra></extra>',
+                }])
+                na_layout = json.dumps({
+                    'margin': {'l': 40, 'r': 20, 't': 10, 'b': 40},
+                    'height': 200,
+                    'xaxis': {'title': 'Not AC Score', 'range': [0, 1]},
+                    'yaxis': {'title': 'Sessions'},
+                    'paper_bgcolor': 'white',
+                    'plot_bgcolor': '#f8f9fa',
+                })
+                hist_parts.append(f'''
+                <div>
+                    <div id="not_ac_hist"></div>
+                    <script>Plotly.newPlot('not_ac_hist', {na_traces}, {na_layout}, {{displayModeBar:false}});</script>
+                </div>''')
+
+            cols = len(hist_parts)
+            parts.append(f'<div style="display: grid; grid-template-columns: repeat({cols}, 1fr); gap: 20px;">')
+            parts.extend(hist_parts)
+            parts.append('</div>')
+
+    if not parts:
+        return '<p style="color: #888;">No confidence data available.</p>'
+
+    return '\n'.join(parts)
 
 
 # ---------------------------------------------------------------------------

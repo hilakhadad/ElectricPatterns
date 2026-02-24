@@ -32,7 +32,7 @@ def _make_quality(house_id, boiler_temporal=0.9, boiler_cv=0.10,
         'house_id': house_id,
         'overall_quality_score': overall_quality,
         'quality_tier': 'good',
-        'total_activations': 30,
+        'total_sessions': 30,
         'data_months': 12,
         'metrics': {
             'temporal_consistency': {

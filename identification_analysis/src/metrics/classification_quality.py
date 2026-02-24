@@ -1,14 +1,14 @@
 """
 Classification quality metrics for device identification evaluation.
 
-Computes internal consistency metrics WITHOUT ground truth:
+Computes internal consistency metrics WITHOUT ground truth at **session** level:
   A. Temporal consistency — does the device appear consistently across months?
   B. Magnitude stability — are magnitudes consistent for each device type?
-  C. Duration plausibility — do durations match physical expectations?
-  D. Seasonal coherence — do activations follow expected seasonal patterns?
+  C. Duration plausibility — do session durations match physical expectations?
+  D. Seasonal coherence — do sessions follow expected seasonal patterns?
   E. Energy conservation — no double-counting or impossible values?
 
-Input: device_activations_{house_id}.json (unified JSON from pipeline)
+Input: device_sessions_{house_id}.json (session-level JSON from pipeline)
 Output: per-house quality dict with metrics, flags, and overall score.
 """
 import json
@@ -38,7 +38,7 @@ def calculate_classification_quality(
     house_id: str,
 ) -> Dict[str, Any]:
     """
-    Calculate all classification quality metrics for a house.
+    Calculate all classification quality metrics for a house at session level.
 
     Args:
         experiment_dir: Root experiment output directory
@@ -47,28 +47,29 @@ def calculate_classification_quality(
     Returns:
         Dict with metrics A-E, flags, overall quality score and tier.
     """
-    activations = _load_activations(experiment_dir, house_id)
-    if activations is None:
+    sessions = _load_sessions(experiment_dir, house_id)
+    if sessions is None:
         return _empty_quality(house_id)
 
-    matched = [a for a in activations if a.get('match_type') == 'matched']
-    if not matched:
+    # Only classified sessions (exclude unknown/unclassified)
+    classified = [s for s in sessions if s.get('device_type') not in ('unknown', 'unclassified')]
+    if not classified:
         return _empty_quality(house_id)
 
-    # Group activations by device type
+    # Group sessions by device type
     by_type = defaultdict(list)
-    for a in matched:
-        by_type[a.get('device_type', 'unclassified')].append(a)
+    for s in classified:
+        by_type[s.get('device_type', 'unclassified')].append(s)
 
     # Extract month coverage from data
-    months_with_data = _get_months_with_data(matched)
+    months_with_data = _get_months_with_data(classified)
 
     # Compute each metric
     temporal = _metric_temporal_consistency(by_type, months_with_data)
     magnitude = _metric_magnitude_stability(by_type)
     duration = _metric_duration_plausibility(by_type)
     seasonal = _metric_seasonal_coherence(by_type, months_with_data)
-    energy = _metric_energy_conservation(matched, by_type)
+    energy = _metric_energy_conservation(classified, by_type)
 
     # Collect all flags
     all_flags = []
@@ -96,7 +97,7 @@ def calculate_classification_quality(
 
     return {
         'house_id': house_id,
-        'total_activations': len(matched),
+        'total_sessions': len(classified),
         'data_months': len(months_with_data),
         'metrics': {
             'temporal_consistency': temporal,
@@ -120,7 +121,7 @@ def _metric_temporal_consistency(
     months_with_data: set,
 ) -> Dict[str, Any]:
     """
-    For each device type, compute fraction of months with at least one activation.
+    For each device type, compute fraction of months with at least one session.
     """
     total_months = len(months_with_data)
     if total_months == 0:
@@ -128,18 +129,18 @@ def _metric_temporal_consistency(
 
     result = {}
     for dtype in CLASSIFIED_TYPES:
-        activations = by_type.get(dtype, [])
-        if not activations:
+        sessions = by_type.get(dtype, [])
+        if not sessions:
             continue
 
         months_with_device = set()
-        for a in activations:
-            month_key = _extract_month_key(a)
+        for s in sessions:
+            month_key = _extract_month_key(s)
             if month_key:
                 months_with_device.add(month_key)
 
         value = len(months_with_device) / total_months
-        flag, flag_detail = _check_temporal_flags(dtype, value, len(activations), total_months)
+        flag, flag_detail = _check_temporal_flags(dtype, value, len(sessions), total_months)
 
         result[dtype] = {
             'value': round(value, 3),
@@ -159,7 +160,7 @@ def _check_temporal_flags(dtype, value, count, total_months):
     if dtype in ('regular_ac', 'central_ac') and value > 0.90:
         return 'TEMPORAL_ANOMALY', f'AC consistency={value:.2f}, expected <0.90 (seasonal)'
     if value < 0.20 and count > 5:
-        return 'TEMPORAL_SPARSE', f'{count} activations in only {int(value * total_months)} months'
+        return 'TEMPORAL_SPARSE', f'{count} sessions in only {int(value * total_months)} months'
     return None, None
 
 
@@ -171,21 +172,21 @@ def _metric_magnitude_stability(
     by_type: Dict[str, List],
 ) -> Dict[str, Any]:
     """
-    For each device type, compute CV of magnitudes and phase switching rate.
+    For each device type, compute CV of session magnitudes and phase switching rate.
     """
     result = {}
     for dtype in CLASSIFIED_TYPES:
-        activations = by_type.get(dtype, [])
-        if not activations:
+        sessions = by_type.get(dtype, [])
+        if not sessions:
             continue
 
-        magnitudes = [abs(a.get('on_magnitude') or a.get('magnitude') or 0) for a in activations
-                      if a.get('on_magnitude') or a.get('magnitude')]
+        magnitudes = [abs(s.get('avg_cycle_magnitude_w', 0) or 0) for s in sessions
+                      if s.get('avg_cycle_magnitude_w')]
         if len(magnitudes) < 2:
             result[dtype] = {
                 'mean': round(magnitudes[0], 1) if magnitudes else 0,
                 'std': 0, 'cv': 0,
-                'phase_distribution': _phase_distribution(activations),
+                'phase_distribution': _phase_distribution_sessions(sessions),
                 'phase_switching_rate': 0,
                 'flag': None, 'flag_detail': None,
             }
@@ -195,7 +196,7 @@ def _metric_magnitude_stability(
         std_mag = np.std(magnitudes)
         cv = std_mag / mean_mag if mean_mag > 0 else 0
 
-        phase_dist = _phase_distribution(activations)
+        phase_dist = _phase_distribution_sessions(sessions)
         total_count = sum(phase_dist.values())
         max_phase_count = max(phase_dist.values()) if phase_dist else 0
         phase_switching = 1 - (max_phase_count / total_count) if total_count > 0 else 0
@@ -236,15 +237,16 @@ def _metric_duration_plausibility(
     by_type: Dict[str, List],
 ) -> Dict[str, Any]:
     """
-    For each device type, check if duration distributions match physical expectations.
+    For each device type, check if session durations match physical expectations.
     """
     result = {}
     for dtype in CLASSIFIED_TYPES:
-        activations = by_type.get(dtype, [])
-        if not activations:
+        sessions = by_type.get(dtype, [])
+        if not sessions:
             continue
 
-        durations = [a['duration'] for a in activations if 'duration' in a and a['duration'] > 0]
+        durations = [s.get('duration_minutes', 0) for s in sessions
+                     if s.get('duration_minutes') and s['duration_minutes'] > 0]
         if not durations:
             continue
 
@@ -252,47 +254,32 @@ def _metric_duration_plausibility(
         median_dur = float(np.median(durations_arr))
         q25 = float(np.percentile(durations_arr, 25))
         q75 = float(np.percentile(durations_arr, 75))
-        frac_below_25 = float(np.mean(durations_arr < 25))
-        frac_above_180 = float(np.mean(durations_arr > 180))
 
-        flag, flag_detail = _check_duration_flags(dtype, median_dur, frac_above_180, frac_below_25, durations_arr)
+        flag, flag_detail = _check_duration_flags(dtype, median_dur, durations_arr)
 
         entry = {
             'count': len(durations),
             'median': round(median_dur, 1),
             'q25': round(q25, 1),
             'q75': round(q75, 1),
-            'frac_below_25min': round(frac_below_25, 3),
-            'frac_above_180min': round(frac_above_180, 3),
             'flag': flag, 'flag_detail': flag_detail,
         }
-
-        # AC-specific: count initial runs vs cycling events
-        if dtype in ('regular_ac', 'central_ac'):
-            cycling = int(np.sum((durations_arr >= 3) & (durations_arr <= 30)))
-            initial = int(np.sum(durations_arr > 30))
-            entry['cycling_events'] = cycling
-            entry['initial_runs'] = initial
 
         result[dtype] = entry
 
     return result
 
 
-def _check_duration_flags(dtype, median_dur, frac_above_180, frac_below_25, durations):
-    """Check for duration distribution anomalies."""
+def _check_duration_flags(dtype, median_dur, durations):
+    """Check for session duration anomalies."""
     if dtype == 'boiler':
-        if median_dur > 180:
-            return 'DURATION_ANOMALY', f'boiler median={median_dur:.0f}min, expected <180'
-        if frac_below_25 > 0.05 and len(durations) > 5:
-            return 'DURATION_TOO_SHORT', f'boiler {frac_below_25:.0%} activations <25min'
+        if median_dur > 240:
+            return 'DURATION_ANOMALY', f'boiler median={median_dur:.0f}min, expected <240'
+        if median_dur < 15:
+            return 'DURATION_TOO_SHORT', f'boiler median={median_dur:.0f}min, expected >=15'
     if dtype in ('regular_ac', 'central_ac'):
-        if frac_above_180 > 0.10:
-            return 'DURATION_ANOMALY', f'AC {frac_above_180:.0%} activations >180min'
-        # Check for missing cycling mode
-        cycling = np.sum((durations >= 3) & (durations <= 30))
-        if cycling == 0 and len(durations) > 5:
-            return 'DURATION_MISSING_MODE', f'AC has no cycling events (3-30min), {len(durations)} total'
+        if median_dur < 5:
+            return 'DURATION_TOO_SHORT', f'AC median={median_dur:.0f}min, expected >=5'
     return None, None
 
 
@@ -305,7 +292,7 @@ def _metric_seasonal_coherence(
     months_with_data: set,
 ) -> Dict[str, Any]:
     """
-    Compare warm-month vs cool-month activation counts per device type.
+    Compare warm-month vs cool-month session counts per device type.
     """
     # Check we have data in both seasons
     has_warm = any(m[0] in WARM_MONTHS for m in months_with_data)
@@ -315,14 +302,14 @@ def _metric_seasonal_coherence(
 
     result = {}
     for dtype in CLASSIFIED_TYPES:
-        activations = by_type.get(dtype, [])
-        if not activations:
+        sessions = by_type.get(dtype, [])
+        if not sessions:
             continue
 
         warm_count = 0
         cool_count = 0
-        for a in activations:
-            month = _extract_month(a)
+        for s in sessions:
+            month = _extract_month(s)
             if month is None:
                 continue
             if month in WARM_MONTHS:
@@ -362,60 +349,49 @@ def _check_seasonal_flags(dtype, ratio, total_months):
 # ============================================================================
 
 def _metric_energy_conservation(
-    matched: List[Dict],
+    sessions: List[Dict],
     by_type: Dict[str, List],
 ) -> Dict[str, Any]:
     """
-    Check for energy conservation: no double-counting, no impossible values.
+    Check for energy conservation: no overlapping sessions on the same phase.
     """
-    # Cross-iteration overlap check
-    overlaps = _check_cross_iteration_overlaps(matched)
+    overlaps = _check_session_overlaps(sessions)
 
-    # Total classified energy (magnitude * duration in watt-minutes)
-    total_energy = 0
-    classified_energy = 0
-    for a in matched:
-        energy = abs(a.get('magnitude', 0)) * a.get('duration', 0)
-        total_energy += energy
-        if a.get('device_type', 'unclassified') != 'unclassified':
-            classified_energy += energy
-
-    classified_ratio = classified_energy / total_energy if total_energy > 0 else 0
+    # Total energy (magnitude * duration in watt-minutes)
+    total_energy = sum(
+        abs(s.get('avg_cycle_magnitude_w', 0) or 0) * (s.get('duration_minutes', 0) or 0)
+        for s in sessions
+    )
 
     flag = None
     flag_detail = None
     if overlaps > 0:
         flag = 'ENERGY_OVERLAP'
-        flag_detail = f'{overlaps} cross-iteration overlaps detected'
+        flag_detail = f'{overlaps} overlapping sessions detected'
 
     return {
-        'classified_energy_ratio': round(classified_ratio, 3),
         'total_energy_wattmin': round(total_energy, 0),
-        'classified_energy_wattmin': round(classified_energy, 0),
-        'cross_iteration_overlaps': overlaps,
+        'session_overlaps': overlaps,
         'flag': flag, 'flag_detail': flag_detail,
     }
 
 
-def _check_cross_iteration_overlaps(matched: List[Dict]) -> int:
-    """Count activations from different iterations that overlap on the same phase."""
+def _check_session_overlaps(sessions: List[Dict]) -> int:
+    """Count sessions that overlap in time on the same phase."""
     # Group by phase
     by_phase = defaultdict(list)
-    for a in matched:
-        phase = a.get('phase', '')
-        by_phase[phase].append(a)
+    for s in sessions:
+        for phase in (s.get('phases') or []):
+            by_phase[phase].append(s)
 
     overlap_count = 0
-    for phase, phase_acts in by_phase.items():
-        # Sort by start time
-        sorted_acts = sorted(phase_acts, key=lambda x: x.get('on_start', ''))
-        for i in range(len(sorted_acts) - 1):
-            a1 = sorted_acts[i]
-            a2 = sorted_acts[i + 1]
-            # Check if different iterations overlap
-            if a1.get('iteration') != a2.get('iteration'):
-                if a1.get('off_end', '') > a2.get('on_start', ''):
-                    overlap_count += 1
+    for phase, phase_sessions in by_phase.items():
+        sorted_sessions = sorted(phase_sessions, key=lambda x: x.get('start', ''))
+        for i in range(len(sorted_sessions) - 1):
+            s1 = sorted_sessions[i]
+            s2 = sorted_sessions[i + 1]
+            if s1.get('end', '') > s2.get('start', ''):
+                overlap_count += 1
 
     return overlap_count
 
@@ -485,39 +461,39 @@ def _score_to_tier(score: float) -> str:
 # Helpers
 # ============================================================================
 
-def _load_activations(experiment_dir: Path, house_id: str) -> Optional[List[Dict]]:
-    """Load device activations list from JSON."""
+def _load_sessions(experiment_dir: Path, house_id: str) -> Optional[List[Dict]]:
+    """Load device sessions list from JSON."""
     experiment_dir = Path(experiment_dir)
-    json_path = experiment_dir / "device_activations" / f"device_activations_{house_id}.json"
+    json_path = experiment_dir / "device_sessions" / f"device_sessions_{house_id}.json"
     if not json_path.exists():
-        json_path = experiment_dir / f"device_activations_{house_id}.json"
+        json_path = experiment_dir / f"device_sessions_{house_id}.json"
 
     if not json_path.exists():
-        logger.warning(f"Device activations JSON not found for house {house_id}")
+        logger.warning(f"Device sessions JSON not found for house {house_id}")
         return None
 
     try:
         with open(json_path, 'r') as f:
             data = json.load(f)
-        return data.get('activations', [])
+        return data.get('sessions', [])
     except Exception as e:
-        logger.warning(f"Failed to load device activations: {e}")
+        logger.warning(f"Failed to load device sessions: {e}")
         return None
 
 
-def _get_months_with_data(activations: List[Dict]) -> set:
-    """Get set of (month, year) tuples that have activations."""
+def _get_months_with_data(sessions: List[Dict]) -> set:
+    """Get set of (month, year) tuples that have sessions."""
     months = set()
-    for a in activations:
-        key = _extract_month_key(a)
+    for s in sessions:
+        key = _extract_month_key(s)
         if key:
             months.add(key)
     return months
 
 
-def _extract_month_key(activation: Dict):
-    """Extract (month, year) tuple from activation timestamps."""
-    ts = activation.get('on_start', '')
+def _extract_month_key(session: Dict):
+    """Extract (month, year) tuple from session start timestamp."""
+    ts = session.get('start', '')
     if not ts:
         return None
     try:
@@ -530,17 +506,18 @@ def _extract_month_key(activation: Dict):
         return None
 
 
-def _extract_month(activation: Dict) -> Optional[int]:
-    """Extract month number (1-12) from activation."""
-    key = _extract_month_key(activation)
+def _extract_month(session: Dict) -> Optional[int]:
+    """Extract month number (1-12) from session."""
+    key = _extract_month_key(session)
     return key[0] if key else None
 
 
-def _phase_distribution(activations: List[Dict]) -> Dict[str, int]:
-    """Count activations per phase."""
+def _phase_distribution_sessions(sessions: List[Dict]) -> Dict[str, int]:
+    """Count sessions per phase (using the first/primary phase)."""
     dist = defaultdict(int)
-    for a in activations:
-        phase = a.get('phase', 'unknown')
+    for s in sessions:
+        phases = s.get('phases') or []
+        phase = phases[0] if phases else 'unknown'
         dist[phase] += 1
     return dict(dist)
 
@@ -549,7 +526,7 @@ def _empty_quality(house_id: str) -> Dict[str, Any]:
     """Return empty quality structure."""
     return {
         'house_id': house_id,
-        'total_activations': 0,
+        'total_sessions': 0,
         'data_months': 0,
         'metrics': {
             'temporal_consistency': {},

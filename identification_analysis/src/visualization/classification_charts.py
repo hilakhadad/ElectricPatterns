@@ -56,7 +56,7 @@ def create_quality_section(quality: Dict[str, Any], confidence: Dict[str, Any]) 
     Returns:
         HTML string for the entire classification quality section.
     """
-    if not quality or quality.get('total_activations', 0) == 0:
+    if not quality or quality.get('total_sessions', 0) == 0:
         return ''
 
     parts = [
@@ -65,13 +65,9 @@ def create_quality_section(quality: Dict[str, Any], confidence: Dict[str, Any]) 
         '<div style="color: #555; margin-bottom: 16px; font-size: 0.85em; line-height: 1.5;">',
         '<p style="margin:0 0 8px;">',
         'This section evaluates <strong>how consistent the automatic device classification is</strong>, ',
-        'without relying on ground truth. Each detected ON\u2192OFF event was classified as a device type ',
-        '(boiler, central AC, regular AC, or unclassified) based on power, duration, and phase patterns. ',
-        'The metrics below check whether activations within each category behave consistently.',
-        '</p>',
-        '<p style="margin:0;font-size:0.92em;color:#888;">',
-        'Note: Each activation represents a single matched ON\u2192OFF pair (e.g., one compressor cycle for AC), ',
-        'not a full usage session.',
+        'without relying on ground truth. Each session (a full device usage period, e.g., a 30-minute boiler run ',
+        'or a multi-hour AC session with compressor cycling) was classified as a device type based on power, ',
+        'duration, and phase patterns. The metrics below check whether sessions within each category behave consistently.',
         '</p>',
         '</div>',
     ]
@@ -104,14 +100,11 @@ def _create_quality_summary_box(quality: Dict, confidence: Dict) -> str:
     score = quality.get('overall_quality_score', 0)
     tier = quality.get('quality_tier', 'poor')
     tier_color = QUALITY_TIER_COLORS.get(tier, GRAY)
-    total = quality.get('total_activations', 0)
+    total = quality.get('total_sessions', 0)
     flags_count = len(quality.get('flags', []))
 
     conf_summary = confidence.get('confidence_summary', {})
     mean_conf = conf_summary.get('mean', 0)
-    high_count = conf_summary.get('high_count', 0)
-    total_conf = confidence.get('total_activations', 0)
-    high_rate = high_count / total_conf if total_conf > 0 else 0
 
     return f'''
     <div style="display:grid;grid-template-columns:auto 1fr;gap:20px;align-items:center;
@@ -121,18 +114,14 @@ def _create_quality_summary_box(quality: Dict, confidence: Dict) -> str:
             <div style="font-size:0.9em;color:{tier_color};font-weight:600;text-transform:capitalize;">{tier}</div>
             <div style="font-size:0.75em;color:#999;margin-top:4px;">Quality Score</div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
             <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px;">
                 <div style="font-size:1.4em;font-weight:bold;">{total}</div>
-                <div style="font-size:0.75em;color:#666;">Activations</div>
+                <div style="font-size:0.75em;color:#666;">Classified Sessions</div>
             </div>
             <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px;">
                 <div style="font-size:1.4em;font-weight:bold;">{mean_conf:.0%}</div>
                 <div style="font-size:0.75em;color:#666;">Avg Confidence</div>
-            </div>
-            <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px;">
-                <div style="font-size:1.4em;font-weight:bold;">{high_rate:.0%}</div>
-                <div style="font-size:0.75em;color:#666;">High Confidence</div>
             </div>
             <div style="text-align:center;padding:8px;background:#f8f9fa;border-radius:6px;">
                 <div style="font-size:1.4em;font-weight:bold;color:{"#dc3545" if flags_count > 2 else "#e67e22" if flags_count > 0 else "#28a745"}">{flags_count}</div>
@@ -182,7 +171,7 @@ def _create_temporal_chart(temporal: Dict) -> str:
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
         <h3 style="font-size:0.95em;margin-bottom:4px;">Temporal Consistency</h3>
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
-            What fraction of months contain at least one activation of this type.
+            What fraction of months contain at least one session of this type.
             A device that appears consistently across months scores higher.
             Low values may indicate misclassification or seasonal-only usage.
         </p>
@@ -230,7 +219,7 @@ def _create_magnitude_chart(magnitude: Dict) -> str:
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
             Mean power (W) per device type, with standard deviation bars.
             CV (Coefficient of Variation) = std/mean &mdash; lower is better.
-            A real device should have consistent power draw across activations (CV &lt; 0.3).
+            A real device should have consistent power draw across sessions (CV &lt; 0.3).
         </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
@@ -277,11 +266,11 @@ def _create_duration_chart(duration: Dict) -> str:
 
     return f'''
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
-        <h3 style="font-size:0.95em;margin-bottom:4px;">Duration Plausibility</h3>
+        <h3 style="font-size:0.95em;margin-bottom:4px;">Session Duration</h3>
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
-            Median activation duration per device type, with IQR (25th&ndash;75th percentile) bars.
-            Expected ranges: boiler &ge;25 min, regular AC 3&ndash;30 min (compressor cycle), central AC 5&ndash;30 min.
-            Values far outside these ranges suggest misclassification.
+            Median session duration per device type, with IQR (25th&ndash;75th percentile) bars.
+            Expected ranges: boiler 15&ndash;240 min, AC sessions vary from minutes to hours.
+            Very short or very long sessions may suggest misclassification.
         </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>
@@ -336,7 +325,7 @@ def _create_seasonal_chart(seasonal: Dict) -> str:
     <div style="background:white;border:1px solid #dee2e6;border-radius:8px;padding:16px;">
         <h3 style="font-size:0.95em;margin-bottom:4px;">Seasonal Coherence</h3>
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
-            Activation count by season &mdash; warm (May&ndash;Oct) vs cool (Nov&ndash;Apr).
+            Session count by season &mdash; warm (May&ndash;Oct) vs cool (Nov&ndash;Apr).
             The ratio annotation shows warm/cool. AC should peak in warm months (ratio &gt;1),
             boiler in cool months (ratio &lt;1). Reversed patterns indicate possible misclassification.
         </p>
@@ -399,8 +388,7 @@ def _create_confidence_histogram(confidence: Dict) -> str:
         <p style="font-size:0.75em;color:#888;margin:0 0 8px;">
             Each activation receives a confidence score (0&ndash;1) based on magnitude consistency,
             duration fit, phase pattern, and match quality tag. Tiers: High (&ge;0.80), Medium (0.40&ndash;0.80),
-            Low (&lt;0.40). Dashed lines mark tier boundaries. A healthy classification has most activations
-            in the High tier.
+            Low (&lt;0.40). Dashed lines mark tier boundaries.
         </p>
         <div id="{chart_id}"></div>
         <script>Plotly.newPlot('{chart_id}', {traces}, {layout}, {{displayModeBar:false}});</script>

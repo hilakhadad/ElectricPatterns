@@ -713,17 +713,9 @@ def _build_house_html(
             <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
                 Summary of all detected device sessions. Each session is a group of temporally close
                 matched ON&rarr;OFF events on the same phase, classified by power, duration, and phase patterns.
+                Metrics are based on segregated minutes and estimated energy, not session counts.
             </p>
             {overview_html}
-        </section>
-
-        <section>
-            <h2>Confidence Distribution</h2>
-            <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
-                Confidence scores (0&ndash;1) for classified sessions based on how well each session
-                matches its device type criteria (duration, magnitude, isolation, phase consistency).
-            </p>
-            {confidence_html}
         </section>
 
         <section>
@@ -764,6 +756,15 @@ def _build_house_html(
                 not covered by the current heuristic rules.
             </p>
             {unclassified_html}
+        </section>
+
+        <section>
+            <h2>Confidence Distribution</h2>
+            <p style="color: #666; margin-bottom: 12px; font-size: 0.85em;">
+                Confidence scores for classified sessions (how well each session matches its device type)
+                and exclusion confidence for unknown sessions (how confidently they were ruled out as known devices).
+            </p>
+            {confidence_html}
         </section>
 
         {activations_section_html}
@@ -884,14 +885,15 @@ def generate_identification_aggregate_report(
             house_summaries.append({
                 'house_id': house_id,
                 'total_sessions': 0,
-                'classified': 0,
+                'total_minutes': 0,
+                'classified_minutes': 0,
                 'classified_pct': 0,
                 'avg_confidence': 0,
                 'quality_score': None,
                 'device_counts': {},
                 'report_link': report_link,
                 'days_span': 0,
-                'sessions_per_day': 0,
+                'classified_min_per_day': 0,
                 'spike_count': spike_count,
                 'pre_quality': pre_quality,
             })
@@ -899,8 +901,22 @@ def generate_identification_aggregate_report(
 
         # Collect per-house summary
         total = len(sessions)
-        classified = sum(1 for s in sessions if s.get('device_type') not in ('unknown', 'unclassified'))
-        conf_vals = [s.get('confidence', 0) for s in sessions if s.get('confidence')]
+        classified_count = sum(1 for s in sessions if s.get('device_type') not in ('unknown', 'unclassified'))
+
+        # Minutes-based classification
+        total_minutes = sum(s.get('duration_minutes', 0) or 0 for s in sessions)
+        classified_minutes = sum(
+            (s.get('duration_minutes', 0) or 0)
+            for s in sessions if s.get('device_type') not in ('unknown', 'unclassified')
+        )
+        classified_pct = (classified_minutes / total_minutes * 100) if total_minutes > 0 else 0
+
+        # Confidence of classified sessions only
+        conf_vals = [
+            s.get('confidence', 0)
+            for s in sessions
+            if s.get('confidence') and s.get('device_type') not in ('unknown', 'unclassified')
+        ]
         avg_conf = sum(conf_vals) / len(conf_vals) if conf_vals else 0
 
         # Device counts
@@ -909,15 +925,13 @@ def generate_identification_aggregate_report(
             dt = s.get('device_type', 'unknown')
             device_counts[dt] = device_counts.get(dt, 0) + 1
 
-        # Days span and sessions/day from session timestamps
-        session_dates = set()
+        # Days span and classified minutes/day from session timestamps
         min_date = max_date = None
         for s in sessions:
             start = s.get('start', '')
             if start:
                 try:
                     d = datetime.fromisoformat(str(start)).date()
-                    session_dates.add(d)
                     if min_date is None or d < min_date:
                         min_date = d
                     if max_date is None or d > max_date:
@@ -926,7 +940,7 @@ def generate_identification_aggregate_report(
                     pass
 
         days_span = (max_date - min_date).days + 1 if min_date and max_date else 0
-        sessions_per_day = total / days_span if days_span > 0 else 0
+        classified_min_per_day = classified_minutes / days_span if days_span > 0 else 0
 
         # Quality + confidence metrics — reuse from per-house phase if available
         cached = precomputed_metrics.get(house_id, {})
@@ -957,14 +971,15 @@ def generate_identification_aggregate_report(
         house_summaries.append({
             'house_id': house_id,
             'total_sessions': total,
-            'classified': classified,
-            'classified_pct': classified / total * 100 if total > 0 else 0,
+            'total_minutes': round(total_minutes, 1),
+            'classified_minutes': round(classified_minutes, 1),
+            'classified_pct': classified_pct,
             'avg_confidence': avg_conf,
             'quality_score': quality_score,
             'device_counts': device_counts,
             'report_link': report_link,
             'days_span': days_span,
-            'sessions_per_day': sessions_per_day,
+            'classified_min_per_day': classified_min_per_day,
             'spike_count': spike_count,
             'pre_quality': pre_quality,
         })
@@ -1071,7 +1086,7 @@ def _build_aggregate_html(
         c_color = '#28a745' if h['avg_confidence'] >= 0.8 else '#eab308' if h['avg_confidence'] >= 0.4 else '#e67e22'
 
         days = h.get('days_span', 0)
-        spd = h.get('sessions_per_day', 0)
+        cmd = h.get('classified_min_per_day', 0)
         spikes = h.get('spike_count', 0)
 
         table_rows += f'''
@@ -1080,7 +1095,7 @@ def _build_aggregate_html(
             <td style="{_td}text-align:center;" data-value="{days}">{days}</td>
             <td style="{_td}text-align:center;">{pq_html}</td>
             <td style="{_td}text-align:center;" data-value="{h['total_sessions']}">{h['total_sessions']}</td>
-            <td style="{_td}text-align:center;" data-value="{spd:.2f}">{spd:.1f}</td>
+            <td style="{_td}text-align:center;" data-value="{cmd:.2f}">{cmd:.1f}</td>
             <td style="{_td}text-align:center;" data-value="{spikes}">{spikes}</td>
             <td style="{_td}text-align:center;" data-value="{h['classified_pct']:.1f}">{h['classified_pct']:.0f}%</td>
             <td style="{_td}text-align:center;color:{c_color};font-weight:600;" data-value="{h['avg_confidence']:.3f}">{h['avg_confidence']:.2f}</td>
@@ -1175,7 +1190,7 @@ def _build_aggregate_html(
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;margin-bottom:20px;">
                 <div style="background:#d4edda;border-radius:8px;padding:16px;text-align:center;">
                     <div style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
-                    <div style="font-size:0.85em;color:#666;">Avg Classified</div>
+                    <div style="font-size:0.85em;color:#666;">Avg Classified (by minutes)</div>
                 </div>
                 <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
                     <div style="font-size:2em;font-weight:700;color:#667eea;">{avg_conf:.2f}</div>
@@ -1216,10 +1231,10 @@ def _build_aggregate_html(
                 <strong>Days</strong> = calendar days from first to last session |
                 <strong>Pre-Quality</strong> = input data quality from house pre-analysis |
                 <strong>Sessions</strong> = total device sessions found |
-                <strong>Sess/Day</strong> = average sessions per day (higher = more device activity detected) |
+                <strong>Cls min/day</strong> = classified minutes per day (boiler, AC time identified per day of data) |
                 <strong>Spikes</strong> = transient events filtered out (&lt;3 min) |
-                <strong>Classified</strong> = % of sessions assigned to a device type (boiler/AC) |
-                <strong>Confidence</strong> = avg classification confidence (0&ndash;1, how well each session matches its device criteria) |
+                <strong>Classified</strong> = % of segregated minutes assigned to a device type (by duration, not count) |
+                <strong>Confidence</strong> = avg classification confidence of classified sessions (0&ndash;1) |
                 <strong>Quality</strong> = internal consistency score (temporal, magnitude, duration, seasonal checks)
             </div>
             <div style="overflow-x:auto;">
@@ -1230,9 +1245,9 @@ def _build_aggregate_html(
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(1,'num')" title="Calendar days from first to last session">Days &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(2,'num')" title="Input data quality score from house pre-analysis">Pre-Quality &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(3,'num')" title="Total device sessions found">Sessions &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(4,'num')" title="Average sessions per day">Sess/Day &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(4,'num')" title="Classified minutes per day (boiler, AC, etc.)">Cls min/day &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(5,'num')" title="Transient events filtered (<3 min)">Spikes &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(6,'num')" title="% of sessions assigned to a device type">Classified &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(6,'num')" title="% of segregated minutes assigned to a device type">Classified &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(7,'num')" title="Average classification confidence (0-1)">Confidence &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(8,'num')" title="Internal consistency quality score (0-1)">Quality &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:left;white-space:nowrap;">Devices</th>
