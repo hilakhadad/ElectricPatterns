@@ -29,6 +29,8 @@ from metrics.cross_house_patterns import (
     save_cross_house_summary,
     CROSS_HOUSE_MAGNITUDE_TOLERANCE,
     CROSS_HOUSE_DURATION_TOLERANCE,
+    CROSS_HOUSE_MIN_CYCLES,
+    CROSS_HOUSE_MIN_SESSION_DURATION,
 )
 
 
@@ -36,8 +38,14 @@ from metrics.cross_house_patterns import (
 # Helpers
 # ============================================================================
 
-def _make_session(pattern_id, magnitude=1200, duration=40, confidence=0.8, phase='w1'):
-    """Create a minimal recurring_pattern session dict."""
+def _make_session(pattern_id, magnitude=1200, duration=40, confidence=0.8,
+                   phase='w1', cycle_count=3, session_duration=None):
+    """Create a minimal recurring_pattern session dict.
+
+    Default cycle_count=3 and session_duration=40 pass the cross-house filter
+    (cycles > 1 AND session duration > 10 min).
+    """
+    sess_dur = session_duration if session_duration is not None else float(duration)
     return {
         'session_id': f's_{pattern_id}_{magnitude}',
         'device_type': 'recurring_pattern',
@@ -55,9 +63,9 @@ def _make_session(pattern_id, magnitude=1200, duration=40, confidence=0.8, phase
         'classification_reason': f'recurring pattern #{pattern_id}',
         'start': '2020-01-01T08:00:00',
         'end': '2020-01-01T08:40:00',
-        'duration_minutes': float(duration),
+        'duration_minutes': sess_dur,
         'phases': [phase],
-        'cycle_count': 1,
+        'cycle_count': cycle_count,
         'avg_cycle_magnitude_w': float(magnitude),
     }
 
@@ -168,6 +176,32 @@ class TestExtractSignatures:
         houses = set(s['house_id'] for s in sigs)
         assert houses == {'305', '2008'}
 
+    def test_single_cycle_filtered_out(self, tmp_path):
+        """Single-cycle short sessions are excluded from cross-house matching."""
+        _write_house_json(tmp_path, '305', [
+            _make_session(1, magnitude=1200, duration=3, cycle_count=1, session_duration=3),
+        ])
+        sigs = _extract_pattern_signatures(tmp_path, ['305'])
+        assert len(sigs) == 0
+
+    def test_short_session_filtered_out(self, tmp_path):
+        """Multi-cycle but short session duration is excluded."""
+        _write_house_json(tmp_path, '305', [
+            _make_session(1, magnitude=1200, duration=3, cycle_count=3, session_duration=8),
+        ])
+        sigs = _extract_pattern_signatures(tmp_path, ['305'])
+        assert len(sigs) == 0
+
+    def test_multi_cycle_long_session_passes(self, tmp_path):
+        """Multi-cycle long sessions pass the filter."""
+        _write_house_json(tmp_path, '305', [
+            _make_session(1, magnitude=1200, duration=5, cycle_count=4, session_duration=35),
+        ])
+        sigs = _extract_pattern_signatures(tmp_path, ['305'])
+        assert len(sigs) == 1
+        assert sigs[0]['avg_cycle_count'] == 4.0
+        assert sigs[0]['avg_session_duration_min'] == 35.0
+
 
 # ============================================================================
 # Tests: Signature matching
@@ -234,6 +268,23 @@ class TestGroupSignatures:
         groups, unmatched = _group_signatures(sigs, 0.20, 0.30)
         assert len(groups) == 0
         assert len(unmatched) == 2
+
+    def test_same_house_not_grouped_via_third(self):
+        """Two patterns from house A can't end up in the same group via house B.
+
+        If per-house DBSCAN says pattern 1 and 2 in house A are different devices,
+        cross-house matching must not override that by grouping them together.
+        """
+        sigs = [
+            _make_signature('A', 1, 1200, 40),   # house A pattern 1
+            _make_signature('A', 2, 1250, 38),    # house A pattern 2 (similar but DBSCAN separated)
+            _make_signature('B', 1, 1220, 39),    # house B matches both A patterns
+        ]
+        groups, unmatched = _group_signatures(sigs, 0.20, 0.30)
+        # Only one A pattern can join B — the other stays unmatched
+        assert len(groups) == 1
+        assert len(groups[0]) == 2  # one from A + one from B
+        assert len(unmatched) == 1  # the other A pattern
 
     def test_no_transitive_chaining(self):
         """Complete-linkage prevents transitive chaining: A~B and B~C but A!~C -> no single group.

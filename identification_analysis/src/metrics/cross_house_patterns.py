@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 CROSS_HOUSE_MAGNITUDE_TOLERANCE = 0.20   # 20% relative magnitude difference
 CROSS_HOUSE_DURATION_TOLERANCE = 0.30    # 30% relative duration difference
 CROSS_HOUSE_MIN_HOUSES = 2              # minimum distinct houses to form global pattern
+CROSS_HOUSE_MIN_CYCLES = 2             # sessions must have >1 cycle (multi-cycle device)
+CROSS_HOUSE_MIN_SESSION_DURATION = 10.0 # sessions must average >10 min duration
 
 
 # ============================================================================
@@ -159,11 +161,25 @@ def _extract_pattern_signatures(
                 durs = [s.get('duration_minutes', 0) or 0 for s in group]
                 avg_dur = float(np.mean(durs)) if durs else 0
 
+            # Compute session-level stats for filtering
+            cycle_counts = [s.get('cycle_count', 1) or 1 for s in group]
+            session_durations = [s.get('duration_minutes', 0) or 0 for s in group]
+            avg_cycles = float(np.mean(cycle_counts))
+            avg_sess_dur = float(np.mean(session_durations))
+
+            # Filter: only multi-cycle, long-duration patterns qualify
+            if avg_cycles < CROSS_HOUSE_MIN_CYCLES:
+                continue
+            if avg_sess_dur < CROSS_HOUSE_MIN_SESSION_DURATION:
+                continue
+
             signatures.append({
                 'house_id': str(house_id),
                 'pattern_id': int(pid),
                 'avg_magnitude_w': float(avg_mag),
                 'avg_duration_min': float(avg_dur),
+                'avg_cycle_count': round(avg_cycles, 1),
+                'avg_session_duration_min': round(avg_sess_dur, 1),
                 'n_sessions': len(group),
                 'confidence': float(group[0].get('confidence', 0)),
             })
@@ -261,20 +277,27 @@ def _can_merge_complete(cluster_a, cluster_b, match_matrix, signatures):
     # type: (List[int], List[int], List[List[bool]], List[Dict]) -> bool
     """Check if two clusters can merge under complete linkage.
 
-    Every cross-house pair between the two clusters must be within tolerance.
-    Same-house pairs are allowed (they just aren't required to match).
+    Rules:
+    1. Every cross-house pair between the two clusters must be within tolerance.
+    2. No duplicate houses: merged cluster must have at most one signature per house.
+       (If per-house DBSCAN says two patterns are different devices, we respect that.)
+    3. Merged cluster must span 2+ distinct houses.
     """
+    # Rule 2: no duplicate houses in merged cluster
+    all_indices = cluster_a + cluster_b
+    houses = [signatures[i]['house_id'] for i in all_indices]
+    if len(houses) != len(set(houses)):
+        return False  # Would create duplicate house entries
+
+    # Rule 3: must span 2+ houses
+    if len(set(houses)) < 2:
+        return False
+
+    # Rule 1: every cross-house pair must match
     for i in cluster_a:
         for j in cluster_b:
-            if signatures[i]['house_id'] == signatures[j]['house_id']:
-                continue  # Same house — skip, don't require match
             if not match_matrix[i][j]:
-                return False  # At least one cross-house pair fails → can't merge
-    # Also check: merged cluster must span 2+ houses (at least one cross-house edge)
-    all_indices = cluster_a + cluster_b
-    houses = set(signatures[i]['house_id'] for i in all_indices)
-    if len(houses) < 2:
-        return False  # No cross-house edge exists
+                return False
     return True
 
 
