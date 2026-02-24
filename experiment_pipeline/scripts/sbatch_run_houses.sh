@@ -8,25 +8,41 @@
 #   MONTHLY:    Houses NOT in the file run month-level parallel jobs
 #               (SBATCH array for disaggregation + dependent identification job).
 #
-# Each house job starts with its own pre-analysis report, then runs the
-# pipeline, then generates per-house segregation + identification reports.
-# No house waits for other houses' pre-analysis to finish.
+# Execution order:
+#   Phase 1 — Per-house (all houses in parallel):
+#     Every house:      pre-analysis report (separate fast job)
+#     Sequential house: pipeline (M1+M2) → segregation + identification reports
+#     Monthly house:    month array (M1) → M2 + segregation + identification reports
 #
-# A final aggregate job (depends on all houses) verifies that all per-house
-# reports exist, then generates the combined reports for all three types.
+#   Phase 2 — Aggregates:
+#     agg_pre:   aggregate pre-analysis    (afterany ALL pre-analysis jobs — runs EARLY)
+#     agg_seg:   aggregate segregation     (afterany ALL pipeline jobs + agg_pre)
+#     ident_all: identification ALL houses (afterany agg_seg — runs LAST)
+#
+# Dependency chain:
+#   pre-analysis jobs (fast) ──→ agg_pre (runs while pipelines still running)
+#                                   │
+#   pipeline jobs (slow) ───────────┼──→ agg_seg ──→ ident_all
+#
+# TS (timestamp) is set ONCE when this script starts. All output paths use
+# the same TS so that re-running creates a new directory without overwriting.
 #
 # Output structure:
-#   {experiment}/reports/
-#     ├── house_report.html           — House pre-analysis aggregate
-#     ├── house_reports/              — House pre-analysis per-house
-#     ├── segregation_report.html     — M1 disaggregation aggregate
-#     ├── segregation_reports/        — M1 per-house
-#     ├── identification_report.html  — M2 identification aggregate
-#     └── identification_reports/     — M2 per-house
+#   {experiment}_{TS}/
+#     ├── run_0/ ... run_3/           — Pipeline output per iteration
+#     ├── device_sessions/            — M2 output (JSON per house)
+#     ├── house_timing.csv            — Timing log
+#     └── reports/
+#         ├── house_report.html           — Aggregate pre-analysis
+#         ├── house_reports/              — Per-house pre-analysis
+#         ├── segregation_report.html     — Aggregate segregation (M1)
+#         ├── segregation_reports/        — Per-house segregation
+#         ├── identification_report.html  — Aggregate identification (M2)
+#         └── identification_reports/     — Per-house identification
 #
 # Place completed_houses.txt next to this script (same directory).
 # Generate from a previous run's timing CSV:
-#     awk -F',' 'NR>1 && $7=="OK" {print $1}' house_timing.csv > scripts/completed_houses.txt
+#     awk -F',' 'NR>1 && $7=="OK" {print $1}' house_timing.csv > completed_houses.txt
 #
 # Or manually list fast house IDs, one per line.
 #
@@ -41,11 +57,11 @@ LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="exp015_hole_repair"
 
+# ---- TS set ONCE — used for ALL output paths ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-EXPERIMENT_OUTPUT="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments/${EXPERIMENT_NAME}"
+EXPERIMENT_OUTPUT="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments/${EXPERIMENT_NAME}_${TIMESTAMP}"
 
 # ---- Unified reports directory ----
-# All reports (house, segregation, identification) go into one directory.
 REPORTS_DIR="${EXPERIMENT_OUTPUT}/reports"
 
 # ---- Fast houses list ----
@@ -85,6 +101,7 @@ echo "============================================================"
 echo "Submitting pipeline jobs (with automatic report generation)"
 echo "============================================================"
 echo "Experiment:  $EXPERIMENT_NAME"
+echo "Timestamp:   $TIMESTAMP"
 echo "Data dir:    $DATA_DIR"
 echo "Output dir:  $EXPERIMENT_OUTPUT"
 echo "Reports dir: $REPORTS_DIR"
@@ -95,8 +112,9 @@ HOUSE_COUNT=0
 NORMAL_COUNT=0
 MONTHLY_COUNT=0
 
-# Track all final job IDs for the aggregate report dependency
-ALL_FINAL_JOBS=()
+# Track job IDs for Phase 2 dependencies
+ALL_PRE_JOBS=()     # Pre-analysis jobs (fast) — for agg_pre
+ALL_FINAL_JOBS=()   # Pipeline/final jobs (slow) — for agg_seg
 
 # Helper: count unique months for a house directory
 count_unique_months() {
@@ -133,50 +151,81 @@ for house_dir in "$DATA_DIR"/*/; do
         continue
     fi
 
-    if [[ -n "${COMPLETED[$house_id]}" ]]; then
-        # =============================================================
-        # FAST HOUSE — single sequential job:
-        #   1. Pre-analysis report (per-house)
-        #   2. Pipeline (disaggregation + identification)
-        #   3. Per-house segregation + identification reports
-        # =============================================================
-        JOB_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_house_${house_id}_XXXXXX.sh")
+    # =================================================================
+    # STEP 0: Pre-analysis report — ALWAYS a separate fast job
+    # (same for both sequential and monthly houses)
+    # =================================================================
+    PRE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_pre_${house_id}_XXXXXX.sh")
 
-        cat > "$JOB_SCRIPT" << EOF
+    cat > "$PRE_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=pipe_${house_id}
-#SBATCH --output=${LOG_DIR}/house_${house_id}_%j.out
-#SBATCH --error=${LOG_DIR}/house_${house_id}_%j.err
+#SBATCH --job-name=pre_${house_id}
+#SBATCH --output=${LOG_DIR}/pre_${house_id}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/pre_${house_id}_${TIMESTAMP}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --mem=4G
 #SBATCH --gres=gpu:0
-##SBATCH --time=08:00:00
+##SBATCH --time=00:30:00
 
 echo "========================================"
-echo "House ${house_id} (${N_MONTHS} months) — SEQUENTIAL"
+echo "House ${house_id} — PRE-ANALYSIS"
 echo "SLURM_JOBID: \$SLURM_JOBID"
-echo "Node: \$SLURM_JOB_NODELIST"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
 module load anaconda
 source activate nilm_new
 
-# --- Step 0: Per-house pre-analysis report ---
-echo "Generating pre-analysis report for house ${house_id}..."
 cd "${PROJECT_ROOT}/house_analysis"
 python scripts/run_analysis.py \
     --houses ${house_id} \
     --input-dir ${DATA_DIR} \
     --output-dir ${REPORTS_DIR} \
-    --publish house \
-    2>&1 | tail -3
-echo "  Pre-analysis report: exit \$?"
-echo ""
+    --publish house
 
-# --- Step 1: Pipeline ---
+echo "Pre-analysis done for house ${house_id}: \$(date)"
+EOF
+
+    PRE_JOB_ID=$(sbatch "$PRE_SCRIPT" | awk '{print $4}')
+    rm -f "$PRE_SCRIPT"
+    ALL_PRE_JOBS+=($PRE_JOB_ID)
+
+    if [[ -n "${COMPLETED[$house_id]}" ]]; then
+        # =============================================================
+        # FAST HOUSE — single sequential job (depends on pre-analysis):
+        #   1. Pipeline (disaggregation + identification)
+        #   2. Per-house segregation + identification reports
+        # =============================================================
+        JOB_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_house_${house_id}_XXXXXX.sh")
+
+        cat > "$JOB_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=pipe_${house_id}
+#SBATCH --output=${LOG_DIR}/house_${house_id}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/house_${house_id}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --gres=gpu:0
+##SBATCH --time=08:00:00
+#SBATCH --dependency=afterok:${PRE_JOB_ID}
+
+echo "========================================"
+echo "House ${house_id} (${N_MONTHS} months) — SEQUENTIAL"
+echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "Node: \$SLURM_JOB_NODELIST"
+echo "TS: ${TIMESTAMP}"
+echo "Start: \$(date)"
+echo "========================================"
+
+module load anaconda
+source activate nilm_new
+
+# --- Step 1: Pipeline (M1 + M2) ---
 cd "${PROJECT_ROOT}/experiment_pipeline"
 
 START_EPOCH=\$(date +%s)
@@ -206,7 +255,7 @@ echo "========================================"
 echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
 echo "========================================"
 
-# --- Step 2: Generate per-house reports (only on success) ---
+# --- Step 2: Per-house reports (only on success) ---
 if [ \$EXIT_CODE -eq 0 ]; then
     echo ""
     echo "Generating reports for house ${house_id}..."
@@ -242,50 +291,14 @@ EOF
         rm -f "$JOB_SCRIPT"
 
         ALL_FINAL_JOBS+=($JOB_ID)
-        echo "  House ${house_id} (${N_MONTHS} months) -> Job ${JOB_ID} [SEQUENTIAL]"
+        echo "  House ${house_id} (${N_MONTHS} months) -> Pre ${PRE_JOB_ID}, Pipe ${JOB_ID} [SEQUENTIAL]"
         NORMAL_COUNT=$((NORMAL_COUNT + 1))
 
     else
         # =============================================================
-        # SLOW HOUSE — pre-analysis + month-level parallel + ident + reports
+        # SLOW HOUSE — month-level parallel + M2 + reports
+        # Pre-analysis already submitted above.
         # =============================================================
-
-        # Step 0: Per-house pre-analysis (no dependencies, runs immediately)
-        PRE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_pre_${house_id}_XXXXXX.sh")
-
-        cat > "$PRE_SCRIPT" << EOF
-#!/bin/bash
-#SBATCH --job-name=pre_${house_id}
-#SBATCH --output=${LOG_DIR}/pre_${house_id}_%j.out
-#SBATCH --error=${LOG_DIR}/pre_${house_id}_%j.err
-#SBATCH --partition=main
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
-#SBATCH --gres=gpu:0
-##SBATCH --time=00:30:00
-
-echo "========================================"
-echo "House ${house_id} — PRE-ANALYSIS"
-echo "SLURM_JOBID: \$SLURM_JOBID"
-echo "Start: \$(date)"
-echo "========================================"
-
-module load anaconda
-source activate nilm_new
-
-cd "${PROJECT_ROOT}/house_analysis"
-python scripts/run_analysis.py \
-    --houses ${house_id} \
-    --input-dir ${DATA_DIR} \
-    --output-dir ${REPORTS_DIR} \
-    --publish house
-
-echo "Pre-analysis done for house ${house_id}: \$(date)"
-EOF
-
-        PRE_JOB_ID=$(sbatch "$PRE_SCRIPT" | awk '{print $4}')
-        rm -f "$PRE_SCRIPT"
 
         # Step 1: SBATCH array — one task per month (depends on pre-analysis)
         ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_months_${house_id}_XXXXXX.sh")
@@ -293,8 +306,8 @@ EOF
         cat > "$ARRAY_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=mon_${house_id}
-#SBATCH --output=${LOG_DIR}/month_${house_id}_%A_%a.out
-#SBATCH --error=${LOG_DIR}/month_${house_id}_%A_%a.err
+#SBATCH --output=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_%A_%a.out
+#SBATCH --error=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_%A_%a.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -309,6 +322,7 @@ echo "House ${house_id} — MONTHLY mode"
 echo "Month index: \$SLURM_ARRAY_TASK_ID / $((N_MONTHS - 1))"
 echo "Array job: \$SLURM_ARRAY_JOB_ID[\$SLURM_ARRAY_TASK_ID]"
 echo "Node: \$SLURM_JOB_NODELIST"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -330,14 +344,14 @@ EOF
         ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" | awk '{print $4}')
         rm -f "$ARRAY_SCRIPT"
 
-        # Step 2: Identification + reports — runs AFTER all months complete
-        IDENT_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_${house_id}_XXXXXX.sh")
+        # Step 2: M2 + reports — runs AFTER all months complete
+        POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_post_${house_id}_XXXXXX.sh")
 
-        cat > "$IDENT_SCRIPT" << EOF
+        cat > "$POST_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=ident_${house_id}
-#SBATCH --output=${LOG_DIR}/ident_${house_id}_%j.out
-#SBATCH --error=${LOG_DIR}/ident_${house_id}_%j.err
+#SBATCH --job-name=post_${house_id}
+#SBATCH --output=${LOG_DIR}/post_${house_id}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/post_${house_id}_${TIMESTAMP}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -347,9 +361,10 @@ EOF
 #SBATCH --dependency=afterok:${ARRAY_JOB_ID}
 
 echo "========================================"
-echo "House ${house_id} — IDENTIFICATION + REPORTS (post-monthly)"
+echo "House ${house_id} — M2 + REPORTS (post-monthly)"
 echo "SLURM_JOBID: \$SLURM_JOBID"
 echo "Depends on array job: ${ARRAY_JOB_ID}"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -419,11 +434,11 @@ fi
 echo "End: \$(date)"
 EOF
 
-        IDENT_JOB_ID=$(sbatch "$IDENT_SCRIPT" | awk '{print $4}')
-        rm -f "$IDENT_SCRIPT"
+        POST_JOB_ID=$(sbatch "$POST_SCRIPT" | awk '{print $4}')
+        rm -f "$POST_SCRIPT"
 
-        ALL_FINAL_JOBS+=($IDENT_JOB_ID)
-        echo "  House ${house_id} (${N_MONTHS} months) -> Pre ${PRE_JOB_ID}, Array ${ARRAY_JOB_ID} [${N_MONTHS} tasks], Ident+Reports ${IDENT_JOB_ID} [MONTHLY]"
+        ALL_FINAL_JOBS+=($POST_JOB_ID)
+        echo "  House ${house_id} (${N_MONTHS} months) -> Pre ${PRE_JOB_ID}, Array ${ARRAY_JOB_ID} [${N_MONTHS} tasks], Post ${POST_JOB_ID} [MONTHLY]"
         MONTHLY_COUNT=$((MONTHLY_COUNT + 1))
     fi
 
@@ -438,30 +453,36 @@ echo "  Monthly (slow):    ${MONTHLY_COUNT}"
 echo ""
 
 # =============================================================
-# FINAL: 3 separate aggregate jobs — each checks its own directory
-# and generates its aggregate independently.
+# PHASE 2: Aggregate reports
+#
+# Dependency chain:
+#   ALL_PRE_JOBS (fast) ──→ agg_pre (runs early, while pipelines still running)
+#                              │
+#   ALL_FINAL_JOBS (slow) ─────┼──→ agg_seg ──→ ident_all
 # =============================================================
 if [ ${#ALL_FINAL_JOBS[@]} -gt 0 ]; then
-    DEPS=$(IFS=:; echo "${ALL_FINAL_JOBS[*]}")
+    PRE_DEPS=$(IFS=:; echo "${ALL_PRE_JOBS[*]}")
+    FINAL_DEPS=$(IFS=:; echo "${ALL_FINAL_JOBS[*]}")
 
-    # --- Aggregate 1: House pre-analysis ---
+    # --- Aggregate 1: House pre-analysis (runs EARLY — only waits for pre-analysis jobs) ---
     AGG_HOUSE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_house_XXXXXX.sh")
     cat > "$AGG_HOUSE_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=agg_house
-#SBATCH --output=${LOG_DIR}/agg_house_%j.out
-#SBATCH --error=${LOG_DIR}/agg_house_%j.err
+#SBATCH --output=${LOG_DIR}/agg_house_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/agg_house_${TIMESTAMP}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 ##SBATCH --time=04:00:00
-#SBATCH --dependency=afterany:${DEPS}
+#SBATCH --dependency=afterany:${PRE_DEPS}
 
 echo "========================================"
 echo "AGGREGATE: House Pre-Analysis"
 echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -473,12 +494,10 @@ ACTUAL=\$(ls ${REPORTS_DIR}/house_reports/house_*.html 2>/dev/null | wc -l)
 echo "Per-house reports: \${ACTUAL} / \${EXPECTED}"
 
 if [ "\$ACTUAL" -lt "\$EXPECTED" ]; then
-    echo "WARNING: Missing \$((EXPECTED - ACTUAL)) house reports. Skipping aggregate."
-    echo "Run manually: cd ${PROJECT_ROOT}/house_analysis && python scripts/run_analysis.py --input-dir ${DATA_DIR} --output-dir ${REPORTS_DIR} --publish house"
-    exit 1
+    echo "WARNING: Missing \$((EXPECTED - ACTUAL)) house reports. Generating aggregate with available reports."
 fi
 
-echo "All present. Generating house_report.html..."
+echo "Generating house_report.html..."
 cd "${PROJECT_ROOT}/house_analysis"
 python scripts/run_analysis.py \
     --input-dir ${DATA_DIR} \
@@ -489,26 +508,27 @@ echo "Exit: \$? — End: \$(date)"
 EOF
     AGG_HOUSE_JOB=$(sbatch "$AGG_HOUSE_SCRIPT" | awk '{print $4}')
     rm -f "$AGG_HOUSE_SCRIPT"
-    echo "Aggregate house pre-analysis:  ${AGG_HOUSE_JOB}"
+    echo "Aggregate house pre-analysis:  ${AGG_HOUSE_JOB} (afterany pre-analysis jobs — runs EARLY)"
 
-    # --- Aggregate 2: Segregation (M1) ---
+    # --- Aggregate 2: Segregation (waits for ALL pipelines + agg_pre) ---
     AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
     cat > "$AGG_SEG_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=agg_segregation
-#SBATCH --output=${LOG_DIR}/agg_segregation_%j.out
-#SBATCH --error=${LOG_DIR}/agg_segregation_%j.err
+#SBATCH --job-name=agg_seg
+#SBATCH --output=${LOG_DIR}/agg_seg_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/agg_seg_${TIMESTAMP}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 ##SBATCH --time=04:00:00
-#SBATCH --dependency=afterany:${DEPS}
+#SBATCH --dependency=afterany:${FINAL_DEPS}:${AGG_HOUSE_JOB}
 
 echo "========================================"
 echo "AGGREGATE: Segregation (M1)"
 echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -520,12 +540,10 @@ ACTUAL=\$(ls ${REPORTS_DIR}/segregation_reports/house_*.html 2>/dev/null | wc -l
 echo "Per-house reports: \${ACTUAL} / \${EXPECTED}"
 
 if [ "\$ACTUAL" -lt "\$EXPECTED" ]; then
-    echo "WARNING: Missing \$((EXPECTED - ACTUAL)) segregation reports. Skipping aggregate."
-    echo "Run manually: cd ${PROJECT_ROOT}/disaggregation_analysis && python scripts/run_dynamic_report.py --experiment ${EXPERIMENT_OUTPUT} --output-dir ${REPORTS_DIR} --publish segregation"
-    exit 1
+    echo "WARNING: Missing \$((EXPECTED - ACTUAL)) segregation reports. Generating aggregate with available reports."
 fi
 
-echo "All present. Generating segregation_report.html..."
+echo "Generating segregation_report.html..."
 cd "${PROJECT_ROOT}/disaggregation_analysis"
 python scripts/run_dynamic_report.py \
     --experiment ${EXPERIMENT_OUTPUT} \
@@ -536,43 +554,38 @@ echo "Exit: \$? — End: \$(date)"
 EOF
     AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" | awk '{print $4}')
     rm -f "$AGG_SEG_SCRIPT"
-    echo "Aggregate segregation (M1):    ${AGG_SEG_JOB}"
+    echo "Aggregate segregation (M1):    ${AGG_SEG_JOB} (afterany all pipelines + agg_pre)"
 
-    # --- Aggregate 3: Identification (M2) ---
-    AGG_IDENT_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_ident_XXXXXX.sh")
-    cat > "$AGG_IDENT_SCRIPT" << EOF
+    # =============================================================
+    # PHASE 3: Identification report for ALL houses (runs LAST)
+    # Generates: per-house identification reports + cross-house
+    # pattern matching + aggregate identification report.
+    # =============================================================
+    IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
+    cat > "$IDENT_ALL_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=agg_identification
-#SBATCH --output=${LOG_DIR}/agg_identification_%j.out
-#SBATCH --error=${LOG_DIR}/agg_identification_%j.err
+#SBATCH --job-name=ident_all
+#SBATCH --output=${LOG_DIR}/ident_all_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/ident_all_${TIMESTAMP}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 ##SBATCH --time=04:00:00
-#SBATCH --dependency=afterany:${DEPS}
+#SBATCH --dependency=afterany:${AGG_SEG_JOB}
 
 echo "========================================"
-echo "AGGREGATE: Identification (M2)"
+echo "IDENTIFICATION REPORT — ALL HOUSES"
 echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
 module load anaconda
 source activate nilm_new
 
-EXPECTED=${HOUSE_COUNT}
-ACTUAL=\$(ls ${REPORTS_DIR}/identification_reports/house_*.html 2>/dev/null | wc -l)
-echo "Per-house reports: \${ACTUAL} / \${EXPECTED}"
-
-if [ "\$ACTUAL" -lt "\$EXPECTED" ]; then
-    echo "WARNING: Missing \$((EXPECTED - ACTUAL)) identification reports. Skipping aggregate."
-    echo "Run manually: cd ${PROJECT_ROOT}/identification_analysis && python scripts/run_identification_report.py --experiment ${EXPERIMENT_OUTPUT} --output-dir ${REPORTS_DIR} --publish identification"
-    exit 1
-fi
-
-echo "All present. Generating identification_report.html..."
+echo "Generating identification reports (per-house + cross-house + aggregate)..."
 cd "${PROJECT_ROOT}/identification_analysis"
 python scripts/run_identification_report.py \
     --experiment ${EXPERIMENT_OUTPUT} \
@@ -581,12 +594,13 @@ python scripts/run_identification_report.py \
     2>&1 | tail -10
 echo "Exit: \$? — End: \$(date)"
 EOF
-    AGG_IDENT_JOB=$(sbatch "$AGG_IDENT_SCRIPT" | awk '{print $4}')
-    rm -f "$AGG_IDENT_SCRIPT"
-    echo "Aggregate identification (M2): ${AGG_IDENT_JOB}"
+    IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" | awk '{print $4}')
+    rm -f "$IDENT_ALL_SCRIPT"
+    echo "Identification (ALL houses):   ${IDENT_ALL_JOB} (afterany agg_seg — runs LAST)"
 fi
 
 echo ""
+echo "============================================================"
 echo "Output:      ${EXPERIMENT_OUTPUT}"
 echo "Reports:     ${REPORTS_DIR}/"
 echo "Timing:      ${TIMING_FILE}"
