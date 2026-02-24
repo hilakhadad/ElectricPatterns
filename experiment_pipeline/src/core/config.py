@@ -264,7 +264,7 @@ LEGACY_EXPERIMENTS = {
 }
 
 
-# Default experiment — Settling + split-OFF + guided recovery (exp013)
+# Default experiment —
 DEFAULT_EXPERIMENT = 'exp015_hole_repair'
 
 
