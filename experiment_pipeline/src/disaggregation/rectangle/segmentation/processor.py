@@ -39,8 +39,10 @@ def process_phase_segmentation(
     remaining_col = f'remaining_power_{phase}'
 
     # Use existing diff column if present, otherwise create it
+    # Treat NaN as 0 before diff so power jumps at NaN-gap boundaries are
+    # fully captured (consistent with expander's NaN handling).
     if diff_col not in data.columns:
-        data[diff_col] = data[phase].diff().fillna(0)
+        data[diff_col] = data[phase].fillna(0).diff().fillna(0)
     data[remaining_col] = data[phase].values  # .values avoids SettingWithCopyWarning
 
     new_columns = {}
