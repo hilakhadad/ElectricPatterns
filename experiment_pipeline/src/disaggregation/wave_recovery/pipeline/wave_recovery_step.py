@@ -248,11 +248,11 @@ def process_wave_recovery(
 # ON magnitude ≠ OFF magnitude (APPROX/LOOSE) + long duration (EXTENDED)
 _HOLE_CANDIDATE_TAG_PATTERN = r'(?:APPROX|LOOSE).*EXTENDED'
 
-# Minimum fraction of event region that must be near-zero to count as a hole
-_HOLE_MIN_ZERO_FRACTION = 0.30
-
-# "Near-zero" threshold: remaining below this is considered part of the hole
-_HOLE_NEAR_ZERO_WATTS = 50
+# Hole detection: remaining during event must drop significantly from edge levels.
+# A real hole: remaining drops from edge level (before/after) to near-zero during event.
+# A correctly-extracted flat device (e.g. boiler): remaining is similar before/during/after.
+_HOLE_MIN_EDGE_WATTS = 100    # edges must have meaningful remaining (W)
+_HOLE_DROP_FRACTION = 0.50    # event median must be < 50% of edge level to count as hole
 
 
 def _repair_wave_holes(
@@ -321,15 +321,32 @@ def _repair_wave_holes(
         off_start = pd.Timestamp(match['off_start'])
         off_end = pd.Timestamp(match['off_end'])
 
-        # Check event region (between ON end and OFF start) for hole
+        # Hole detection: compare remaining DURING the event with remaining
+        # BEFORE (5 min before on_start) and AFTER (5 min after off_end).
+        # A real hole: remaining drops from meaningful edge level to near-zero.
+        # A correctly-extracted flat device (e.g. boiler): remaining is similar
+        # before, during, and after — no drop, no hole, no repair needed.
         event_mask = (remaining.index > on_end) & (remaining.index < off_start)
         event_region = remaining[event_mask]
 
         if len(event_region) < 3:
             continue
 
-        near_zero_frac = (event_region < _HOLE_NEAR_ZERO_WATTS).sum() / len(event_region)
-        if near_zero_frac < _HOLE_MIN_ZERO_FRACTION:
+        pre_mask = (remaining.index >= on_start - pd.Timedelta(minutes=5)) & \
+                   (remaining.index < on_start)
+        post_mask = (remaining.index > off_end) & \
+                    (remaining.index <= off_end + pd.Timedelta(minutes=5))
+        pre_level = float(remaining[pre_mask].median()) if pre_mask.any() else 0.0
+        post_level = float(remaining[post_mask].median()) if post_mask.any() else 0.0
+        edge_level = (pre_level + post_level) / 2 if (pre_mask.any() and post_mask.any()) \
+            else max(pre_level, post_level)
+        event_median = float(event_region.median())
+
+        if edge_level < _HOLE_MIN_EDGE_WATTS or event_median >= edge_level * _HOLE_DROP_FRACTION:
+            logger.info(
+                f"  Hole repair: no hole in {match.get('on_event_id', '?')} on {phase} "
+                f"(edge={edge_level:.0f}W, event_median={event_median:.0f}W) — skipping"
+            )
             continue
 
         # Found a hole! Build wave profile directly from match metadata.
@@ -337,7 +354,7 @@ def _repair_wave_holes(
         off_mag = abs(match.get('off_magnitude', 0))
         logger.info(
             f"  Hole repair: found hole in {match['on_event_id']} on {phase} "
-            f"({on_start} -> {off_end}, {near_zero_frac:.0%} near-zero, "
+            f"({on_start} -> {off_end}, edge={edge_level:.0f}W, event_median={event_median:.0f}W, "
             f"on_mag={on_mag:.0f}W, off_mag={off_mag:.0f}W)"
         )
 
