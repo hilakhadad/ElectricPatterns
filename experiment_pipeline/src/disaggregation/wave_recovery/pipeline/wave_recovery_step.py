@@ -253,6 +253,7 @@ _HOLE_CANDIDATE_TAG_PATTERN = r'(?:APPROX|LOOSE).*EXTENDED'
 # A correctly-extracted flat device (e.g. boiler): remaining is similar before/during/after.
 _HOLE_MIN_EDGE_WATTS = 100    # edges must have meaningful remaining (W)
 _HOLE_DROP_FRACTION = 0.50    # event median must be < 50% of edge level to count as hole
+_HOLE_MIN_EDGE_RATIO = 0.15   # edge level must be >= 15% of on_magnitude (filters background noise)
 
 
 def _repair_wave_holes(
@@ -332,6 +333,8 @@ def _repair_wave_holes(
         if len(event_region) < 3:
             continue
 
+        on_mag = abs(match['on_magnitude'])
+
         pre_mask = (remaining.index >= on_start - pd.Timedelta(minutes=5)) & \
                    (remaining.index < on_start)
         post_mask = (remaining.index > off_end) & \
@@ -342,15 +345,26 @@ def _repair_wave_holes(
             else max(pre_level, post_level)
         event_median = float(event_region.median())
 
-        if edge_level < _HOLE_MIN_EDGE_WATTS or event_median >= edge_level * _HOLE_DROP_FRACTION:
+        # Three conditions must ALL hold for a real hole:
+        # 1. Edge level is meaningful (>100W)
+        # 2. Event median dropped significantly from edge level (<50%)
+        # 3. Edge level is significant relative to device magnitude (>15%)
+        #    — filters out background variation (e.g. boiler: edge=125W, on_mag=2255W → 5.5%)
+        edge_ratio = edge_level / on_mag if on_mag > 0 else 0
+        no_hole = (
+            edge_level < _HOLE_MIN_EDGE_WATTS or
+            event_median >= edge_level * _HOLE_DROP_FRACTION or
+            edge_ratio < _HOLE_MIN_EDGE_RATIO
+        )
+        if no_hole:
             logger.info(
                 f"  Hole repair: no hole in {match.get('on_event_id', '?')} on {phase} "
-                f"(edge={edge_level:.0f}W, event_median={event_median:.0f}W) — skipping"
+                f"(edge={edge_level:.0f}W, event_median={event_median:.0f}W, "
+                f"edge/mag={edge_ratio:.1%}) — skipping"
             )
             continue
 
         # Found a hole! Build wave profile directly from match metadata.
-        on_mag = abs(match['on_magnitude'])
         off_mag = abs(match.get('off_magnitude', 0))
         logger.info(
             f"  Hole repair: found hole in {match['on_event_id']} on {phase} "
