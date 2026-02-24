@@ -1,2 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.pipeline.evaluation_summary."""
-from disaggregation.rectangle.pipeline.evaluation_summary import *
+# DEPRECATED: This shim is no longer used. Import from disaggregation.rectangle.pipeline.evaluation_summary instead.

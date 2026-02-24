@@ -9,16 +9,38 @@ experiment_pipeline/
 ├── src/
 │   ├── core/                  # Config, paths, data loading, NaN imputation
 │   ├── disaggregation/        # Module 1: signal-level processing
-│   │   ├── detection/         #   Sharp, gradual, near-threshold, tail extension
-│   │   ├── matching/          #   Stage 1 (clean), 2 (noisy), 3 (partial)
-│   │   ├── segmentation/      #   Power extraction & evaluation
-│   │   └── pipeline/          #   Orchestration steps (*_step.py)
+│   │   ├── rectangle/         #   Core disaggregation engine
+│   │   │   ├── detection/     #     Sharp, gradual, near-threshold, tail extension
+│   │   │   ├── matching/      #     Stage 1 (clean), 2 (noisy), 3 (partial)
+│   │   │   ├── segmentation/  #     Power extraction & evaluation
+│   │   │   └── pipeline/      #     Orchestration steps (detection, matching, segmentation, recovery)
+│   │   ├── wave_recovery/     #   AC wave pattern recovery
+│   │   │   ├── detection/     #     Wave pattern detector
+│   │   │   ├── matching/      #     Phase matcher for wave patterns
+│   │   │   ├── segmentation/  #     Wave segmentor & validator
+│   │   │   └── pipeline/      #     Wave recovery step, hole repair, I/O
+│   │   ├── detection/         #   (shim - delegates to rectangle/detection)
+│   │   ├── matching/          #   (shim - delegates to rectangle/matching)
+│   │   ├── segmentation/      #   (shim - delegates to rectangle/segmentation)
+│   │   └── pipeline/          #   (shim - delegates to rectangle/pipeline)
 │   ├── identification/        # Module 2: session-level classification
+│   │   ├── classifiers/       #   Device-specific classifiers
+│   │   │   ├── boiler_classifier.py      # Boiler + three-phase detection
+│   │   │   ├── ac_classifier.py          # AC cycling pattern detection
+│   │   │   ├── central_ac_classifier.py  # Cross-phase AC overlap
+│   │   │   ├── unknown_classifier.py     # Unknown confidence/reason
+│   │   │   └── scoring_utils.py          # Shared scoring functions
 │   │   ├── config.py          #   Constants (session gap, thresholds)
+│   │   ├── session_builder.py #   Build sessions from grouped events
 │   │   ├── session_grouper.py #   Load, filter spikes, group sessions
-│   │   ├── session_classifier.py  # Classify: boiler -> central_ac -> regular_ac
-│   │   └── session_output.py  #   JSON output builder
-│   ├── pipeline/              # Unified runner (runner.py)
+│   │   ├── session_classifier.py  # Classify-first orchestrator
+│   │   ├── session_output.py  #   JSON output builder
+│   │   ├── spike_stats.py     #   Spike filtering statistics
+│   │   └── cleanup.py         #   Intermediate file cleanup
+│   ├── pipeline/              # Orchestration
+│   │   ├── runner.py          #   Main entry point (run_pipeline)
+│   │   ├── pipeline_setup.py  #   Experiment setup and configuration
+│   │   └── post_pipeline.py   #   Post-pipeline processing
 │   └── visualization/         # Interactive & static plots
 ├── scripts/
 │   ├── test_single_house.py   # Run pipeline on one house
@@ -32,7 +54,7 @@ experiment_pipeline/
 ## Quick Start
 
 ```bash
-# Default: dynamic threshold (exp010)
+# Run on a single house
 python scripts/test_single_house.py --house_id 305
 
 # With options:
@@ -42,12 +64,12 @@ python scripts/test_single_house.py --house_id 305 --skip_visualization --minima
 python scripts/test_array_of_houses.py --skip_visualization
 
 # Standalone identification (M2 only, on existing M1 output):
-python scripts/run_identification.py --experiment_dir OUTPUT/experiments/exp010_... --house_id 305
+python scripts/run_identification.py --experiment_dir OUTPUT/experiments/<experiment_folder> --house_id 305
 ```
 
-Both `test_single_house.py` and `test_array_of_houses.py` auto-detect static vs dynamic mode from the experiment config.
-
 ## Module 1 - Disaggregation
+
+The disaggregation module processes the aggregate power signal iteratively at decreasing detection thresholds. Each iteration detects and removes large device events, making smaller devices visible in the remaining signal.
 
 ### Detection
 
@@ -84,50 +106,48 @@ Subtract device power -> **remaining power** for next iteration.
 
 Duration categories: **short** (<=2 min), **medium** (3-24 min), **long** (>=25 min)
 
+### Recovery Passes (post-iteration)
+
+After all threshold iterations complete, optional recovery passes extract additional device power:
+
+- **Guided recovery**: Uses M2 classification hints to re-detect events that were missed during standard iterations
+- **Wave recovery**: Detects AC cycling wave patterns directly from the remaining signal using pattern-based detection, phase matching, and specialized wave segmentation. Includes hole repair for gaps caused by partial extraction in earlier iterations.
+
 ## Module 2 - Identification
 
-Runs once after all M1 iterations complete.
+Runs once after all M1 iterations (and optional recovery passes) complete. Uses a **classify-first** approach: individual events are classified by device type before being grouped into sessions.
 
 ### Pipeline
 
 1. **Load all matches** from all iterations (all `matches/*.pkl` files)
-2. **Filter spikes** - Remove events < 3 minutes (transient noise from devices not targeted by identification)
-3. **Group into sessions** - Events on the same phase within 30-min gap belong to one session
-4. **Split sessions** - If short prefix events precede a significantly longer event (>=3x median, >=10 min), split them into separate sessions
-5. **Classify** (priority order):
-   - **Boiler**: >=1500W, >=15 min avg duration, <=2 events, isolated (no medium events nearby). Phase exclusivity enforced as post-processing (one boiler per household = one phase)
-   - **Central AC**: Must first pass AC-candidate pre-filter (>=800W, >=4 cycles, magnitude CV <=30%, duration CV <=40%, gap CV <=50%), then 2+ phases synchronized within 10 min
-   - **Regular AC**: 800W+, >=4 cycles (first >=15 min), magnitude CV <=20%. When overall CV fails due to multi-iteration mixing, falls back to per-iteration check
-   - **Unknown**: Doesn't match any criteria
-6. **Confidence scoring** - 0-1 score per session based on how well it matches classification criteria
-7. **JSON output** - `device_sessions_{house_id}.json` + backward-compatible `device_activations_{house_id}.json`
+2. **Filter spikes** - Remove transient events (very short duration noise from devices not targeted by identification)
+3. **Classify events** (priority order):
+   - **Boiler**: High-power (>=1500W), long duration (>=15 min avg), isolated (no compressor cycles nearby). Phase exclusivity enforced as post-processing (one boiler per household = one phase)
+   - **Three-phase device**: Boiler-candidate events that have simultaneous high-power events on other phases (likely EV charger or industrial equipment)
+   - **Central AC**: AC cycling sessions that overlap across 2+ phases synchronized within 10 min
+   - **Regular AC**: 800W+, cycling compressor pattern (>=4 cycles, first >=10 min), consistent magnitude (CV <=20%)
+   - **Unknown**: Remaining events grouped by time proximity (30-min gap)
+4. **Confidence scoring** - 0-1 score per session based on how well it matches classification criteria
+5. **JSON output** - `device_sessions_{house_id}.json` + backward-compatible `device_activations_{house_id}.json`
 
-## Experiments
+After observing recurring patterns across houses, additional device categories were added. Three-phase device (likely EV charger) was identified from synchronized high-power patterns across all 3 phases. Future work includes clustering unknown sessions to discover more device types.
 
-Defined in `src/core/config.py`:
+## Configuration
 
-**Active** (`EXPERIMENTS`):
+Detection parameters (thresholds, matching tolerances, session gaps) are configurable through experiment configurations defined in `src/core/config.py`. The pipeline supports multiple configurations and runs them with the appropriate settings.
 
-| Name | Threshold | Description |
-|------|-----------|-------------|
-| **exp010_dynamic_threshold** | [2000, 1500, 1100, 800] | Dynamic threshold + identification (DEFAULT) |
-| exp012_nan_imputation | [2000, 1500, 1100, 800] | exp010 + NaN gap filling |
-
-**Legacy** (`LEGACY_EXPERIMENTS`): exp000-exp008, accessed via `get_experiment(name, include_legacy=True)`.
-
-## Output Structure (Dynamic Mode)
+## Output Structure
 
 ```
-OUTPUT/experiments/exp010_dynamic_threshold_{timestamp}/
+OUTPUT/experiments/<experiment_name>_{timestamp}/
 ├── experiment_metadata.json
-├── run_0_th2000/house_{id}/
+├── run_0_th{threshold}/house_{id}/
 │   ├── on_off/on_off_{id}_{MM}_{YYYY}.pkl
 │   ├── matches/matches_{id}_{MM}_{YYYY}.pkl
 │   ├── unmatched_on/, unmatched_off/
 │   └── summarized/summarized_{id}_{MM}_{YYYY}.pkl
-├── run_1_th1500/house_{id}/...
-├── run_2_th1100/house_{id}/...
-├── run_3_th800/house_{id}/...
+├── run_1_th{threshold}/house_{id}/...
+├── ...
 ├── device_sessions/device_sessions_{id}.json
 ├── device_activations/device_activations_{id}.json
 ├── evaluation/dynamic_evaluation_summary_{id}.csv
@@ -141,4 +161,12 @@ OUTPUT/experiments/exp010_dynamic_threshold_{timestamp}/
 python -m pytest tests/ -v
 ```
 
-66 regression tests covering bugs #1-4, #12-16, missing summarized files, and NaN imputation.
+## Legacy
+
+### Experiments Table (removed 2026-02-24)
+
+Previously this section listed specific experiment names. Experiments are internal configuration details managed in `src/core/config.py`. The pipeline supports multiple experiment configurations with configurable thresholds, and legacy experiments are preserved for backward compatibility.
+
+### Boiler Classification Criteria (updated 2026-02-24)
+
+Previously documented a "<=2 events" constraint for boiler classification. This constraint has been removed. Boiler classification now uses: high power (>=1500W), long duration (>=15 min), and isolation from compressor cycling patterns.

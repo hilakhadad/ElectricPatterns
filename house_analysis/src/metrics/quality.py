@@ -238,296 +238,44 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['nan_continuity_label'] = nan_continuity
 
     # ===== QUALITY SCORING SYSTEM (0-100) =====
-    # Optimized based on correlation analysis with actual algorithm performance (161 houses).
-    # Categories weighted by predictive power (Spearman rho with algo scores):
-    #   1. Sharp Entry Rate (20 pts) - best single predictor (rho +0.576 overall, +0.606 th_expl)
-    #   2. Device Signature (15 pts) - boiler + AC patterns (rho +0.611 seg_ratio)
-    #   3. Power Profile (20 pts) - mid-range avoidance (rho -0.43)
-    #   4. Variability (20 pts) - CV predicts success (rho +0.41)
-    #   5. Data Volume (15 pts) - days_span + monthly balance (rho +0.25)
-    #   6. Data Integrity (10 pts) - NaN, negatives, critical gaps
-
-    DETECTION_THRESHOLD = 1300  # algorithm's detection threshold in watts
+    # Scoring logic extracted to quality_scoring.py for modularity.
+    # Import scoring sub-functions
+    from metrics.quality_scoring import (
+        _score_sharp_entry,
+        _score_device_signature,
+        _score_power_profile,
+        _score_variability,
+        _score_data_volume,
+        _score_data_integrity,
+        _apply_anomaly_penalties,
+        _compute_quality_tier,
+    )
 
     quality_score = 0
 
-    # ===== 1. SHARP ENTRY RATE (up to 20 points) =====
-    # Fraction of threshold crossings caused by single-minute sharp jumps >= threshold.
-    # Best predictor of algorithm success (rho=+0.576 overall, +0.606 th_explanation_rate).
-    # Houses where power reaches threshold via device stacking (gradual) score low here.
-    sharp_entry_score = 0
-
-    phase_sharp_rates = []
-    phase_jumps_total = 0
-    for col in phase_cols:
-        if col not in data.columns:
-            continue
-        phase_data = data[col].dropna()
-        if len(phase_data) < 2:
-            continue
-        diffs = phase_data.diff().dropna()
-        jumps = int((diffs.abs() >= DETECTION_THRESHOLD).sum())
-        phase_jumps_total += jumps
-        sr = _calc_sharp_entry_rate(phase_data.values, threshold=DETECTION_THRESHOLD)
-        if not np.isnan(sr):
-            phase_sharp_rates.append(sr)
-
-    if phase_sharp_rates:
-        avg_sharp_rate = np.mean(phase_sharp_rates)
-        # Calibrated on 161 houses: p5=0.15, p25=0.24, p50=0.32, p75=0.43, p90=0.52
-        if avg_sharp_rate < 0.15:
-            sharp_entry_score = avg_sharp_rate / 0.15 * 3  # 0-3 pts
-        elif avg_sharp_rate < 0.25:
-            sharp_entry_score = 3 + (avg_sharp_rate - 0.15) / 0.10 * 5  # 3-8 pts
-        elif avg_sharp_rate < 0.35:
-            sharp_entry_score = 8 + (avg_sharp_rate - 0.25) / 0.10 * 5  # 8-13 pts
-        elif avg_sharp_rate < 0.50:
-            sharp_entry_score = 13 + (avg_sharp_rate - 0.35) / 0.15 * 5  # 13-18 pts
-        else:
-            sharp_entry_score = 20
-    else:
-        avg_sharp_rate = 0.0
-
+    sharp_entry_score = _score_sharp_entry(data, phase_cols, metrics)
     quality_score += sharp_entry_score
-    metrics['sharp_entry_score'] = round(sharp_entry_score, 1)
-    metrics['sharp_entry_rate'] = round(avg_sharp_rate, 4)
-    metrics['total_threshold_jumps'] = phase_jumps_total
 
-    # ===== 2. DEVICE SIGNATURE (up to 15 points) =====
-    # Detects boiler-like (sustained high power) and AC-like (compressor cycles) patterns.
-    # Sustained high power: rho=+0.611 with seg_ratio (best predictor for segregation).
-    # Compressor cycles: rho=+0.424 with overall_score.
-
-    # --- Sustained High Power (boiler-like): up to 8 points ---
-    sustained_score = 0
-    phase_sustained = []
-    for col in phase_cols:
-        if col not in data.columns:
-            continue
-        vals = data[col].dropna().values
-        if len(vals) < 100:
-            continue
-        sh = _calc_sustained_high_power(vals)
-        if sh is not None and not np.isnan(sh):
-            phase_sustained.append(sh)
-
-    if phase_sustained:
-        avg_sustained = np.mean(phase_sustained)
-        # Calibrated on 161 houses: p5=0.39, p25=1.57, p50=3.17, p75=5.56, p90=9.06
-        if avg_sustained < 0.5:
-            sustained_score = avg_sustained / 0.5 * 1  # 0-1 pts
-        elif avg_sustained < 2.0:
-            sustained_score = 1 + (avg_sustained - 0.5) / 1.5 * 2  # 1-3 pts
-        elif avg_sustained < 5.0:
-            sustained_score = 3 + (avg_sustained - 2.0) / 3.0 * 3  # 3-6 pts
-        elif avg_sustained < 9.0:
-            sustained_score = 6 + (avg_sustained - 5.0) / 4.0 * 2  # 6-8 pts
-        else:
-            sustained_score = 8
-    else:
-        avg_sustained = 0.0
-
-    # --- Compressor Cycles (AC-like): up to 7 points ---
-    compressor_score = 0
-    phase_compressor = []
-    for col in phase_cols:
-        if col not in data.columns:
-            continue
-        vals = data[col].dropna().values
-        if len(vals) < 100:
-            continue
-        cc = _calc_compressor_cycles(vals)
-        if cc is not None and not np.isnan(cc):
-            phase_compressor.append(cc)
-
-    if phase_compressor:
-        avg_compressor = np.mean(phase_compressor)
-        # Calibrated on 161 houses: p5=2.04, p25=5.90, p50=10.66, p75=19.84, p90=36.72
-        if avg_compressor < 2.0:
-            compressor_score = avg_compressor / 2.0 * 1  # 0-1 pts
-        elif avg_compressor < 6.0:
-            compressor_score = 1 + (avg_compressor - 2.0) / 4.0 * 2  # 1-3 pts
-        elif avg_compressor < 15.0:
-            compressor_score = 3 + (avg_compressor - 6.0) / 9.0 * 2  # 3-5 pts
-        elif avg_compressor < 35.0:
-            compressor_score = 5 + (avg_compressor - 15.0) / 20.0 * 2  # 5-7 pts
-        else:
-            compressor_score = 7
-    else:
-        avg_compressor = 0.0
-
-    device_signature_score = sustained_score + compressor_score
+    device_signature_score = _score_device_signature(data, phase_cols, metrics)
     quality_score += device_signature_score
-    metrics['device_signature_score'] = round(device_signature_score, 1)
-    metrics['sustained_high_power_density'] = round(avg_sustained, 2)
-    metrics['compressor_cycle_density'] = round(avg_compressor, 2)
 
-    # ===== 3. POWER PROFILE (up to 20 points) =====
-    # Penalize houses stuck in 500-1000W range (rho=-0.43 with overall_score).
-    # Reward houses with clear low-power baseline (< 500W) allowing sharp events.
-    power_profile_score = 20
-
-    phase_mid_shares = []
-    phase_low_shares = []
-    for col in phase_cols:
-        if col not in data.columns:
-            continue
-        phase_data = data[col].dropna()
-        if len(phase_data) == 0:
-            continue
-        total = len(phase_data)
-        mid_share = ((phase_data >= 500) & (phase_data < 1000)).sum() / total
-        low_share = (phase_data < 100).sum() / total
-        phase_mid_shares.append(mid_share)
-        phase_low_shares.append(low_share)
-
-    if phase_mid_shares:
-        avg_mid_share = np.mean(phase_mid_shares)
-        avg_low_share = np.mean(phase_low_shares)
-
-        # Penalty for high mid-range share (500-1000W)
-        # Calibrated: avg_mid_share p25=0.10, p50=0.16, p75=0.22
-        if avg_mid_share > 0.10:
-            power_profile_score -= min(15, (avg_mid_share - 0.10) / 0.25 * 15)
-
-        # Penalty for very little quiet time (< 500W)
-        if avg_low_share < 0.15:
-            power_profile_score -= min(5, (0.15 - avg_low_share) / 0.15 * 5)
-
-    power_profile_score = max(0, power_profile_score)
+    power_profile_score = _score_power_profile(data, phase_cols, metrics)
     quality_score += power_profile_score
-    metrics['power_profile_score'] = round(power_profile_score, 1)
 
-    # ===== 4. VARIABILITY (up to 20 points) =====
-    # Higher CV = more device activity = better algorithm performance (rho=+0.41).
-    # This is the OPPOSITE of the old noise_score which penalized variability.
-    variability_score = 0
-
-    total_power = None
-    active_cols = [c for c in phase_cols if c in data.columns]
-    if active_cols:
-        total_power = data[active_cols].sum(axis=1)
-        total_mean = total_power.mean()
-        total_std = total_power.std()
-        total_cv = total_std / total_mean if total_mean > 0 else 0
-
-        # Calibrated on 171 houses: CV p10=0.98, p25=1.13, p50=1.40, p75=1.86, p90=2.65
-        # Higher CV = more device switching = better for algorithm
-        if total_cv < 0.8:
-            variability_score = total_cv / 0.8 * 4  # 0-4 pts
-        elif total_cv < 1.1:
-            variability_score = 4 + (total_cv - 0.8) / 0.3 * 4  # 4-8 pts
-        elif total_cv < 1.4:
-            variability_score = 8 + (total_cv - 1.1) / 0.3 * 4  # 8-12 pts
-        elif total_cv < 2.0:
-            variability_score = 12 + (total_cv - 1.4) / 0.6 * 5  # 12-17 pts
-        elif total_cv < 3.0:
-            variability_score = 17 + (total_cv - 2.0) / 1.0 * 3  # 17-20 pts
-        else:
-            variability_score = 20
-
+    variability_score = _score_variability(data, phase_cols, metrics)
     quality_score += variability_score
-    metrics['variability_score'] = round(variability_score, 1)
 
-    # ===== 5. DATA VOLUME (up to 15 points) =====
-    # More days of data = better (rho=+0.25), plus monthly balance (rho=+0.14).
-    data_volume_score = 0
-
-    # Days span: 0-30 days = 0-3 pts, 30-180 = 3-7 pts, 180-365 = 7-10 pts, 365+ = 10 pts
-    days = days_span if days_span is not None else 0
-    if days >= 365:
-        days_score = 10
-    elif days >= 180:
-        days_score = 7 + (days - 180) / 185 * 3
-    elif days >= 30:
-        days_score = 3 + (days - 30) / 150 * 4
-    else:
-        days_score = days / 30 * 3
-    data_volume_score += days_score
-
-    # Monthly coverage balance (up to 5 pts)
-    monthly_balance_pts = 5
-    if 'timestamp' in data.columns:
-        data_temp = data.copy()
-        data_temp['timestamp'] = pd.to_datetime(data_temp['timestamp'])
-        data_temp['year_month'] = data_temp['timestamp'].dt.to_period('M')
-
-        monthly_counts = data_temp.groupby('year_month').size()
-
-        if len(monthly_counts) > 1:
-            monthly_coverage = []
-            for period, count in monthly_counts.items():
-                expected = period.days_in_month * 24 * 60
-                monthly_coverage.append(min(count / expected, 1.0))
-
-            monthly_std = np.std(monthly_coverage)
-            monthly_balance_pts = max(0, 5 * (1 - monthly_std * 2))
-
-    data_volume_score += monthly_balance_pts
-    data_volume_score = min(15, data_volume_score)
-
+    data_volume_score = _score_data_volume(data, days_span, metrics)
     quality_score += data_volume_score
-    metrics['data_volume_score'] = round(data_volume_score, 1)
-    metrics['monthly_balance_score'] = round(monthly_balance_pts, 1)
 
-    # ===== 6. DATA INTEGRITY (up to 10 points) =====
-    # Basic data quality: NaN, negative values, critical gaps.
-    # Low weight because gaps/coverage barely correlate with performance (rho<0.05).
-    integrity_score = 10
-
-    # Penalty for NaN (up to 4 pts)
-    nan_pct = avg_nan_pct if avg_nan_pct is not None else 0
-    if nan_pct > 1:
-        integrity_score -= min(4, (nan_pct - 1) / 4 * 4)
-
-    # Penalty for many gaps > 2min (up to 3 pts)
-    gap_pct = pct_gaps_over_2min if pct_gaps_over_2min is not None else 0
-    if gap_pct > 5:
-        integrity_score -= min(3, (gap_pct - 5) / 10 * 3)
-
-    # Penalty for negative values (up to 3 pts)
-    total_negatives = sum(
-        metrics.get(f'{col}_negative_count', 0)
-        for col in phase_cols
+    integrity_score = _score_data_integrity(
+        data, phase_cols, metrics,
+        avg_nan_pct=avg_nan_pct,
+        pct_gaps_over_2min=pct_gaps_over_2min,
+        coverage_ratio=coverage_ratio,
+        anomaly_count=anomaly_count,
     )
-    if total_negatives > 100:
-        integrity_score -= min(3, (total_negatives - 100) / 500 * 3)
-
-    # Penalty for anomalous readings (up to 2 pts, taken from integrity budget)
-    # Extreme outliers (>20kW per phase) distort all statistics and charts
-    n_anomalies = anomaly_count if anomaly_count is not None else 0
-    if n_anomalies > 0:
-        integrity_score -= min(2, n_anomalies / 50 * 2)
-    metrics['anomaly_penalty'] = round(min(2, n_anomalies / 50 * 2) if n_anomalies > 0 else 0, 1)
-
-    # Penalty for zero-power months (up to 3 pts)
-    # Months where all 3 phases report 0W are a data acquisition failure.
-    zero_power_months = 0
-    total_months = 0
-    if 'timestamp' in data.columns:
-        data_zp = data.copy()
-        data_zp['timestamp'] = pd.to_datetime(data_zp['timestamp'])
-        data_zp['year_month'] = data_zp['timestamp'].dt.to_period('M')
-        for period, group in data_zp.groupby('year_month'):
-            total_months += 1
-            sum_cols = [c for c in phase_cols if c in group.columns]
-            if sum_cols:
-                total_power = group[sum_cols].sum(axis=1)
-                if total_power.mean() < 1.0 and len(group) > 100:
-                    zero_power_months += 1
-    metrics['zero_power_months'] = zero_power_months
-    metrics['total_months'] = total_months
-    if zero_power_months > 0 and total_months > 0:
-        zero_ratio = zero_power_months / total_months
-        zero_penalty = min(3, zero_ratio * 10)  # up to 3 pts
-        integrity_score -= zero_penalty
-        metrics['zero_power_penalty'] = round(zero_penalty, 1)
-    else:
-        metrics['zero_power_penalty'] = 0.0
-
-    integrity_score = max(0, integrity_score)
     quality_score += integrity_score
-    metrics['integrity_score'] = round(integrity_score, 1)
 
     # Keep old component names for backward compatibility in reports
     metrics['event_detectability_score'] = round(sharp_entry_score + device_signature_score, 1)
@@ -540,103 +288,11 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     base_score = max(0, min(100, round(quality_score, 1)))
     metrics['base_quality_score'] = base_score
 
-    # ===== ANOMALY PENALTIES =====
-    # Critical data-reliability issues that the 6-component score doesn't capture.
-    # Applied as additive deductions from the base score.
-    anomaly_penalties = []
+    # Apply anomaly penalties and compute final score
+    _apply_anomaly_penalties(metrics, coverage_ratio=coverage_ratio, anomaly_count=anomaly_count)
 
-    # Dead phase: devices on that phase are undetectable (-15 per phase)
-    n_dead = len(metrics.get('dead_phases', []))
-    if n_dead > 0:
-        dead_names = ', '.join(metrics['dead_phases'])
-        deduction = min(30, n_dead * 15)
-        anomaly_penalties.append({
-            'reason': f'dead_phase ({dead_names})',
-            'deduction': deduction,
-        })
-
-    # Faulty NaN phase: ≥10% NaN on active phase (-10 per phase)
-    n_faulty = len(metrics.get('faulty_nan_phases', []))
-    if n_faulty > 0:
-        faulty_names = ', '.join(metrics['faulty_nan_phases'])
-        deduction = min(20, n_faulty * 10)
-        anomaly_penalties.append({
-            'reason': f'faulty_nan_phase ({faulty_names})',
-            'deduction': deduction,
-        })
-
-    # Very low coverage (<50%): half the data is missing
-    cov = coverage_ratio if coverage_ratio is not None else 1.0
-    if cov < 0.50:
-        anomaly_penalties.append({
-            'reason': f'very_low_coverage ({cov:.0%})',
-            'deduction': 15,
-        })
-    elif cov < 0.70:
-        anomaly_penalties.append({
-            'reason': f'low_coverage ({cov:.0%})',
-            'deduction': 8,
-        })
-
-    # Extreme outliers (>20kW readings) distort all statistics and charts
-    if n_anomalies > 0:
-        anomaly_penalties.append({
-            'reason': f'extreme_outliers ({n_anomalies} readings >20kW)',
-            'deduction': 5,
-        })
-
-    # Fragmented / discontinuous data
-    total_loss = metrics.get('total_data_loss_pct', 0)
-    if total_loss >= 40:
-        anomaly_penalties.append({
-            'reason': f'fragmented_data ({total_loss:.0f}% data loss)',
-            'deduction': 10,
-        })
-    elif total_loss >= 15:
-        anomaly_penalties.append({
-            'reason': f'discontinuous_data ({total_loss:.0f}% data loss)',
-            'deduction': 5,
-        })
-
-    total_penalty = sum(p['deduction'] for p in anomaly_penalties)
-    final_score = max(0, base_score - total_penalty)
-
-    metrics['anomaly_penalties'] = total_penalty
-    metrics['anomaly_penalty_details'] = anomaly_penalties
-    metrics['quality_score'] = round(final_score, 1)
-
-    # ===== QUALITY FLAGS (per-component tags for insufficient scores) =====
-    # Each flag indicates the house doesn't meet sufficient level for that component.
-    # Thresholds calibrated at approximately the p25 level of 161 houses.
-    quality_flags = []
-    if sharp_entry_score < 8:  # ~p25 sharp entry rate
-        quality_flags.append('low_sharp_entry')
-    if device_signature_score < 4:  # ~p25 device signature
-        quality_flags.append('low_device_signature')
-    if power_profile_score < 10:  # below half of max
-        quality_flags.append('low_power_profile')
-    if variability_score < 8:  # ~p25 variability
-        quality_flags.append('low_variability')
-    if data_volume_score < 7:  # below half of max
-        quality_flags.append('low_data_volume')
-    if integrity_score < 5:  # below half of max
-        quality_flags.append('low_data_integrity')
-    metrics['quality_flags'] = quality_flags
-
-    # Mark faulty phases via label (keep numeric score for sorting/comparison)
-    # Split into 3 subcategories: dead_phase, high_nan, both
-    # "both" requires high NaN on NON-dead phases (dead phase NaN doesn't count)
-    has_dead = metrics['has_dead_phase']
-    has_nan = metrics['has_faulty_nan_phase']
-    non_dead_nan = [p for p in metrics['faulty_nan_phases'] if p not in metrics['dead_phases']]
-    if has_dead and len(non_dead_nan) > 0:
-        metrics['quality_label'] = 'faulty_both'
-    elif has_dead:
-        metrics['quality_label'] = 'faulty_dead_phase'
-    elif has_nan:
-        metrics['quality_label'] = 'faulty_high_nan'
-    else:
-        metrics['quality_label'] = None
+    # Compute quality flags and faulty phase label
+    _compute_quality_tier(metrics)
 
     return metrics
 

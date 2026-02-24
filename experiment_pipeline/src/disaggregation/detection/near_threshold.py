@@ -1,2 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.detection.near_threshold."""
-from disaggregation.rectangle.detection.near_threshold import *
+# DEPRECATED: This shim is no longer used. Import from disaggregation.rectangle.detection.near_threshold instead.

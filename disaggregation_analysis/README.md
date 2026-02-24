@@ -2,12 +2,10 @@
 
 Post-run analysis module for Module 1 (disaggregation) results. Generates interactive HTML reports with matching performance, segmentation quality, device detection patterns, and cross-house comparisons.
 
-Supports both dynamic threshold experiments (exp010, exp012) and static experiments (exp000-exp008).
-
 ## Quick Start
 
 ```bash
-# Dynamic threshold report (exp010) - most common
+# Dynamic threshold report — most common
 python scripts/run_dynamic_report.py
 
 # Specific experiment directory
@@ -21,10 +19,6 @@ python scripts/run_dynamic_report.py --pre-analysis <house_analysis_output_path>
 
 # Resume (only process new houses)
 python scripts/run_dynamic_report.py --resume <analysis_dir>
-
-# Static experiment analysis (legacy)
-python scripts/run_analysis.py --experiment <path>
-python scripts/run_analysis.py --full   # Full mode with pattern analysis
 ```
 
 ## Structure
@@ -32,16 +26,20 @@ python scripts/run_analysis.py --full   # Full mode with pattern analysis
 ```
 disaggregation_analysis/
 ├── scripts/
-│   ├── run_dynamic_report.py       # Dynamic threshold HTML reports
-│   ├── run_analysis.py             # General analysis (static + dynamic)
+│   ├── run_dynamic_report.py       # Main entry point — dynamic threshold HTML reports
 │   ├── regenerate_html.py          # Regenerate HTML from existing metrics
-│   └── generate_pattern_plots.py   # Generate pattern analysis plots
+│   ├── generate_pattern_plots.py   # Generate pattern analysis plots
+│   └── analyze_logs.py             # Analyze pipeline log files
 ├── src/
 │   ├── metrics/
 │   │   ├── matching.py             # Matching rate, tag distribution, duration
 │   │   ├── segmentation.py         # Power/minute ratios, negative values
 │   │   ├── events.py               # Event count, magnitude distribution
+│   │   ├── remaining_events.py     # Analysis of events remaining after pipeline
 │   │   ├── patterns.py             # Device detection (boiler, AC)
+│   │   ├── pattern_detection.py    # Pattern detection logic
+│   │   ├── pattern_ac.py           # AC-specific pattern metrics
+│   │   ├── pattern_boiler.py       # Boiler-specific pattern metrics
 │   │   ├── iterations.py           # Per-iteration progression
 │   │   ├── monthly.py              # Monthly breakdown
 │   │   ├── classification.py       # Device classification metrics
@@ -52,9 +50,15 @@ disaggregation_analysis/
 │   └── visualization/
 │       ├── dynamic_html_report.py  # HTML report generator (dynamic mode)
 │       ├── dynamic_report_charts.py    # Plotly charts for dynamic reports
-│       ├── html_report.py          # HTML report generator (static mode)
-│       └── charts.py               # Plotly charts (static mode)
-└── OUTPUT/                         # Generated reports (gitignored)
+│       ├── html_report.py          # HTML report generator (shared utilities)
+│       ├── html_report_single.py   # Single-house HTML report
+│       ├── html_report_aggregate.py    # Aggregate HTML report
+│       ├── html_templates.py       # HTML template components
+│       ├── pattern_plots.py        # Pattern visualization plots
+│       └── charts.py              # Plotly charts (shared)
+├── legacy/
+│   └── run_analysis.py            # Legacy static experiment analysis
+└── OUTPUT/                        # Generated reports (gitignored)
 ```
 
 ## Output
@@ -74,3 +78,10 @@ OUTPUT/analysis_{experiment_name}_{timestamp}/
 - **Iterations**: Per-iteration contribution, cumulative explained power
 - **Monthly**: Month-by-month breakdown, seasonal patterns
 - **Device detection**: Boiler/AC identification criteria (from patterns module)
+- **Remaining events**: Analysis of what remains after all pipeline iterations
+
+## Legacy
+
+### run_analysis.py (moved 2026-02-24)
+
+The original `scripts/run_analysis.py` entry point for static experiment analysis has been moved to `legacy/run_analysis.py`. Use `scripts/run_dynamic_report.py` for all current analysis.

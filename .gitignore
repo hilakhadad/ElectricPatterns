@@ -52,6 +52,7 @@ experiment_pipeline/scripts/_temp_*.py
 CLAUDE.md
 HOW_TO_USE.md
 agents/
+AGENTS.md
 
 # Analysis scripts (generated, not part of pipeline)
 analyze_*.py

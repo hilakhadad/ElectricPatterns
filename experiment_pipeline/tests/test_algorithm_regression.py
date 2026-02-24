@@ -32,17 +32,17 @@ _src_dir = str(Path(__file__).resolve().parent.parent / 'src')
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from disaggregation.matching.validator import (
+from disaggregation.rectangle.matching.validator import (
     is_valid_event_removal,
     MAX_EVENT_CV,
     MIN_EVENT_STABILITY_RATIO,
 )
-from disaggregation.matching.stage1 import find_match
-from disaggregation.segmentation.processor import _process_single_event, process_phase_segmentation
-from disaggregation.segmentation.restore import restore_skipped_to_unmatched
-from disaggregation.detection.gradual import detect_gradual_events
-from disaggregation.detection.near_threshold import detect_near_threshold_events
-from disaggregation.detection.tail_extension import extend_off_event_tails
+from disaggregation.rectangle.matching.stage1 import find_match
+from disaggregation.rectangle.segmentation.processor import _process_single_event, process_phase_segmentation
+from disaggregation.rectangle.segmentation.restore import restore_skipped_to_unmatched
+from disaggregation.rectangle.detection.gradual import detect_gradual_events
+from disaggregation.rectangle.detection.near_threshold import detect_near_threshold_events
+from disaggregation.rectangle.detection.tail_extension import extend_off_event_tails
 
 # ============================================================================
 # Helpers
@@ -1345,13 +1345,9 @@ class TestNearbyValue:
     """Bug #20: nearby_value stores power 1min before ON / 1min after OFF."""
 
     def _import_add_nearby_value(self):
-        """Import _add_nearby_value from pipeline.detection without triggering full package init."""
-        import importlib.util
-        mod_path = str(Path(__file__).resolve().parent.parent / 'src' / 'disaggregation' / 'pipeline' / 'detection_step.py')
-        spec = importlib.util.spec_from_file_location('pipeline_detection', mod_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod._add_nearby_value
+        """Import _add_nearby_value from pipeline.detection."""
+        from disaggregation.rectangle.pipeline.detection_step import _add_nearby_value
+        return _add_nearby_value
 
     def test_nearby_value_on_event(self):
         """ON event nearby_value must be power at (start - 1min)."""
@@ -1518,7 +1514,7 @@ class TestTailExtensionDetection:
 # Also handles OFF events with outgoing spikes (pre-shutdown power surge).
 # ============================================================================
 
-from disaggregation.detection.settling import (
+from disaggregation.rectangle.detection.settling import (
     extend_settling_on_events, extend_settling_off_events
 )
 
@@ -1728,7 +1724,7 @@ class TestSettlingExtension:
 # - Power between them is elevated (device still running)
 # ============================================================================
 
-from disaggregation.detection.merger import merge_split_off_events
+from disaggregation.rectangle.detection.merger import merge_split_off_events
 
 
 class TestSplitOffMerger:
@@ -1993,7 +1989,7 @@ class TestSettlingSegmentationIntegration:
 # we can search at a lower threshold within the session's time window.
 # ============================================================================
 
-from disaggregation.pipeline.recovery_step import (
+from disaggregation.rectangle.pipeline.recovery_step import (
     group_matches_into_sessions,
     find_recovery_templates,
     recover_cycles_from_remaining,

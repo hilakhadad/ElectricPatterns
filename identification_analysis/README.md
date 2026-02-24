@@ -5,7 +5,7 @@ Post-run analysis module for Module 2 (identification) results. Generates intera
 ## Quick Start
 
 ```bash
-# Latest exp010 experiment
+# Latest experiment
 python scripts/run_identification_report.py
 
 # Specific experiment directory
@@ -13,6 +13,9 @@ python scripts/run_identification_report.py --experiment <path>
 
 # Specific houses only
 python scripts/run_identification_report.py --houses 305,1234
+
+# Include pre-analysis quality scores
+python scripts/run_identification_report.py --pre-analysis <house_analysis_output_path>
 
 # Resume (only process new houses)
 python scripts/run_identification_report.py --resume <dir>
@@ -33,9 +36,16 @@ identification_analysis/
 │   │   ├── classification_quality.py   # Quality flags (phase consistency, magnitude, duration)
 │   │   ├── confidence_scoring.py       # Confidence score analysis and distribution
 │   │   └── population_statistics.py    # Cross-house statistics and outlier detection
+│   ├── reports/                        # Report generation utilities
 │   └── visualization/
 │       ├── identification_html_report.py   # Main HTML report generator
-│       ├── identification_charts.py        # Plotly charts (sessions, spikes, magnitude, timeline)
+│       ├── identification_html_single.py   # Single-house HTML report
+│       ├── identification_html_aggregate.py    # Aggregate HTML report
+│       ├── identification_charts.py        # Plotly charts (main module)
+│       ├── charts_device.py                # Device-type charts
+│       ├── charts_session.py               # Session charts
+│       ├── charts_confidence.py            # Confidence distribution charts
+│       ├── charts_spike.py                 # Spike filtering charts
 │       └── classification_charts.py        # Quality section charts
 ├── tests/
 │   ├── test_classification_quality.py  # Quality metric tests
@@ -57,17 +67,25 @@ OUTPUT/identification_{experiment_name}_{timestamp}/
 
 Each per-house report includes:
 
-1. **Spike Filter** - How many transient events (<3 min) were filtered and why
-2. **Session Overview** - Total sessions, breakdown by device type, average duration
+1. **Spike Filter** - How many transient events were filtered and why
+2. **Session Overview** - Total sessions, breakdown by device type (boiler, three-phase device, central AC, regular AC, unknown), average duration
 3. **Device Timeline** - Visual timeline of all classified sessions
 4. **Magnitude Analysis** - Power distribution per device type
 5. **Confidence Scoring** - Distribution of confidence scores, breakdown by criteria
 6. **Classification Quality** - Quality flags and potential issues
+
+### Device Classification Categories
+
+| Category | Description |
+|----------|-------------|
+| **Boiler** | Single-phase high-power heating element |
+| **Three-phase device** | Synchronized events across all 3 phases (likely EV charger) |
+| **Central AC** | Multi-phase synchronized AC compressor cycles |
+| **Regular AC** | Single-phase cycling compressor pattern |
+| **Unknown** | Does not match any known device signature |
 
 ## Tests
 
 ```bash
 python -m pytest tests/ -v
 ```
-
-40 tests covering classification quality metrics and population statistics.

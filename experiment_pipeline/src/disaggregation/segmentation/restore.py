@@ -1,2 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.segmentation.restore."""
-from disaggregation.rectangle.segmentation.restore import *
+# DEPRECATED: This shim is no longer used. Import from disaggregation.rectangle.segmentation.restore instead.

@@ -26,6 +26,7 @@ DEVICE_COLORS = {
     'boiler': '#007bff',
     'central_ac': '#dc3545',
     'regular_ac': '#e67e22',
+    'recurring_pattern': '#17a2b8',
     'unclassified': '#6c757d',
 }
 

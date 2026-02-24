@@ -13,7 +13,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-DEVICE_TYPES = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
+DEVICE_TYPES = ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern', 'unclassified']
 
 
 def calculate_classification_metrics(

@@ -2,6 +2,11 @@
 Detection pipeline step.
 
 Detects ON/OFF events from power consumption data.
+
+Implementation is split across:
+  - detection_step.py (this file) -- main process_detection() orchestration
+  - detection_config.py -- config extraction/defaults logic
+  - detection_postprocess.py -- post-processing: settling, near-threshold, tail extension
 """
 import pandas as pd
 import numpy as np
@@ -13,7 +18,12 @@ import core
 from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized
 from disaggregation.rectangle.detection import merge_overlapping_events, merge_consecutive_on_events, merge_consecutive_off_events, expand_event
 from disaggregation.rectangle.detection.gradual import detect_gradual_events
-from disaggregation.rectangle.detection.near_threshold import detect_near_threshold_events
+
+from .detection_config import extract_detection_params, format_config_log
+from .detection_postprocess import (
+    apply_near_threshold, apply_tail_extension,
+    apply_split_off_merger, apply_settling_extension,
+)
 
 
 def _calc_magnitude(df: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.Timestamp) -> float:
@@ -70,47 +80,9 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
     logger.info(f"Detection process for house {house_id}, run {run_number}, threshold {threshold}W")
 
     # Extract config parameters
+    params = extract_detection_params(config)
     if config:
-        off_threshold_factor = config.off_threshold_factor
-        use_gradual = config.use_gradual_detection
-        gradual_window = config.gradual_window_minutes
-        progressive_search = getattr(config, 'progressive_window_search', False)
-        use_near_threshold = getattr(config, 'use_near_threshold_detection', False)
-        near_threshold_min_factor = getattr(config, 'near_threshold_min_factor', 0.85)
-        near_threshold_max_extend = getattr(config, 'near_threshold_max_extend', 3)
-        use_nan_imputation = getattr(config, 'use_nan_imputation', False)
-        use_tail_extension = getattr(config, 'use_tail_extension', False)
-        tail_max_minutes = getattr(config, 'tail_max_extension_minutes', 10)
-        tail_min_residual = getattr(config, 'tail_min_residual', 100)
-        tail_noise_tolerance = getattr(config, 'tail_noise_tolerance', 30)
-        tail_min_gain = getattr(config, 'tail_min_gain', 100)
-        tail_min_residual_fraction = getattr(config, 'tail_min_residual_fraction', 0.05)
-        use_settling_extension = getattr(config, 'use_settling_extension', True)
-        settling_factor = getattr(config, 'settling_factor', 0.7)
-        settling_max_minutes = getattr(config, 'settling_max_minutes', 5)
-        use_split_off_merger = getattr(config, 'use_split_off_merger', True)
-        split_off_max_gap_minutes = getattr(config, 'split_off_max_gap_minutes', 2)
-        logger.info(f"Config: off_factor={off_threshold_factor}, gradual={use_gradual}, progressive={progressive_search}, near_threshold={use_near_threshold}, tail_extension={use_tail_extension}, nan_imputation={use_nan_imputation}, settling={use_settling_extension}, split_off={use_split_off_merger}")
-    else:
-        off_threshold_factor = 1.0
-        use_gradual = True
-        gradual_window = 3
-        progressive_search = False
-        use_near_threshold = False
-        near_threshold_min_factor = 0.85
-        near_threshold_max_extend = 3
-        use_nan_imputation = False
-        use_tail_extension = False
-        tail_max_minutes = 10
-        tail_min_residual = 100
-        tail_noise_tolerance = 30
-        tail_min_gain = 100
-        tail_min_residual_fraction = 0.05
-        use_settling_extension = False
-        settling_factor = 0.7
-        settling_max_minutes = 5
-        use_split_off_merger = False
-        split_off_max_gap_minutes = 2
+        logger.info(format_config_log(params))
 
     # Determine input path: run 0 reads raw data, run N reads remaining from summarized of run N-1
     try:
@@ -174,8 +146,8 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
 
         data = data.sort_values('timestamp').reset_index(drop=True)
 
-        # NaN imputation — fill short gaps to prevent false diff() jumps
-        if use_nan_imputation:
+        # NaN imputation -- fill short gaps to prevent false diff() jumps
+        if params['use_nan_imputation']:
             from core.nan_imputation import impute_nan_gaps
             data = impute_nan_gaps(data, phase_cols=phases, logger=logger)
 
@@ -185,22 +157,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
 
         for phase in phases:
             on_events, off_events = _detect_phase_events(
-                data, data_indexed, phase, threshold, off_threshold_factor,
-                use_gradual, gradual_window, progressive_search, logger,
-                use_near_threshold=use_near_threshold,
-                near_threshold_min_factor=near_threshold_min_factor,
-                near_threshold_max_extend=near_threshold_max_extend,
-                use_tail_extension=use_tail_extension,
-                tail_max_minutes=tail_max_minutes,
-                tail_min_residual=tail_min_residual,
-                tail_noise_tolerance=tail_noise_tolerance,
-                tail_min_gain=tail_min_gain,
-                tail_min_residual_fraction=tail_min_residual_fraction,
-                use_settling_extension=use_settling_extension,
-                settling_factor=settling_factor,
-                settling_max_minutes=settling_max_minutes,
-                use_split_off_merger=use_split_off_merger,
-                split_off_max_gap_minutes=split_off_max_gap_minutes,
+                data, data_indexed, phase, threshold, params, logger,
             )
 
             on_events['phase'] = phase
@@ -260,22 +217,22 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
     logger.info(f"Detection completed for house {house_id}, run {run_number}")
 
 
-def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_factor,
-                         use_gradual, gradual_window, progressive_search, logger,
-                         use_near_threshold=False, near_threshold_min_factor=0.85,
-                         near_threshold_max_extend=3,
-                         use_tail_extension=False, tail_max_minutes=10,
-                         tail_min_residual=100, tail_noise_tolerance=30,
-                         tail_min_gain=100, tail_min_residual_fraction=0.05,
-                         use_settling_extension=True, settling_factor=0.7,
-                         settling_max_minutes=5,
-                         use_split_off_merger=True, split_off_max_gap_minutes=2):
+def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
     """Detect ON and OFF events for a single phase.
 
     Args:
         data: DataFrame with timestamp column (for boolean indexing)
         data_indexed: Same DataFrame but with timestamp as index (for fast lookups)
+        phase: Phase column name (w1, w2, w3)
+        threshold: Detection threshold in watts
+        params: Detection parameters dict from extract_detection_params()
+        logger: Logger instance
     """
+    off_threshold_factor = params['off_threshold_factor']
+    use_gradual = params['use_gradual']
+    gradual_window = params['gradual_window']
+    progressive_search = params['progressive_search']
+
     diff_col = f'{phase}_diff'
     on_col = f"{phase}_{threshold}_on"
     off_col = f"{phase}_{threshold}_off"
@@ -367,77 +324,37 @@ def _detect_phase_events(data, data_indexed, phase, threshold, off_threshold_fac
         if len(results_off) < before_off:
             logger.info(f"    Merged {before_off - len(results_off)} overlapping OFF events")
 
-    # Near-threshold detection
-    if use_near_threshold:
-        near_on, near_off = detect_near_threshold_events(
-            data, data_indexed, diff_col, threshold, off_threshold,
-            results_on, results_off, phase,
-            min_factor=near_threshold_min_factor,
-            max_extend_minutes=near_threshold_max_extend
+    # Post-processing steps (near-threshold, tail extension, split-off, settling)
+    if params['use_near_threshold']:
+        results_on, results_off = apply_near_threshold(
+            results_on, results_off, data, data_indexed, diff_col,
+            threshold, off_threshold, phase, logger,
+            min_factor=params['near_threshold_min_factor'],
+            max_extend_minutes=params['near_threshold_max_extend'],
         )
-        if len(near_on) > 0:
-            logger.info(f"    Found {len(near_on)} near-threshold ON events for {phase}")
-            results_on = pd.concat([results_on, near_on], ignore_index=True)
-        if len(near_off) > 0:
-            logger.info(f"    Found {len(near_off)} near-threshold OFF events for {phase}")
-            results_off = pd.concat([results_off, near_off], ignore_index=True)
-        # Merge overlapping in case near-threshold events overlap with existing
-        results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase)
-        results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase)
 
-    # Tail extension (OFF events only - devices have soft landing but sharp ON)
-    if use_tail_extension:
-        from disaggregation.rectangle.detection.tail_extension import extend_off_event_tails
-        results_off = extend_off_event_tails(
-            results_off, data_indexed, phase,
-            max_minutes=tail_max_minutes, min_residual=tail_min_residual,
-            noise_tolerance=tail_noise_tolerance, min_gain=tail_min_gain,
-            min_residual_fraction=tail_min_residual_fraction
+    if params['use_tail_extension']:
+        results_off = apply_tail_extension(
+            results_off, data_indexed, phase, logger,
+            max_minutes=params['tail_max_minutes'],
+            min_residual=params['tail_min_residual'],
+            noise_tolerance=params['tail_noise_tolerance'],
+            min_gain=params['tail_min_gain'],
+            min_residual_fraction=params['tail_min_residual_fraction'],
         )
-        extended = results_off['tail_extended'].sum() if 'tail_extended' in results_off.columns else 0
-        if extended > 0:
-            logger.info(f"    Tail extended: {extended} OFF events for {phase}")
 
-    # Split-OFF merger (merge split device shutdowns before settling extension)
-    if use_split_off_merger and len(results_off) > 1:
-        from disaggregation.rectangle.detection.merger import merge_split_off_events
-        before_merge = len(results_off)
-        results_off = merge_split_off_events(
-            results_off, results_on,
-            max_gap_minutes=split_off_max_gap_minutes,
-            data=data_indexed, phase=phase
+    if params['use_split_off_merger'] and len(results_off) > 1:
+        results_off = apply_split_off_merger(
+            results_off, results_on, data_indexed, phase, logger,
+            max_gap_minutes=params['split_off_max_gap_minutes'],
         )
-        if len(results_off) < before_merge:
-            logger.info(f"    Split-OFF merged: {before_merge - len(results_off)} events for {phase}")
 
-    # Settling extension (extend ON/OFF boundaries through transient settling periods)
-    if use_settling_extension:
-        from disaggregation.rectangle.detection.settling import (
-            extend_settling_on_events, extend_settling_off_events
+    if params['use_settling_extension']:
+        results_on, results_off = apply_settling_extension(
+            results_on, results_off, data_indexed, phase, logger,
+            settling_factor=params['settling_factor'],
+            max_settling_minutes=params['settling_max_minutes'],
         )
-        if len(results_on) > 0:
-            before_mags = results_on['magnitude'].copy()
-            results_on = extend_settling_on_events(
-                results_on, data_indexed, phase,
-                off_events=results_off,
-                settling_factor=settling_factor,
-                max_settling_minutes=settling_max_minutes,
-            )
-            extended_count = (results_on['magnitude'] != before_mags.values).sum() if len(results_on) == len(before_mags) else 0
-            if extended_count > 0:
-                logger.info(f"    Settling extended: {extended_count} ON events for {phase}")
-
-        if len(results_off) > 0:
-            before_mags = results_off['magnitude'].copy()
-            results_off = extend_settling_off_events(
-                results_off, data_indexed, phase,
-                on_events=results_on,
-                settling_factor=settling_factor,
-                max_settling_minutes=settling_max_minutes,
-            )
-            extended_count = (results_off['magnitude'] != before_mags.values).sum() if len(results_off) == len(before_mags) else 0
-            if extended_count > 0:
-                logger.info(f"    Settling extended: {extended_count} OFF events for {phase}")
 
     # Add duration
     results_on['duration'] = (results_on['end'] - results_on['start']).dt.total_seconds() / 60

@@ -1,2 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.detection.settling."""
-from disaggregation.rectangle.detection.settling import *
+# DEPRECATED: This shim is no longer used. Import from disaggregation.rectangle.detection.settling instead.

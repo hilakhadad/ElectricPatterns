@@ -1,18 +1,23 @@
 """
-Wave recovery pipeline step — Post-M1 orchestration.
+Wave recovery pipeline step -- Post-M1 orchestration.
 
 Runs AFTER all M1 iterations (rectangle matching) and BEFORE M2 (identification).
 
 Two modes of operation:
-  A) **New wave detection** — scans the final remaining power for wave-shaped
-     patterns (sharp rise → gradual decay) that M1 missed entirely.
-  B) **Hole repair** — finds rectangle matches whose tags suggest a wave was
+  A) **New wave detection** -- scans the final remaining power for wave-shaped
+     patterns (sharp rise -> gradual decay) that M1 missed entirely.
+  B) **Hole repair** -- finds rectangle matches whose tags suggest a wave was
      extracted as a rectangle (APPROX/LOOSE + EXTENDED), detects the "hole"
-     (remaining ≈ 0 in the event region), restores the approximate rectangle
+     (remaining ~= 0 in the event region), restores the approximate rectangle
      power, re-detects the wave, and re-extracts it properly.
 
 Output goes to ``run_post/house_{id}/`` so it is separated from the rectangle runs
 but seamlessly picked up by session_grouper.load_all_matches().
+
+Implementation is split across:
+  - wave_recovery_step.py (this file) -- orchestration + tag helpers
+  - wave_io.py -- I/O helpers (load/save matches and remaining)
+  - hole_repair.py -- hole detection and repair logic
 """
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -29,6 +34,14 @@ from ..detection.wave_detector import WavePattern, detect_wave_patterns
 from ..matching.phase_matcher import find_cross_phase_waves
 from ..segmentation.wave_segmentor import extract_wave_power
 from ..segmentation.validator import validate_wave_extraction
+
+from .wave_io import (
+    _load_remaining,
+    _save_wave_matches,
+    _save_updated_remaining,
+    _remove_repaired_matches,
+)
+from .hole_repair import _repair_wave_holes
 
 PHASES = ['w1', 'w2', 'w3']
 
@@ -188,7 +201,7 @@ def process_wave_recovery(
                 )
                 continue
 
-            # Accept — update remaining and create match record
+            # Accept -- update remaining and create match record
             updated_remaining[phase] = new_remaining
             total_extracted_watts = float(extracted_power.sum())
             match_record = _wave_to_match_record(wave, total_extracted_watts)
@@ -238,418 +251,3 @@ def process_wave_recovery(
     }
     run_logger.info(f"Wave recovery complete: {summary}")
     return summary
-
-
-# ============================================================================
-# Hole repair — fix rectangle matches that extracted waves as rectangles
-# ============================================================================
-
-# Tags that suggest a wave was forced into a rectangle:
-# ON magnitude ≠ OFF magnitude (APPROX/LOOSE) + long duration (EXTENDED)
-_HOLE_CANDIDATE_TAG_PATTERN = r'(?:APPROX|LOOSE).*EXTENDED'
-
-# Hole detection: remaining during event must drop significantly from edge levels.
-# A real hole: remaining drops from edge level (before/after) to near-zero during event.
-# A correctly-extracted flat device (e.g. boiler): remaining is similar before/during/after.
-_HOLE_MIN_EDGE_WATTS = 100    # edges must have meaningful remaining (W)
-_HOLE_DROP_FRACTION = 0.50    # event median must be < 50% of edge level to count as hole
-_HOLE_MIN_EDGE_RATIO = 0.15   # edge level must be >= 15% of on_magnitude (filters background noise)
-
-
-def _repair_wave_holes(
-    output_dir: Path,
-    house_id: str,
-    threshold_schedule: List[int],
-    updated_remaining: Dict[str, pd.Series],
-    config,
-    logger: logging.Logger,
-) -> tuple:
-    """
-    Find rectangle matches that created holes, undo the rectangle extraction,
-    re-detect as wave, and re-extract properly.
-
-    Parameters
-    ----------
-    output_dir : Path
-        Experiment output directory.
-    house_id : str
-        House identifier.
-    threshold_schedule : list[int]
-        M1 threshold schedule.
-    updated_remaining : dict
-        {phase: pd.Series} — will be modified in-place for repaired matches.
-    config : ExperimentConfig
-        Wave detection config.
-    logger : logging.Logger
-
-    Returns
-    -------
-    (wave_match_records, repaired_ids) : tuple
-        wave_match_records: list of new WAVE match dicts to save
-        repaired_ids: list of (run_number, on_event_id) tuples of replaced matches
-    """
-    # Load all rectangle matches
-    all_matches = _load_rectangle_matches(output_dir, house_id, threshold_schedule, logger)
-    if all_matches.empty:
-        return [], []
-
-    # Filter candidates by tag:
-    # 1. APPROX/LOOSE + EXTENDED: ON ≠ OFF magnitude in long events (wave signature)
-    # 2. CORRECTED + EXTENDED: validator reduced magnitude (rectangle hit remaining limit)
-    approx_loose = all_matches['tag'].str.contains(_HOLE_CANDIDATE_TAG_PATTERN, na=False, regex=True)
-    corrected_ext = (all_matches['tag'].str.contains('CORRECTED', na=False) &
-                     all_matches['tag'].str.contains('EXTENDED', na=False))
-    wave_mask = all_matches['tag'].str.startswith('WAVE-', na=False)
-    candidates = all_matches[(approx_loose | corrected_ext) & ~wave_mask]
-
-    if candidates.empty:
-        logger.info(f"  Hole repair: 0 candidates (no APPROX/LOOSE EXTENDED matches)")
-        return [], []
-
-    logger.info(f"  Hole repair: {len(candidates)} candidate matches to check")
-
-    wave_records = []
-    repaired_ids = []
-
-    for idx, match in candidates.iterrows():
-        phase = match['phase']
-        remaining = updated_remaining.get(phase)
-        if remaining is None:
-            continue
-
-        on_start = pd.Timestamp(match['on_start'])
-        on_end = pd.Timestamp(match['on_end'])
-        off_start = pd.Timestamp(match['off_start'])
-        off_end = pd.Timestamp(match['off_end'])
-
-        # Hole detection: compare remaining DURING the event with remaining
-        # BEFORE (5 min before on_start) and AFTER (5 min after off_end).
-        # A real hole: remaining drops from meaningful edge level to near-zero.
-        # A correctly-extracted flat device (e.g. boiler): remaining is similar
-        # before, during, and after — no drop, no hole, no repair needed.
-        event_mask = (remaining.index > on_end) & (remaining.index < off_start)
-        event_region = remaining[event_mask]
-
-        if len(event_region) < 3:
-            continue
-
-        on_mag = abs(match['on_magnitude'])
-
-        pre_mask = (remaining.index >= on_start - pd.Timedelta(minutes=5)) & \
-                   (remaining.index < on_start)
-        post_mask = (remaining.index > off_end) & \
-                    (remaining.index <= off_end + pd.Timedelta(minutes=5))
-        pre_level = float(remaining[pre_mask].median()) if pre_mask.any() else 0.0
-        post_level = float(remaining[post_mask].median()) if post_mask.any() else 0.0
-        edge_level = (pre_level + post_level) / 2 if (pre_mask.any() and post_mask.any()) \
-            else max(pre_level, post_level)
-        event_median = float(event_region.median())
-
-        # Three conditions must ALL hold for a real hole:
-        # 1. Edge level is meaningful (>100W)
-        # 2. Event median dropped significantly from edge level (<50%)
-        # 3. Edge level is significant relative to device magnitude (>15%)
-        #    — filters out background variation (e.g. boiler: edge=125W, on_mag=2255W → 5.5%)
-        edge_ratio = edge_level / on_mag if on_mag > 0 else 0
-        no_hole = (
-            edge_level < _HOLE_MIN_EDGE_WATTS or
-            event_median >= edge_level * _HOLE_DROP_FRACTION or
-            edge_ratio < _HOLE_MIN_EDGE_RATIO
-        )
-        if no_hole:
-            logger.info(
-                f"  Hole repair: no hole in {match.get('on_event_id', '?')} on {phase} "
-                f"(edge={edge_level:.0f}W, event_median={event_median:.0f}W, "
-                f"edge/mag={edge_ratio:.1%}) — skipping"
-            )
-            continue
-
-        # Found a hole! Build wave profile directly from match metadata.
-        off_mag = abs(match.get('off_magnitude', 0))
-        logger.info(
-            f"  Hole repair: found hole in {match['on_event_id']} on {phase} "
-            f"({on_start} -> {off_end}, edge={edge_level:.0f}W, event_median={event_median:.0f}W, "
-            f"on_mag={on_mag:.0f}W, off_mag={off_mag:.0f}W)"
-        )
-
-        # Step 1: Restore the rectangle extraction (add constant power back)
-        restored = remaining.copy()
-        on_mask = (restored.index >= on_start) & (restored.index <= on_end)
-        full_event_mask = (restored.index >= on_start) & (restored.index <= off_end)
-        restored.loc[full_event_mask] += on_mag
-
-        # Step 2: Estimate baseline from the minutes just before the match
-        pre_match_mask = (remaining.index >= on_start - pd.Timedelta(minutes=5)) & \
-                         (remaining.index < on_start)
-        pre_match = remaining[pre_match_mask]
-        baseline_power = float(pre_match.mean()) if len(pre_match) > 0 else 0.0
-
-        # Step 3: Build a linear-decay wave profile from on_mag down to off_mag
-        # The wave rises sharply (ON event) and decays linearly over the event duration
-        full_indices = restored.index[full_event_mask]
-        duration_minutes = len(full_indices)
-        if duration_minutes < 3:
-            continue
-
-        # Peak is on_magnitude above baseline, end is off_magnitude above baseline
-        peak_above_baseline = on_mag
-        end_above_baseline = min(off_mag, on_mag * 0.1)  # off_mag or 10% of on_mag
-        wave_profile = np.linspace(peak_above_baseline, end_above_baseline, duration_minutes)
-        wave_profile = np.clip(wave_profile, 0, None)
-
-        peak_time = on_end if on_end > on_start else on_start + pd.Timedelta(minutes=1)
-        best_wave = WavePattern(
-            start=on_start,
-            peak_time=peak_time,
-            end=off_end,
-            phase=phase,
-            peak_power=float(baseline_power + peak_above_baseline),
-            baseline_power=float(baseline_power),
-            duration_minutes=duration_minutes,
-            wave_profile=wave_profile,
-        )
-
-        # Step 4: Extract wave power from the restored remaining
-        extracted, new_remaining_region = extract_wave_power(restored, best_wave)
-        total_extracted = float(extracted.sum())
-
-        if total_extracted < 100:
-            logger.info(f"    Extracted too little power ({total_extracted:.0f}W-min), skipping")
-            continue
-
-        # Step 5: Update remaining — replace with wave-extracted version
-        updated_remaining[phase].loc[full_event_mask] = new_remaining_region.loc[full_event_mask]
-
-        # Create wave match record
-        wave_record = _wave_to_match_record(best_wave, total_extracted)
-        wave_record['tag'] = 'WAVE-REPAIR-' + wave_record['tag'].replace('WAVE-', '')
-        wave_records.append(wave_record)
-
-        # Track the original match for removal
-        run_number = match.get('iteration', 0)
-        repaired_ids.append((int(run_number), match['on_event_id']))
-
-        logger.info(
-            f"    Repaired: wave on {phase} ({best_wave.start} -> {best_wave.end}, "
-            f"{best_wave.duration_minutes} min, peak={best_wave.peak_power:.0f}W, "
-            f"extracted={total_extracted:.0f}W-min)"
-        )
-
-    return wave_records, repaired_ids
-
-
-def _load_rectangle_matches(
-    output_dir: Path,
-    house_id: str,
-    threshold_schedule: List[int],
-    logger: logging.Logger,
-) -> pd.DataFrame:
-    """Load all rectangle matches (not wave) from M1 run directories."""
-    all_dfs = []
-
-    for run_number, threshold in enumerate(threshold_schedule):
-        # Try both naming conventions
-        for pattern in [f"run_{run_number}", f"run_{run_number}_{threshold}w"]:
-            run_dir = output_dir / pattern
-            if run_dir.is_dir():
-                break
-        else:
-            continue
-
-        matches_dir = run_dir / f"house_{house_id}" / "matches"
-        if not matches_dir.exists():
-            continue
-
-        for pkl_file in sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")):
-            try:
-                df = pd.read_pickle(pkl_file)
-                if df.empty:
-                    continue
-                df['iteration'] = run_number
-                df['threshold'] = threshold
-                all_dfs.append(df)
-            except Exception as exc:
-                logger.warning(f"Failed to load {pkl_file}: {exc}")
-
-    if not all_dfs:
-        return pd.DataFrame()
-
-    return pd.concat(all_dfs, ignore_index=True)
-
-
-def _remove_repaired_matches(
-    output_dir: Path,
-    house_id: str,
-    threshold_schedule: List[int],
-    repaired_ids: List[tuple],
-    logger: logging.Logger,
-):
-    """
-    Remove original rectangle matches that were replaced by wave repairs.
-
-    For each (run_number, on_event_id), finds the match file and removes that row.
-    """
-    # Group by run_number for efficiency
-    by_run = {}
-    for run_number, on_event_id in repaired_ids:
-        by_run.setdefault(run_number, set()).add(on_event_id)
-
-    for run_number, event_ids in by_run.items():
-        threshold = threshold_schedule[run_number] if run_number < len(threshold_schedule) else 0
-
-        # Find run directory
-        run_dir = None
-        for pattern in [f"run_{run_number}", f"run_{run_number}_{threshold}w"]:
-            candidate = output_dir / pattern
-            if candidate.is_dir():
-                run_dir = candidate
-                break
-
-        if run_dir is None:
-            continue
-
-        matches_dir = run_dir / f"house_{house_id}" / "matches"
-        if not matches_dir.exists():
-            continue
-
-        for pkl_file in sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")):
-            try:
-                df = pd.read_pickle(pkl_file)
-                if df.empty:
-                    continue
-
-                original_len = len(df)
-                mask = df['on_event_id'].isin(event_ids)
-                if mask.any():
-                    removed = mask.sum()
-                    df = df[~mask]
-                    df.to_pickle(pkl_file)
-                    logger.info(
-                        f"  Hole repair: removed {removed} rectangle match(es) from {pkl_file.name}"
-                    )
-            except Exception as exc:
-                logger.warning(f"Failed to update {pkl_file}: {exc}")
-
-
-# ============================================================================
-# Internal helpers
-# ============================================================================
-
-def _load_remaining(
-    output_dir: Path,
-    house_id: str,
-    last_run: int,
-    logger: logging.Logger,
-) -> tuple:
-    """Load remaining power from last M1 run's summarized files.
-
-    Returns
-    -------
-    (remaining_by_phase, monthly_data) : tuple
-        remaining_by_phase: {phase: pd.Series indexed by timestamp}
-        monthly_data: list of (month_tag, DataFrame) for saving later
-    """
-    # Find the last run directory
-    summarized_dir = None
-    for run_idx in range(last_run, -1, -1):
-        candidate = output_dir / f"run_{run_idx}" / f"house_{house_id}" / "summarized"
-        if candidate.is_dir():
-            summarized_dir = candidate
-            break
-
-    if summarized_dir is None:
-        return {}, []
-
-    pkl_files = sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl"))
-    if not pkl_files:
-        return {}, []
-
-    all_dfs = []
-    monthly_data = []
-    for f in pkl_files:
-        df = pd.read_pickle(f)
-        # Extract month tag from filename: summarized_{house_id}_{MM}_{YYYY}.pkl
-        month_tag = f.stem.replace(f"summarized_{house_id}_", "")
-        monthly_data.append((month_tag, df))
-        all_dfs.append(df)
-
-    combined = pd.concat(all_dfs, ignore_index=True)
-
-    # Ensure timestamp is datetime
-    if 'timestamp' in combined.columns:
-        combined['timestamp'] = pd.to_datetime(combined['timestamp'])
-        combined = combined.sort_values('timestamp').drop_duplicates('timestamp', keep='first')
-        combined = combined.set_index('timestamp')
-
-    remaining_by_phase = {}
-    for phase in PHASES:
-        col = f'remaining_{phase}'
-        if col in combined.columns:
-            remaining_by_phase[phase] = combined[col].dropna()
-
-    logger.info(f"Wave recovery: loaded remaining from {summarized_dir} "
-                f"({len(combined)} rows, phases: {list(remaining_by_phase.keys())})")
-
-    return remaining_by_phase, monthly_data
-
-
-def _save_wave_matches(
-    output_dir: Path,
-    house_id: str,
-    match_records: List[dict],
-    threshold_schedule: List[int],
-    logger: logging.Logger,
-):
-    """Save wave match records grouped by month to run_post/house_{id}/matches/."""
-    matches_df = pd.DataFrame(match_records)
-
-    # Add iteration/threshold columns for M2 compatibility
-    # Wave matches get iteration = len(threshold_schedule) (after all M1 iterations)
-    matches_df['iteration'] = len(threshold_schedule)
-    matches_df['threshold'] = 0
-
-    # Group by month for per-month pickle files
-    matches_df['_month'] = matches_df['on_start'].dt.strftime('%m_%Y')
-
-    post_dir = output_dir / "run_post" / f"house_{house_id}" / "matches"
-    post_dir.mkdir(parents=True, exist_ok=True)
-
-    for month_tag, month_df in matches_df.groupby('_month'):
-        month_df = month_df.drop(columns=['_month'])
-        out_path = post_dir / f"matches_{house_id}_{month_tag}.pkl"
-        month_df.to_pickle(out_path)
-        logger.info(f"Wave recovery: saved {len(month_df)} matches to {out_path}")
-
-
-def _save_updated_remaining(
-    output_dir: Path,
-    house_id: str,
-    monthly_data: list,
-    updated_remaining: Dict[str, pd.Series],
-    logger: logging.Logger,
-):
-    """Save updated remaining (after wave extraction) to run_post/house_{id}/summarized/."""
-    post_dir = output_dir / "run_post" / f"house_{house_id}" / "summarized"
-    post_dir.mkdir(parents=True, exist_ok=True)
-
-    for month_tag, original_df in monthly_data:
-        df = original_df.copy()
-
-        # Ensure timestamp for joining
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-        # Update remaining columns from the extracted results
-        for phase in PHASES:
-            col = f'remaining_{phase}'
-            if col in df.columns and phase in updated_remaining:
-                updated = updated_remaining[phase]
-                # Map updated values back by timestamp
-                if 'timestamp' in df.columns:
-                    ts_to_val = updated.to_dict()
-                    df[col] = df['timestamp'].map(ts_to_val).fillna(df[col])
-
-        out_path = post_dir / f"summarized_{house_id}_{month_tag}.pkl"
-        df.to_pickle(out_path)
-
-    logger.info(f"Wave recovery: saved updated remaining for {len(monthly_data)} months to {post_dir}")

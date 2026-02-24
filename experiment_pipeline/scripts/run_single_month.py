@@ -173,16 +173,16 @@ def main():
     import core as core_module
     importlib.reload(core_module)
 
-    import disaggregation.pipeline.detection_step
-    import disaggregation.pipeline.matching_step
-    import disaggregation.pipeline.segmentation_step
-    importlib.reload(disaggregation.pipeline.detection_step)
-    importlib.reload(disaggregation.pipeline.matching_step)
-    importlib.reload(disaggregation.pipeline.segmentation_step)
+    import disaggregation.rectangle.pipeline.detection_step
+    import disaggregation.rectangle.pipeline.matching_step
+    import disaggregation.rectangle.pipeline.segmentation_step
+    importlib.reload(disaggregation.rectangle.pipeline.detection_step)
+    importlib.reload(disaggregation.rectangle.pipeline.matching_step)
+    importlib.reload(disaggregation.rectangle.pipeline.segmentation_step)
 
-    process_detection = disaggregation.pipeline.detection_step.process_detection
-    process_matching = disaggregation.pipeline.matching_step.process_matching
-    process_segmentation = disaggregation.pipeline.segmentation_step.process_segmentation
+    process_detection = disaggregation.rectangle.pipeline.detection_step.process_detection
+    process_matching = disaggregation.rectangle.pipeline.matching_step.process_matching
+    process_segmentation = disaggregation.rectangle.pipeline.segmentation_step.process_segmentation
 
     from core import find_house_data_path, find_previous_run_summarized
 

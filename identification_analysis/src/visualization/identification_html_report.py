@@ -17,9 +17,18 @@ Sections:
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+
+# Add project root to path for shared imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
+from shared.html_utils import (
+    build_quality_dist_bar as _build_quality_dist_bar,
+    assign_tier as _assign_tier,
+    format_pre_quality as _format_pre_quality,
+)
 
 try:
     from tqdm import tqdm as _tqdm
@@ -115,84 +124,6 @@ def _load_pre_analysis_scores(house_analysis_path) -> Dict[str, Any]:
         pass
 
     return scores
-
-
-def _assign_tier(pre_quality) -> str:
-    """Assign quality tier based on pre-analysis quality score."""
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        return pre_quality
-    elif pre_quality is None:
-        return 'unknown'
-    elif pre_quality >= 90:
-        return 'excellent'
-    elif pre_quality >= 75:
-        return 'good'
-    elif pre_quality >= 50:
-        return 'fair'
-    else:
-        return 'poor'
-
-
-def _format_pre_quality(pre_quality) -> str:
-    """Format pre-quality score as colored HTML."""
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        _faulty_labels = {
-            'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
-            'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
-            'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
-        }
-        _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
-        return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
-    elif pre_quality is None:
-        return '<span style="color:#999;">-</span>'
-    else:
-        if pre_quality >= 90:
-            color = '#28a745'
-        elif pre_quality >= 75:
-            color = '#007bff'
-        elif pre_quality >= 50:
-            color = '#ffc107'
-        else:
-            color = '#dc3545'
-        return f'<span style="color:{color};font-weight:bold;">{pre_quality:.0f}</span>'
-
-
-def _build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
-    """Build quality distribution bar HTML — shared visual pattern across all reports."""
-    tier_config = [
-        ('excellent', 'Excellent', '#28a745'),
-        ('good', 'Good', '#007bff'),
-        ('fair', 'Fair', '#ffc107'),
-        ('poor', 'Poor', '#dc3545'),
-        ('faulty_dead_phase', 'Faulty (Dead)', '#5a3d7a'),
-        ('faulty_high_nan', 'Faulty (NaN)', '#6f42c1'),
-        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
-        ('unknown', 'Unknown', '#6c757d'),
-    ]
-
-    segments = ''
-    legend_items = ''
-    for key, label, color in tier_config:
-        count = tier_counts.get(key, 0)
-        if count == 0:
-            continue
-        pct = count / n_houses * 100 if n_houses > 0 else 0
-        segments += (f'<div style="width:{pct:.1f}%;background:{color};height:100%;'
-                     f'display:inline-block;" title="{label}: {count} ({pct:.0f}%)"></div>')
-        legend_items += (f'<span style="display:inline-flex;align-items:center;gap:4px;'
-                         f'margin-right:12px;font-size:0.82em;">'
-                         f'<span style="width:10px;height:10px;border-radius:50%;'
-                         f'background:{color};display:inline-block;"></span>'
-                         f'{label}: {count} ({pct:.0f}%)</span>')
-
-    return f'''
-    <div style="margin:18px 0;">
-        <div style="font-size:0.82em;font-weight:600;color:#555;margin-bottom:6px;">
-            Input Quality Distribution</div>
-        <div style="width:100%;height:18px;border-radius:9px;overflow:hidden;
-                    background:#e9ecef;font-size:0;line-height:0;">{segments}</div>
-        <div style="margin-top:6px;line-height:1.8;">{legend_items}</div>
-    </div>'''
 
 
 def _load_summarized_power(experiment_dir: Path, house_id: str):
@@ -614,7 +545,7 @@ def _build_house_html(
 
     # Type summary for header
     type_parts = []
-    for dtype in ['boiler', 'central_ac', 'regular_ac', 'unknown']:
+    for dtype in ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern', 'unknown']:
         info = by_type.get(dtype, {})
         count = info.get('count', 0)
         if count > 0:
@@ -1074,7 +1005,7 @@ def _build_aggregate_html(
 
         # Device type badges
         badges = ''
-        for dt, color in [('boiler', '#007bff'), ('central_ac', '#dc3545'), ('regular_ac', '#e67e22')]:
+        for dt, color in [('boiler', '#007bff'), ('central_ac', '#dc3545'), ('regular_ac', '#e67e22'), ('recurring_pattern', '#17a2b8')]:
             cnt = h['device_counts'].get(dt, 0)
             if cnt > 0:
                 badges += f'<span style="background:{color};color:white;padding:1px 6px;border-radius:8px;font-size:0.75em;margin-right:3px;">{dt.split("_")[0]} {cnt}</span>'
@@ -1331,7 +1262,7 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
     per_device = population_stats.get('per_device_type', {})
 
     device_cards = ''
-    for dtype in ['boiler', 'central_ac', 'regular_ac']:
+    for dtype in ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern']:
         if dtype not in per_device:
             continue
         d = per_device[dtype]

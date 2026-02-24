@@ -131,7 +131,7 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
             if not hour_counts.empty:
                 metrics['peak_event_hour'] = hour_counts.idxmax()
                 metrics['events_at_peak_hour'] = hour_counts.max()
-        except:
+        except (ValueError, KeyError, TypeError):
             pass
 
     # Matched vs unmatched breakdown

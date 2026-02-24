@@ -1,2 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.matching.stack_matcher."""
-from disaggregation.rectangle.matching.stack_matcher import *
+# DEPRECATED: This shim is no longer used. Import from disaggregation.rectangle.matching.stack_matcher instead.

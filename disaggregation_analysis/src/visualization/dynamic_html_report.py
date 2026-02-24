@@ -11,11 +11,23 @@ Note: Device identification (Module 2) content has been moved to
 identification_analysis/src/visualization/identification_html_report.py
 """
 import os
+import sys
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
+
+# Add project root to path for shared imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
+from shared.html_utils import (
+    build_quality_dist_bar as _build_quality_dist_bar,
+    assign_tier as _assign_tier,
+    format_pre_quality as _format_pre_quality,
+    build_glossary_section as _build_glossary_section,
+    build_about_section as _build_about_section,
+    build_upstream_metric_banner as _build_upstream_metric_banner,
+)
 
 from metrics.dynamic_report_metrics import calculate_dynamic_report_metrics
 
@@ -37,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 def _format_class_quality(value) -> str:
-    """Format classification quality score as colored HTML."""
+    """Format classification quality score as colored HTML (displayed 0-100)."""
     if value is None:
         return '<span style="color: #aaa;">-</span>'
     if value >= 0.7:
@@ -46,11 +58,11 @@ def _format_class_quality(value) -> str:
         color = '#eab308'
     else:
         color = '#e67e22'
-    return f'<span style="color: {color}; font-weight: 600;">{value:.2f}</span>'
+    return f'<span style="color: {color}; font-weight: 600;">{value * 100:.0f}</span>'
 
 
 def _format_avg_confidence(value) -> str:
-    """Format average confidence score as colored HTML."""
+    """Format average confidence score as colored HTML (displayed 0-100)."""
     if value is None:
         return '<span style="color: #aaa;">-</span>'
     if value >= 0.7:
@@ -59,7 +71,7 @@ def _format_avg_confidence(value) -> str:
         color = '#eab308'
     else:
         color = '#e67e22'
-    return f'<span style="color: {color}; font-weight: 600;">{value:.2f}</span>'
+    return f'<span style="color: {color}; font-weight: 600;">{value * 100:.0f}</span>'
 
 
 def _build_population_stats_section(population_stats: Dict[str, Any]) -> str:
@@ -90,8 +102,8 @@ def _build_population_stats_section(population_stats: Dict[str, Any]) -> str:
 
     # Device type cards
     device_cards = ''
-    device_labels = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC'}
-    for dtype in ['boiler', 'central_ac', 'regular_ac']:
+    device_labels = {'boiler': 'Boiler', 'central_ac': 'Central AC', 'regular_ac': 'Regular AC', 'recurring_pattern': 'Recurring Pattern'}
+    for dtype in ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern']:
         if dtype not in per_device:
             continue
         d = per_device[dtype]
@@ -154,84 +166,6 @@ def _build_population_stats_section(population_stats: Dict[str, Any]) -> str:
             </div>
             {outlier_html}
         </section>'''
-
-
-def _build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
-    """Build quality distribution bar HTML — shared visual pattern across all reports."""
-    tier_config = [
-        ('excellent', 'Excellent', '#28a745'),
-        ('good', 'Good', '#007bff'),
-        ('fair', 'Fair', '#ffc107'),
-        ('poor', 'Poor', '#dc3545'),
-        ('faulty_dead_phase', 'Faulty (Dead)', '#5a3d7a'),
-        ('faulty_high_nan', 'Faulty (NaN)', '#6f42c1'),
-        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
-        ('unknown', 'Unknown', '#6c757d'),
-    ]
-
-    segments = ''
-    legend_items = ''
-    for key, label, color in tier_config:
-        count = tier_counts.get(key, 0)
-        if count == 0:
-            continue
-        pct = count / n_houses * 100 if n_houses > 0 else 0
-        segments += (f'<div style="width:{pct:.1f}%;background:{color};height:100%;'
-                     f'display:inline-block;" title="{label}: {count} ({pct:.0f}%)"></div>')
-        legend_items += (f'<span style="display:inline-flex;align-items:center;gap:4px;'
-                         f'margin-right:12px;font-size:0.82em;">'
-                         f'<span style="width:10px;height:10px;border-radius:50%;'
-                         f'background:{color};display:inline-block;"></span>'
-                         f'{label}: {count} ({pct:.0f}%)</span>')
-
-    return f'''
-    <div style="margin:18px 0;">
-        <div style="font-size:0.82em;font-weight:600;color:#555;margin-bottom:6px;">
-            Input Quality Distribution</div>
-        <div style="width:100%;height:18px;border-radius:9px;overflow:hidden;
-                    background:#e9ecef;font-size:0;line-height:0;">{segments}</div>
-        <div style="margin-top:6px;line-height:1.8;">{legend_items}</div>
-    </div>'''
-
-
-def _assign_tier(pre_quality) -> str:
-    """Assign quality tier based on pre-analysis quality score."""
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
-    elif pre_quality is None:
-        return 'unknown'
-    elif pre_quality >= 90:
-        return 'excellent'
-    elif pre_quality >= 75:
-        return 'good'
-    elif pre_quality >= 50:
-        return 'fair'
-    else:
-        return 'poor'
-
-
-def _format_pre_quality(pre_quality) -> str:
-    """Format pre-quality score as colored HTML."""
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        _faulty_labels = {
-            'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
-            'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
-            'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
-        }
-        _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
-        return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
-    elif pre_quality is None:
-        return '<span style="color:#999;">-</span>'
-    else:
-        if pre_quality >= 90:
-            color = '#28a745'
-        elif pre_quality >= 75:
-            color = '#007bff'
-        elif pre_quality >= 50:
-            color = '#ffc107'
-        else:
-            color = '#dc3545'
-        return f'<span style="color:{color};font-weight:bold;">{pre_quality:.0f}</span>'
 
 
 def generate_dynamic_house_report(
@@ -477,6 +411,31 @@ def _build_house_html(
             f'</div>'
         )
 
+    about_html = _build_about_section('disaggregation')
+    glossary_html = _build_glossary_section()
+
+    # Upstream metric banner: pre-analysis quality from house_analysis
+    upstream_banner_html = ''
+    if pre_quality is not None and not (isinstance(pre_quality, str) and pre_quality.startswith('faulty')):
+        upstream_banner_html = _build_upstream_metric_banner(
+            label='Input Data Quality (from Pre-Analysis)',
+            value=pre_quality,
+            suffix='/100',
+            color='#7B9BC4',
+        )
+    elif isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        _faulty_labels = {
+            'faulty_dead_phase': 'Dead Phase',
+            'faulty_high_nan': 'High NaN',
+            'faulty_both': 'Dead Phase + High NaN',
+        }
+        upstream_banner_html = _build_upstream_metric_banner(
+            label='Input Data Quality (from Pre-Analysis)',
+            value=_faulty_labels.get(pre_quality, 'Faulty'),
+            suffix='',
+            color='#6f42c1',
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -492,9 +451,9 @@ def _build_house_html(
         }}
 
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background-color: #f5f7fa;
-            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background-color: #FAFBFF;
+            color: #3D3D50;
             line-height: 1.6;
         }}
 
@@ -505,20 +464,23 @@ def _build_house_html(
         }}
 
         header {{
-            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+            background: linear-gradient(135deg, #7B9BC4 0%, #B488B4 100%);
             color: white;
-            padding: 30px;
+            padding: 40px 30px;
             margin-bottom: 30px;
-            border-radius: 10px;
+            border-radius: 16px;
         }}
 
         header h1 {{
-            font-size: 2em;
-            margin-bottom: 10px;
+            font-size: 2.2em;
+            margin-bottom: 8px;
+            letter-spacing: -0.3px;
+            font-weight: 700;
         }}
 
         header .subtitle {{
-            opacity: 0.9;
+            opacity: 0.92;
+            font-size: 1.05em;
         }}
 
         .info-bar {{
@@ -538,18 +500,20 @@ def _build_house_html(
         }}
 
         section {{
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            margin-bottom: 25px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            background: #FFFFFF;
+            border-radius: 14px;
+            padding: 28px;
+            margin-bottom: 22px;
+            box-shadow: 0 2px 12px rgba(120,100,160,0.07);
+            border: 1px solid #E8E4F0;
         }}
 
         section h2 {{
-            color: #444;
+            color: #3D3D50;
             margin-bottom: 20px;
             padding-bottom: 10px;
-            border-bottom: 2px solid #eee;
+            border-bottom: 2px solid #E8E4F0;
+            font-size: 1.35em;
         }}
 
         .charts-grid {{
@@ -561,7 +525,7 @@ def _build_house_html(
         footer {{
             text-align: center;
             padding: 20px;
-            color: #888;
+            color: #7D7D92;
             font-size: 0.9em;
         }}
 
@@ -582,9 +546,14 @@ def _build_house_html(
             <div class="info-bar">
                 <div class="info-item"><strong>Period:</strong> {period_str}</div>
                 <div class="info-item"><strong>Thresholds:</strong> {th_str}</div>
+                <div class="info-item"><strong>Data Days:</strong> {period.get('days', 0)}</div>
                 {pre_quality_html}
             </div>
         </header>
+
+        {about_html}
+
+        {upstream_banner_html}
 
         {nan_info_html}
 
@@ -635,9 +604,11 @@ def _build_house_html(
             {remaining_events_html}
         </section>
 
+        {glossary_html}
+
         <footer>
-            ElectricPatterns - Module 1: Disaggregation Report
-            <div style="font-size: 0.85em; margin-top: 4px; color: #aaa;">
+            ElectricPatterns &mdash; Module 1: Disaggregation Report
+            <div style="font-size: 0.85em; margin-top: 4px; color: #B0B0C0;">
                 Device identification analysis available in the separate M2 report.
             </div>
         </footer>
@@ -808,6 +779,9 @@ def _build_aggregate_html(
     filter_bar = _build_filter_bar(tier_counts, continuity_counts)
     quality_dist_bar = _build_quality_dist_bar(tier_counts, n_houses)
 
+    about_html = _build_about_section('disaggregation')
+    glossary_html = _build_glossary_section()
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -818,33 +792,35 @@ def _build_aggregate_html(
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background-color: #f5f7fa;
-            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background-color: #FAFBFF;
+            color: #3D3D50;
             line-height: 1.6;
         }}
         .container {{ max-width: 1400px; margin: 0 auto; padding: 20px; }}
         header {{
-            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+            background: linear-gradient(135deg, #7B9BC4 0%, #B488B4 100%);
             color: white;
-            padding: 30px;
+            padding: 40px 30px;
             margin-bottom: 30px;
-            border-radius: 10px;
+            border-radius: 16px;
         }}
-        header h1 {{ font-size: 2em; margin-bottom: 10px; }}
-        header .subtitle {{ opacity: 0.9; }}
+        header h1 {{ font-size: 2.2em; margin-bottom: 8px; letter-spacing: -0.3px; font-weight: 700; }}
+        header .subtitle {{ opacity: 0.92; font-size: 1.05em; }}
         section {{
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            margin-bottom: 25px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            background: #FFFFFF;
+            border-radius: 14px;
+            padding: 28px;
+            margin-bottom: 22px;
+            box-shadow: 0 2px 12px rgba(120,100,160,0.07);
+            border: 1px solid #E8E4F0;
         }}
         section h2 {{
-            color: #444;
+            color: #3D3D50;
             margin-bottom: 20px;
             padding-bottom: 10px;
-            border-bottom: 2px solid #eee;
+            border-bottom: 2px solid #E8E4F0;
+            font-size: 1.35em;
         }}
         .summary-grid {{
             display: grid;
@@ -853,36 +829,39 @@ def _build_aggregate_html(
             margin-bottom: 25px;
         }}
         .summary-card {{
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            background: #FAFBFF;
             padding: 25px;
-            border-radius: 10px;
+            border-radius: 12px;
             text-align: center;
+            border: 1px solid #E8E4F0;
         }}
-        .summary-number {{ font-size: 2.2em; font-weight: bold; color: #2d3748; }}
-        .summary-label {{ color: #666; margin-top: 5px; font-size: 0.9em; }}
+        .summary-number {{ font-size: 2.2em; font-weight: bold; color: #3D3D50; }}
+        .summary-label {{ color: #7D7D92; margin-top: 5px; font-size: 0.9em; }}
         .data-table {{
             width: 100%;
             border-collapse: collapse;
             font-size: 0.9em;
         }}
         .data-table th {{
-            background: #2d3748;
+            background: #7888A0;
             color: white;
-            padding: 12px 15px;
+            padding: 10px 14px;
             text-align: left;
             cursor: pointer;
             user-select: none;
             position: relative;
         }}
-        .data-table th:hover {{ background: #4a5568; }}
+        .data-table th:first-child {{ border-radius: 8px 0 0 0; }}
+        .data-table th:last-child {{ border-radius: 0 8px 0 0; }}
+        .data-table th:hover {{ background: #8898B0; }}
         .data-table th .sort-arrow {{ margin-left: 5px; opacity: 0.5; }}
         .data-table th.sorted-asc .sort-arrow {{ opacity: 1; }}
         .data-table th.sorted-desc .sort-arrow {{ opacity: 1; }}
         .data-table td {{
-            padding: 10px 15px;
-            border-bottom: 1px solid #eee;
+            padding: 10px 14px;
+            border-bottom: 1px solid #E8E4F0;
         }}
-        .data-table tr:hover {{ background: #f8f9fa; }}
+        .data-table tr:hover {{ background: #F5F4FA; }}
         .data-table tr.hidden {{ display: none; }}
         .filter-bar {{
             display: flex;
@@ -890,34 +869,35 @@ def _build_aggregate_html(
             gap: 10px;
             align-items: center;
             margin-bottom: 15px;
-            padding: 12px 15px;
-            background: #f8f9fa;
-            border-radius: 8px;
+            padding: 14px 18px;
+            background: #FAFBFF;
+            border-radius: 10px;
+            border: 1px solid #E8E4F0;
         }}
-        .filter-bar label {{ font-weight: 600; color: #555; margin-right: 5px; }}
+        .filter-bar label {{ font-weight: 600; color: #3D3D50; margin-right: 5px; }}
         .filter-checkbox {{ display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; }}
         .filter-checkbox input {{ cursor: pointer; }}
-        .tier-excellent {{ background: #d4edda; color: #155724; }}
-        .tier-good {{ background: #cce5ff; color: #004085; }}
-        .tier-fair {{ background: #fff3cd; color: #856404; }}
-        .tier-poor {{ background: #fde2d4; color: #813e1a; }}
+        .tier-excellent {{ background: #D8F0E0; color: #3A6A4A; }}
+        .tier-good {{ background: #D0E4F4; color: #2A5A7A; }}
+        .tier-fair {{ background: #F5ECD5; color: #6A5A2A; }}
+        .tier-poor {{ background: #F5D8D8; color: #6A3030; }}
         .tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
-        .tier-faulty_high_nan {{ background: #e2d5f0; color: #6f42c1; }}
+        .tier-faulty_high_nan {{ background: #E5D8F0; color: #5A3A7A; }}
         .tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .tier-unknown {{ background: #e9ecef; color: #495057; }}
-        .cont-continuous {{ background: #d4edda; color: #155724; }}
-        .cont-minor_gaps {{ background: #cce5ff; color: #004085; }}
-        .cont-discontinuous {{ background: #fff3cd; color: #856404; }}
-        .cont-fragmented {{ background: #f8d7da; color: #721c24; }}
+        .cont-continuous {{ background: #D8F0E0; color: #3A6A4A; }}
+        .cont-minor_gaps {{ background: #D0E4F4; color: #2A5A7A; }}
+        .cont-discontinuous {{ background: #F5ECD5; color: #6A5A2A; }}
+        .cont-fragmented {{ background: #F5D8D8; color: #6A3030; }}
         .cont-unknown {{ background: #e9ecef; color: #495057; }}
-        .filter-btn {{ padding: 4px 12px; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer; font-size: 0.85em; }}
-        .filter-btn:hover {{ background: #e9ecef; }}
-        .filter-status {{ font-size: 0.85em; color: #888; margin-left: auto; }}
+        .filter-btn {{ padding: 4px 12px; border: 1px solid #E8E4F0; border-radius: 4px; background: white; cursor: pointer; font-size: 0.85em; }}
+        .filter-btn:hover {{ background: #F5F4FA; }}
+        .filter-status {{ font-size: 0.85em; color: #7D7D92; margin-left: auto; }}
         .tooltip {{ position: relative; cursor: help; border-bottom: 1px dotted #999; }}
         footer {{
             text-align: center;
             padding: 20px;
-            color: #888;
+            color: #7D7D92;
             font-size: 0.9em;
         }}
         @media (max-width: 768px) {{
@@ -934,6 +914,8 @@ def _build_aggregate_html(
             <h1>Dynamic Threshold - Aggregate Report</h1>
             <div class="subtitle">Generated: {generated_at} | {n_houses} houses analyzed</div>
         </header>
+
+        {about_html}
 
         <section>
             <h2>Summary</h2>
@@ -1019,9 +1001,11 @@ def _build_aggregate_html(
             </table>
         </section>
 
+        {glossary_html}
+
         <footer>
-            ElectricPatterns - Module 1: Disaggregation Aggregate Report
-            <div style="font-size: 0.85em; margin-top: 4px; color: #aaa;">
+            ElectricPatterns &mdash; Module 1: Disaggregation Aggregate Report
+            <div style="font-size: 0.85em; margin-top: 4px; color: #B0B0C0;">
                 Device identification analysis available in the separate M2 report.
             </div>
         </footer>

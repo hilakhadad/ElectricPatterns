@@ -470,11 +470,12 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
         'boiler': 'Water Heater (Boiler)',
         'central_ac': 'Central AC (Multi-phase)',
         'regular_ac': 'Regular AC (Single-phase)',
+        'recurring_pattern': 'Recurring Pattern (Discovered)',
         'unclassified': 'Unclassified',
     }
 
     rows = ''
-    for dtype in ['boiler', 'central_ac', 'regular_ac', 'unclassified']:
+    for dtype in ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern', 'unclassified']:
         info = types.get(dtype)
         if info is None:
             continue
@@ -709,9 +710,10 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
         'boiler': 'Water Heater (Boiler)',
         'central_ac': 'Central AC (Multi-phase)',
         'regular_ac': 'Regular AC (Single-phase)',
+        'recurring_pattern': 'Recurring Pattern (Discovered)',
         'unclassified': 'Unclassified Devices',
     }
-    display_order = ['boiler', 'central_ac', 'regular_ac', 'unclassified']
+    display_order = ['boiler', 'central_ac', 'regular_ac', 'recurring_pattern', 'unclassified']
 
     # Copy All button
     total_count = sum(len(v) for v in device_groups.values())

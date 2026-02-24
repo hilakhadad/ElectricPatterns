@@ -8,9 +8,14 @@ instead of O(n) boolean masking.
 
 Supports correction mode: when negative values are small (within tolerance),
 returns a correction amount to reduce match magnitude instead of rejecting.
+
+Match tag construction is split into match_tags.py and re-exported here.
 """
 import pandas as pd
 import numpy as np
+
+# Re-export tag functions for backward compatibility
+from .match_tags import get_magnitude_quality_tag, get_duration_tag, build_match_tag
 
 # Default tolerance for negative values - if within this range, we correct instead of reject
 DEFAULT_NEGATIVE_TOLERANCE = -10  # watts
@@ -23,88 +28,6 @@ MAX_EVENT_CV = 0.30  # 30% of magnitude
 # If event_seg drops below this ratio * magnitude, the match crosses different events
 # A real device that is ON should not drop below 50% of its operating power
 MIN_EVENT_STABILITY_RATIO = 0.50
-
-
-def get_magnitude_quality_tag(on_magnitude: float, off_magnitude: float) -> str:
-    """
-    Get magnitude quality tag based on ON/OFF magnitude difference.
-
-    Tags:
-    - EXACT: < 50W difference
-    - CLOSE: 50-100W difference
-    - APPROX: 100-200W difference
-    - LOOSE: 200-350W difference
-    """
-    diff = abs(abs(on_magnitude) - abs(off_magnitude))
-    if diff < 50:
-        return "EXACT"
-    elif diff < 100:
-        return "CLOSE"
-    elif diff < 200:
-        return "APPROX"
-    else:
-        return "LOOSE"
-
-
-def get_duration_tag(duration_minutes: float) -> str:
-    """
-    Get duration tag based on event duration in minutes.
-
-    Tags:
-    - SPIKE: ≤ 2 minutes
-    - QUICK: < 5 minutes (microwave, kettle)
-    - MEDIUM: 5-30 minutes (washing machine, dishwasher)
-    - EXTENDED: > 30 minutes (water heater, AC)
-    """
-    if duration_minutes <= 2:
-        return "SPIKE"
-    elif duration_minutes < 5:
-        return "QUICK"
-    elif duration_minutes <= 30:
-        return "MEDIUM"
-    else:
-        return "EXTENDED"
-
-
-def build_match_tag(on_magnitude: float, off_magnitude: float, duration_minutes: float,
-                    is_noisy: bool = False, is_partial: bool = False, is_corrected: bool = False,
-                    is_tail_extended: bool = False) -> str:
-    """
-    Build a complete match tag combining magnitude quality and duration.
-
-    Format: [NOISY-|PARTIAL-]{magnitude_quality}-{duration}[-CORRECTED]
-
-    Examples:
-    - EXACT-SPIKE
-    - CLOSE-QUICK
-    - NOISY-APPROX-MEDIUM
-    - PARTIAL-EXTENDED
-    - EXACT-QUICK-CORRECTED
-    """
-    parts = []
-
-    # Prefix for special match types
-    if is_noisy:
-        parts.append("NOISY")
-    elif is_partial:
-        parts.append("PARTIAL")
-
-    # Magnitude quality (skip for partial since magnitudes differ significantly)
-    if not is_partial:
-        parts.append(get_magnitude_quality_tag(on_magnitude, off_magnitude))
-
-    # Duration
-    parts.append(get_duration_tag(duration_minutes))
-
-    # Suffix for corrected
-    if is_corrected:
-        parts.append("CORRECTED")
-
-    # Suffix for tail-extended events
-    if is_tail_extended:
-        parts.append("TAIL")
-
-    return "-".join(parts)
 
 
 def is_valid_event_removal(data: pd.DataFrame, on_event: dict, off_event: dict, logger,

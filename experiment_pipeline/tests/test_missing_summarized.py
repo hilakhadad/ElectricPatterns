@@ -52,7 +52,7 @@ def _run_segmentation(tmp_path, house_id, run_number):
          mock.patch.object(core, 'RAW_INPUT_DIRECTORY', str(tmp_path / 'raw')), \
          mock.patch.object(core, 'LOGS_DIRECTORY', str(tmp_path / 'logs')), \
          mock.patch.object(core, 'ERRORS_DIRECTORY', str(tmp_path / 'errors')):
-        from disaggregation.pipeline.segmentation_step import process_segmentation
+        from disaggregation.rectangle.pipeline.segmentation_step import process_segmentation
         process_segmentation(house_id=house_id, run_number=run_number)
 
 

@@ -1,3 +1,1 @@
-"""Shim — re-exports from disaggregation.rectangle.matching."""
-from disaggregation.rectangle.matching import *
-from disaggregation.rectangle.matching import __all__
+# DEPRECATED: This shim package is no longer used. Import from disaggregation.rectangle.matching instead.

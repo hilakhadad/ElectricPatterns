@@ -12,7 +12,7 @@ python app.py
 
 ### Colab Notebooks
 - `device_plots_colab.ipynb` - Plot device activations from static experiments
-- `device_plots_dynamic_threshold.ipynb` - Plot device activations from dynamic threshold experiments (exp010/exp012)
+- `device_plots_dynamic_threshold.ipynb` - Plot device activations from dynamic threshold experiments
 
 ## Structure
 
@@ -41,7 +41,7 @@ user_plot_requests/
 |----------|--------|-------------|
 | `/` | GET | Main page with house selection |
 | `/plot/view` | GET | Display interactive plot |
-| `/plot` | POST | Generate plot (JSON response) |
+| `/plot` | GET | Generate plot (query params: house_id, date, window_type) |
 | `/plot/download` | GET | Download plot as HTML |
 | `/api/houses` | GET | List available houses |
 | `/api/house/<id>/range` | GET | Date range for house |

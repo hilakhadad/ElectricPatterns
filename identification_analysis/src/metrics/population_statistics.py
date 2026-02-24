@@ -18,7 +18,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-DEVICE_TYPES = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac']
+DEVICE_TYPES = ['boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'recurring_pattern']
 
 # Z-score thresholds
 Z_EXTREME = 3.0

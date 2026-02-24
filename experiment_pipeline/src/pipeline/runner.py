@@ -2,104 +2,29 @@
 Unified pipeline runner for both static and dynamic threshold experiments.
 
 Handles:
-- Static experiments (single threshold, N iterations) — exp000 through exp008
-- Dynamic experiments (threshold_schedule, len(schedule) iterations) — exp010+
+- Static experiments (single threshold, N iterations) -- exp000 through exp008
+- Dynamic experiments (threshold_schedule, len(schedule) iterations) -- exp010+
 
 Mode is auto-detected from the experiment's threshold_schedule field:
-- threshold_schedule is None → static mode
-- threshold_schedule is a list → dynamic mode
+- threshold_schedule is None -> static mode
+- threshold_schedule is a list -> dynamic mode
+
+Implementation is split across:
+  - runner.py (this file) -- main run_pipeline() orchestration
+  - pipeline_setup.py -- _setup_paths_and_modules, _get_git_hash, _setup_logger
+  - post_pipeline.py -- _run_dynamic_post_pipeline
 """
-import sys
 import os
-import logging
-import importlib
 import time
 import traceback
 from pathlib import Path
 from tqdm import tqdm
 
+from .pipeline_setup import _get_git_hash, _setup_paths_and_modules, _setup_logger
+from .post_pipeline import _run_dynamic_post_pipeline
+
 
 _SCRIPT_DIR = Path(__file__).parent.parent.parent.absolute()  # experiment_pipeline/
-
-
-def _get_git_hash():
-    """Get current git commit hash, or None if unavailable."""
-    try:
-        import subprocess
-        return subprocess.check_output(
-            ['git', 'rev-parse', 'HEAD'], stderr=subprocess.DEVNULL
-        ).decode('ascii').strip()
-    except Exception:
-        return None
-
-
-def _setup_paths_and_modules(output_path: str, input_path: str):
-    """
-    Reload core.paths and pipeline modules to pick up updated paths.
-
-    This is necessary because the pipeline uses module-level globals for paths,
-    which must be updated when running multiple houses or experiments in sequence.
-
-    Returns:
-        Tuple of (process_detection, process_matching, process_segmentation,
-                  process_evaluation, process_visualization, core_imports)
-    """
-    import core.paths
-    importlib.reload(core.paths)
-
-    core.paths.OUTPUT_BASE_PATH = output_path
-    core.paths.OUTPUT_ROOT = output_path
-    core.paths.INPUT_DIRECTORY = output_path
-    core.paths.LOGS_DIRECTORY = f"{output_path}/logs/"
-    core.paths.RAW_INPUT_DIRECTORY = input_path
-
-    import core.logging_setup
-    importlib.reload(core.logging_setup)
-
-    import core
-    importlib.reload(core)
-
-    import disaggregation.pipeline.detection_step
-    import disaggregation.pipeline.matching_step
-    import disaggregation.pipeline.segmentation_step
-    import disaggregation.pipeline.evaluation_step
-    import disaggregation.pipeline.visualization_step
-    importlib.reload(disaggregation.pipeline.detection_step)
-    importlib.reload(disaggregation.pipeline.matching_step)
-    importlib.reload(disaggregation.pipeline.segmentation_step)
-    importlib.reload(disaggregation.pipeline.evaluation_step)
-    importlib.reload(disaggregation.pipeline.visualization_step)
-
-    process_detection = disaggregation.pipeline.detection_step.process_detection
-    process_matching = disaggregation.pipeline.matching_step.process_matching
-    process_segmentation = disaggregation.pipeline.segmentation_step.process_segmentation
-    process_evaluation = disaggregation.pipeline.evaluation_step.process_evaluation
-    process_visualization = disaggregation.pipeline.visualization_step.process_visualization
-
-    from core import get_experiment, save_experiment_metadata, find_house_data_path, find_previous_run_summarized
-
-    return (
-        process_detection, process_matching, process_segmentation,
-        process_evaluation, process_visualization,
-        get_experiment, save_experiment_metadata,
-        find_house_data_path, find_previous_run_summarized,
-    )
-
-
-def _setup_logger(output_path: str, house_id: str, quiet: bool):
-    """Set up per-house logger with file and optional console handlers."""
-    log_handlers = [logging.FileHandler(f"{output_path}/logs/test_{house_id}.log", encoding='utf-8')]
-    if not quiet:
-        log_handlers.append(logging.StreamHandler())
-
-    logger = logging.getLogger(f"pipeline_{house_id}_{os.getpid()}")
-    logger.setLevel(logging.INFO)
-    logger.handlers = []
-    for handler in log_handlers:
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(handler)
-
-    return logger
 
 
 def run_pipeline(
@@ -333,7 +258,7 @@ def run_pipeline(
         use_guided_recovery = getattr(exp_config, 'use_guided_recovery', False)
         if use_guided_recovery:
             try:
-                from disaggregation.pipeline.recovery_step import process_guided_recovery
+                from disaggregation.rectangle.pipeline.recovery_step import process_guided_recovery
                 recovery_result = process_guided_recovery(
                     output_path=output_path,
                     house_id=house_id,
@@ -381,85 +306,3 @@ def run_pipeline(
     mode_str = "Dynamic threshold pipeline" if is_dynamic else "Pipeline"
     logger.info(f"\n{mode_str} completed: {iterations_completed} iterations")
     return {'success': True, 'iterations': iterations_completed, 'error': None}
-
-
-def _run_dynamic_post_pipeline(
-    output_path: str,
-    house_id: str,
-    threshold_schedule: list,
-    iterations_completed: int,
-    all_device_profiles: dict,
-    minimal_output: bool,
-    skip_identification: bool,
-    logger,
-):
-    """Run dynamic-specific post-pipeline steps: eval summary, identification, cleanup."""
-
-    # 1. Generate threshold-independent evaluation summary (disaggregation metric)
-    try:
-        from disaggregation.pipeline.evaluation_summary import generate_dynamic_evaluation_summary
-        generate_dynamic_evaluation_summary(
-            output_path=output_path,
-            house_id=house_id,
-            threshold_schedule=threshold_schedule,
-            iterations_completed=iterations_completed,
-            logger=logger,
-        )
-    except Exception as e:
-        logger.error(f"Error generating dynamic evaluation summary: {e}")
-        logger.error(traceback.format_exc())
-
-    # 2. Run identification pipeline (session grouping + classification)
-    if not skip_identification:
-        try:
-            from identification import (
-                load_all_matches, filter_transient_events,
-                classify_events,
-                build_session_json,
-            )
-            logger.info(f"{'=' * 60}")
-            logger.info("IDENTIFICATION PIPELINE (classify-first)")
-            logger.info(f"{'=' * 60}")
-
-            experiment_dir = Path(output_path)
-
-            t0 = time.time()
-            all_matches = load_all_matches(experiment_dir, house_id, threshold_schedule)
-            logger.info(f"  Load matches: {len(all_matches)} matches ({time.time() - t0:.1f}s)")
-
-            t0 = time.time()
-            filtered, spike_stats = filter_transient_events(all_matches)
-            spike_count = spike_stats.get('spike_count', 0) if isinstance(spike_stats, dict) else 0
-            logger.info(f"  Filter spikes: {spike_count} removed, "
-                        f"{len(filtered)} remaining ({time.time() - t0:.1f}s)")
-
-            t0 = time.time()
-            classified = classify_events(filtered)
-            total_classified = sum(len(v) for v in classified.values())
-            non_unknown = total_classified - len(classified.get('unknown', []))
-            logger.info(f"  Classify: {non_unknown}/{total_classified} classified "
-                        f"({time.time() - t0:.1f}s)")
-
-            t0 = time.time()
-            json_path = build_session_json(
-                classified_sessions=classified,
-                house_id=house_id,
-                threshold_schedule=threshold_schedule,
-                experiment_dir=experiment_dir,
-                device_profiles=all_device_profiles,
-                spike_stats=spike_stats,
-            )
-            logger.info(f"  Save JSON output ({time.time() - t0:.1f}s)")
-            logger.info(f"  Device sessions JSON saved to {json_path}")
-        except Exception as e:
-            logger.error(f"Error in identification pipeline: {e}")
-            logger.error(traceback.format_exc())
-
-    # 3. Optional cleanup of intermediate files
-    if minimal_output:
-        try:
-            from identification.cleanup import cleanup_intermediate_files
-            cleanup_intermediate_files(Path(output_path), house_id, iterations_completed, logger)
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-            logger.error(traceback.format_exc())
