@@ -15,7 +15,7 @@ def simplify_event_id(event_id: str) -> str:
 
     'on_w1_42' -> 'on_42'
     """
-    match = re.match(r"(on|off)_w\d+_(\d+)", event_id)
+    match = re.match(r"(on|off)(?:_it\d+)?_w\d+_(\d+)", event_id)
     if match:
         event_type, unique_id = match.groups()
         return f"{event_type}_{unique_id}"

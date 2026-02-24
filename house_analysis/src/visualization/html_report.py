@@ -46,6 +46,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     """
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
+    wave_html = _generate_wave_section(analyses)
     table_html, tier_counts, continuity_counts, wave_counts = _generate_comparison_table(analyses, per_house_dir)
     filter_bar_html = _build_filter_bar(tier_counts, continuity_counts, wave_counts)
     charts_html = _generate_charts_section(analyses)
@@ -55,6 +56,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     html_content = _build_html_document(
         title=title,
         summary=summary_html,
+        wave=wave_html,
         filter_bar=filter_bar_html,
         table=table_html,
         charts=charts_html,
@@ -70,6 +72,44 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     return output_path
 
 
+def _build_quality_dist_bar(tier_counts: Dict[str, int], n_houses: int) -> str:
+    """Build quality distribution bar HTML — shared visual pattern across all reports."""
+    tier_config = [
+        ('excellent', 'Excellent', '#28a745'),
+        ('good', 'Good', '#007bff'),
+        ('fair', 'Fair', '#ffc107'),
+        ('poor', 'Poor', '#dc3545'),
+        ('faulty_dead', 'Faulty (Dead)', '#5a3d7a'),
+        ('faulty_nan', 'Faulty (NaN)', '#6f42c1'),
+        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
+        ('unknown', 'Unknown', '#6c757d'),
+    ]
+
+    segments = ''
+    legend_items = ''
+    for key, label, color in tier_config:
+        count = tier_counts.get(key, 0)
+        if count == 0:
+            continue
+        pct = count / n_houses * 100 if n_houses > 0 else 0
+        segments += (f'<div style="width:{pct:.1f}%;background:{color};height:100%;'
+                     f'display:inline-block;" title="{label}: {count} ({pct:.0f}%)"></div>')
+        legend_items += (f'<span style="display:inline-flex;align-items:center;gap:4px;'
+                         f'margin-right:12px;font-size:0.82em;">'
+                         f'<span style="width:10px;height:10px;border-radius:50%;'
+                         f'background:{color};display:inline-block;"></span>'
+                         f'{label}: {count} ({pct:.0f}%)</span>')
+
+    return f'''
+    <div style="margin:18px 0;">
+        <div style="font-size:0.82em;font-weight:600;color:#555;margin-bottom:6px;">
+            Input Quality Distribution</div>
+        <div style="width:100%;height:18px;border-radius:9px;overflow:hidden;
+                    background:#e9ecef;font-size:0;line-height:0;">{segments}</div>
+        <div style="margin-top:6px;line-height:1.8;">{legend_items}</div>
+    </div>'''
+
+
 def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate executive summary HTML."""
     n_houses = len(analyses)
@@ -83,23 +123,45 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     avg_coverage = sum(coverage_ratios) / n_houses if n_houses > 0 else 0
     total_days = sum(days_spans)
 
-    # Count issues
-    n_low_quality = sum(1 for a in analyses if a.get('flags', {}).get('low_quality_score', False))
-    n_low_coverage = sum(1 for a in analyses if a.get('flags', {}).get('low_coverage', False))
-    n_negative = sum(1 for a in analyses if a.get('flags', {}).get('has_negative_values', False))
-    n_duplicates = sum(1 for a in analyses if a.get('flags', {}).get('has_duplicate_timestamps', False))
+    # Compute tier counts for quality distribution bar
+    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0,
+                   'faulty_dead': 0, 'faulty_nan': 0, 'faulty_both': 0, 'unknown': 0}
+    for a in analyses:
+        score = a.get('data_quality', {}).get('quality_score', 0)
+        qlabel = a.get('flags', {}).get('quality_label')
+        if qlabel == 'faulty_both':
+            tier_counts['faulty_both'] += 1
+        elif qlabel == 'faulty_dead_phase':
+            tier_counts['faulty_dead'] += 1
+        elif qlabel == 'faulty_high_nan':
+            tier_counts['faulty_nan'] += 1
+        elif score >= 90:
+            tier_counts['excellent'] += 1
+        elif score >= 75:
+            tier_counts['good'] += 1
+        elif score >= 50:
+            tier_counts['fair'] += 1
+        else:
+            tier_counts['poor'] += 1
 
-    # Wave behavior counts
-    n_wave_dominant = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'wave_dominant')
-    n_has_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'has_waves')
-    n_no_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'no_waves')
+    quality_bar = _build_quality_dist_bar(tier_counts, n_houses)
 
     return f"""
-    <div class="summary-grid">
+    <!-- Row 1: Houses + Days -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
         <div class="summary-card">
             <div class="summary-number" id="summary-total">{n_houses}</div>
             <div class="summary-label">Houses Analyzed</div>
         </div>
+        <div class="summary-card">
+            <div class="summary-number" id="summary-total-days">{total_days:,}</div>
+            <div class="summary-label">Total Days of Data</div>
+        </div>
+    </div>
+    <!-- Row 2: Quality distribution -->
+    {quality_bar}
+    <!-- Row 3: Report-specific metrics -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:18px;">
         <div class="summary-card">
             <div class="summary-number" id="summary-avg-score">{avg_quality:.0f}</div>
             <div class="summary-label">Avg Quality Score</div>
@@ -108,12 +170,18 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
             <div class="summary-number" id="summary-avg-coverage">{avg_coverage:.1%}</div>
             <div class="summary-label">Avg Coverage</div>
         </div>
-        <div class="summary-card">
-            <div class="summary-number" id="summary-total-days">{total_days:,}</div>
-            <div class="summary-label">Total Days of Data</div>
-        </div>
     </div>
-    <div class="summary-grid" style="margin-top: 10px;">
+    """
+
+
+def _generate_wave_section(analyses: List[Dict[str, Any]]) -> str:
+    """Generate wave behavior summary as a separate section."""
+    n_wave_dominant = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'wave_dominant')
+    n_has_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'has_waves')
+    n_no_waves = sum(1 for a in analyses if a.get('wave_behavior', {}).get('wave_classification') == 'no_waves')
+
+    return f"""
+    <div class="summary-grid">
         <div class="summary-card" style="background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);">
             <div class="summary-number" style="color: #e67e22;">{n_wave_dominant}</div>
             <div class="summary-label">Wave Dominant</div>
@@ -126,23 +194,6 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
             <div class="summary-number" style="color: #95a5a6;">{n_no_waves}</div>
             <div class="summary-label">No Waves</div>
         </div>
-    </div>
-    <div class="summary-alerts">
-        <h3>Issues Summary</h3>
-        <ul>
-            <li class="{'alert' if n_low_quality > 0 else ''}">
-                <strong>{n_low_quality}</strong> houses with low quality score (&lt;70)
-            </li>
-            <li class="{'alert' if n_low_coverage > 0 else ''}">
-                <strong>{n_low_coverage}</strong> houses with low coverage (&lt;80%)
-            </li>
-            <li class="{'alert' if n_negative > 0 else ''}">
-                <strong>{n_negative}</strong> houses with negative power values
-            </li>
-            <li class="{'alert' if n_duplicates > 0 else ''}">
-                <strong>{n_duplicates}</strong> houses with duplicate timestamps
-            </li>
-        </ul>
     </div>
     """
 
@@ -1629,7 +1680,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
 def _build_html_document(title: str, summary: str, filter_bar: str,
                          table: str, charts: str, quality_tiers: str,
-                         generated_at: str) -> str:
+                         generated_at: str, wave: str = '') -> str:
     """Build complete HTML document."""
     return f"""
 <!DOCTYPE html>
@@ -2027,6 +2078,11 @@ def _build_html_document(title: str, summary: str, filter_bar: str,
         <section>
             <h2>Executive Summary</h2>
             {summary}
+        </section>
+
+        <section>
+            <h2>Wave Behavior</h2>
+            {wave}
         </section>
 
         <section>

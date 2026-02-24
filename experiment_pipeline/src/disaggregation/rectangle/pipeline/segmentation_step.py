@@ -96,9 +96,10 @@ def process_segmentation(
         else:
             continue
 
-        # Skip if summarized file already exists
+        # Skip if summarized file already exists (unless we still need profiles)
         summary_file = summarized_dir / f"summarized_{house_id}_{month:02d}_{year}.pkl"
-        if summary_file.exists():
+        summarized_exists = summary_file.exists()
+        if summarized_exists and not capture_device_profiles:
             logger.info(f"Skipping {month:02d}/{year} - summarized file already exists")
             continue
 
@@ -107,6 +108,8 @@ def process_segmentation(
         if data_file_key not in data_files:
             data_file_key = house_id
             if data_file_key not in data_files:
+                if summarized_exists:
+                    continue  # summarized exists, just no data file for profile capture
                 logger.warning(f"Data file not found for {month:02d}/{year}")
                 continue
 
@@ -114,10 +117,11 @@ def process_segmentation(
         events = pd.read_pickle(matches_file)
         if events.empty:
             # No events matched: remaining = original (nothing to extract)
-            data = load_power_data(data_files[data_file_key])
-            data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
-            if not data.empty:
-                _create_passthrough_summary(data, phases, summary_file, logger, month, year)
+            if not summarized_exists:
+                data = load_power_data(data_files[data_file_key])
+                data.dropna(subset=['w1', 'w2', 'w3'], how='all', inplace=True)
+                if not data.empty:
+                    _create_passthrough_summary(data, phases, summary_file, logger, month, year)
             continue
 
         # Load power data for this month
@@ -151,6 +155,13 @@ def process_segmentation(
                         'timestamps': profile['timestamps'],
                         'values': profile['values']
                     }
+
+        # Skip writing summarized + matches updates if file already existed
+        # (we only re-processed to capture device profiles)
+        if summarized_exists:
+            if capture_device_profiles:
+                logger.info(f"Captured profiles for {month:02d}/{year} (summarized already exists)")
+            continue
 
         # Update matches file: remove events that were skipped during segmentation
         # Bug #14 fix: restore skipped events to unmatched files so no events are lost

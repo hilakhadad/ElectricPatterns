@@ -9,6 +9,7 @@ import pandas as pd
 def _calc_magnitude_from_phase(data: pd.DataFrame, phase: str, start: pd.Timestamp, end: pd.Timestamp) -> float:
     """
     Calculate event magnitude as the difference between power at end and power before start.
+    NaN raw values are treated as 0 (e.g. at NaN-gap boundaries).
     """
     before_start = start - pd.Timedelta(minutes=1)
 
@@ -16,19 +17,27 @@ def _calc_magnitude_from_phase(data: pd.DataFrame, phase: str, start: pd.Timesta
     if data.index.name == 'timestamp':
         try:
             value_end = data.loc[end, phase]
+            if pd.isna(value_end):
+                value_end = 0
         except KeyError:
             value_end = 0
         try:
             value_before = data.loc[before_start, phase]
+            if pd.isna(value_before):
+                value_before = 0
         except KeyError:
             value_before = 0
     else:
         # Fallback to boolean indexing
         end_mask = data['timestamp'] == end
         value_end = data.loc[end_mask, phase].values[0] if end_mask.any() else 0
+        if pd.isna(value_end):
+            value_end = 0
 
         before_mask = data['timestamp'] == before_start
         value_before = data.loc[before_mask, phase].values[0] if before_mask.any() else 0
+        if pd.isna(value_before):
+            value_before = 0
 
     return value_end - value_before
 
@@ -75,17 +84,28 @@ def expand_event(
             before_data = data.loc[before_start:start].iloc[:-1] if start in data.index else data.loc[before_start:start]
             before_magnitude = before_data[diff_col].sum() if len(before_data) > 0 else 0
         except KeyError:
+            before_data = pd.DataFrame()
             before_magnitude = 0
         try:
             after_data = data.loc[end:after_end].iloc[1:] if end in data.index else data.loc[end:after_end]
             after_magnitude = after_data[diff_col].sum() if len(after_data) > 0 else 0
         except KeyError:
+            after_data = pd.DataFrame()
             after_magnitude = 0
     else:
         before_data = data[(data['timestamp'] >= before_start) & (data['timestamp'] < start)]
         after_data = data[(data['timestamp'] > end) & (data['timestamp'] <= after_end)]
         before_magnitude = before_data[diff_col].sum()
         after_magnitude = after_data[diff_col].sum()
+
+    # At NaN-gap boundaries the diff is NaN (e.g. 805 - NaN = NaN).
+    # Recompute from raw phase values treating NaN as 0 — only for the check,
+    # the actual data is not modified.
+    if phase in data.columns:
+        if len(before_data) > 0 and before_data[diff_col].isna().any():
+            before_magnitude = _calc_magnitude_from_phase(data, phase, before_start, before_start)
+        if len(after_data) > 0 and after_data[diff_col].isna().any():
+            after_magnitude = _calc_magnitude_from_phase(data, phase, after_end, after_end)
 
     # Use absolute value for threshold calculation
     threshold = expand_factor * abs(magnitude)

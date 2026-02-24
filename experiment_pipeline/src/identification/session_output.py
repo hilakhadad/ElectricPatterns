@@ -166,6 +166,21 @@ def _serialize_event(ev: dict, device_profiles=None) -> dict:
         'iteration': ev.get('iteration'),
         'threshold': ev.get('threshold'),
     }
+
+    # Include per-minute power profile from segmentation (actual extraction shape)
+    if device_profiles:
+        on_event_id = ev.get('on_event_id')
+        if on_event_id:
+            # device_profiles: {run_number: {on_event_id: {timestamps, values}}}
+            for run_profiles in device_profiles.values():
+                profile = run_profiles.get(on_event_id)
+                if profile:
+                    result['power_profile'] = {
+                        'timestamps': [_ts(t) for t in profile['timestamps']],
+                        'values': [round(v, 1) for v in profile['values']],
+                    }
+                    break
+
     return result
 
 

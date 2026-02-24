@@ -156,6 +156,44 @@ def _build_population_stats_section(population_stats: Dict[str, Any]) -> str:
         </section>'''
 
 
+def _build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
+    """Build quality distribution bar HTML — shared visual pattern across all reports."""
+    tier_config = [
+        ('excellent', 'Excellent', '#28a745'),
+        ('good', 'Good', '#007bff'),
+        ('fair', 'Fair', '#ffc107'),
+        ('poor', 'Poor', '#dc3545'),
+        ('faulty_dead_phase', 'Faulty (Dead)', '#5a3d7a'),
+        ('faulty_high_nan', 'Faulty (NaN)', '#6f42c1'),
+        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
+        ('unknown', 'Unknown', '#6c757d'),
+    ]
+
+    segments = ''
+    legend_items = ''
+    for key, label, color in tier_config:
+        count = tier_counts.get(key, 0)
+        if count == 0:
+            continue
+        pct = count / n_houses * 100 if n_houses > 0 else 0
+        segments += (f'<div style="width:{pct:.1f}%;background:{color};height:100%;'
+                     f'display:inline-block;" title="{label}: {count} ({pct:.0f}%)"></div>')
+        legend_items += (f'<span style="display:inline-flex;align-items:center;gap:4px;'
+                         f'margin-right:12px;font-size:0.82em;">'
+                         f'<span style="width:10px;height:10px;border-radius:50%;'
+                         f'background:{color};display:inline-block;"></span>'
+                         f'{label}: {count} ({pct:.0f}%)</span>')
+
+    return f'''
+    <div style="margin:18px 0;">
+        <div style="font-size:0.82em;font-weight:600;color:#555;margin-bottom:6px;">
+            Input Quality Distribution</div>
+        <div style="width:100%;height:18px;border-radius:9px;overflow:hidden;
+                    background:#e9ecef;font-size:0;line-height:0;">{segments}</div>
+        <div style="margin-top:6px;line-height:1.8;">{legend_items}</div>
+    </div>'''
+
+
 def _assign_tier(pre_quality) -> str:
     """Assign quality tier based on pre-analysis quality score."""
     if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
@@ -677,6 +715,9 @@ def _build_aggregate_html(
     avg_sub_threshold = np.mean(sub_threshold_pcts)
     avg_no_data = np.mean(no_data_pcts)
 
+    # Total days across all houses
+    total_days = sum(m.get('data_period', {}).get('days', 0) for m in valid)
+
     # Link prefix for per-house reports
     link_prefix = f"{house_reports_subdir}/" if house_reports_subdir else ""
 
@@ -763,8 +804,9 @@ def _build_aggregate_html(
         'height': 350,
     })
 
-    # Build filter bar
+    # Build filter bar and quality distribution
     filter_bar = _build_filter_bar(tier_counts, continuity_counts)
+    quality_dist_bar = _build_quality_dist_bar(tier_counts, n_houses)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -895,9 +937,23 @@ def _build_aggregate_html(
 
         <section>
             <h2>Summary</h2>
-            <div style="border: 2px solid #dee2e6; border-radius: 10px; padding: 15px; margin-bottom: 15px;">
+            <!-- Row 1: Houses + Days -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
+                <div class="summary-card">
+                    <div class="summary-number" style="color:#2d3748;">{n_houses}</div>
+                    <div class="summary-label">Houses Analyzed</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-number" style="color:#2d3748;">{total_days:,}</div>
+                    <div class="summary-label">Total Days of Data</div>
+                </div>
+            </div>
+            <!-- Row 2: Quality distribution -->
+            {quality_dist_bar}
+            <!-- Row 3: Report-specific — Power Decomposition -->
+            <div style="border: 2px solid #dee2e6; border-radius: 10px; padding: 15px; margin-top: 18px; margin-bottom: 15px;">
                 <div style="font-size: 0.82em; font-weight: 600; color: #555; margin-bottom: 10px;">
-                    Power Decomposition (= 100%) &mdash; {n_houses} houses
+                    Power Decomposition (= 100%)
                 </div>
                 <div class="summary-grid">
                     <div class="summary-card" title="Average % of total power attributed to detected device activations">

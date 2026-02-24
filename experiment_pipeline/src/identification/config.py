@@ -10,9 +10,8 @@ from typing import List
 # ============================================================================
 # Transient event filtering (pre-identification)
 # ============================================================================
-MIN_EVENT_DURATION_MINUTES = 3      # events shorter than this are transient noise
-                                     # (aligns with AC_MIN_CYCLE_DURATION — the
-                                     # shortest classifiable event is 3 min)
+MIN_EVENT_DURATION_MINUTES = 2      # events shorter than this are transient noise
+                                     # (filters only 1-min spikes; keeps 2-min events)
 
 # ============================================================================
 # Session grouping
@@ -47,7 +46,7 @@ CENTRAL_AC_MAX_GAP_CV = 0.50        # 50% — gaps between cycles should be regu
 AC_MIN_MAGNITUDE = 800              # watts
 AC_MIN_CYCLE_DURATION = 3           # minutes
 AC_MAX_CYCLE_DURATION = 30          # minutes
-AC_MIN_INITIAL_DURATION = 15        # minutes — first activation in session
+AC_MIN_INITIAL_DURATION = 10        # minutes — first activation in session
 AC_MIN_FOLLOWING_CYCLES = 3         # cycles after initial (total ≥ 4)
 AC_MAX_MAGNITUDE_CV = 0.20          # 20% coefficient of variation
 
@@ -64,7 +63,8 @@ AC_FILTER_MAG_RATIO = 0.50          # cycle ≥ 50% of boiler magnitude
 # ============================================================================
 THREE_PHASE_OVERLAP_TOLERANCE = 0.10  # 10% of event duration as overlap margin
 THREE_PHASE_MAX_DURATION_RATIO = 2.0  # max ratio between durations (e.g., 20min vs 40min OK, 20min vs 120min NOT)
-THREE_PHASE_MIN_PHASES = 2            # events on 2+ other phases → three_phase_device
+THREE_PHASE_MIN_PHASES = 1            # events on 1+ other phases → three_phase_device
+THREE_PHASE_MIN_OVERLAP_RATIO = 0.50  # at least 50% of shorter event must actually overlap
 
 # ============================================================================
 # Multi-phase simultaneity

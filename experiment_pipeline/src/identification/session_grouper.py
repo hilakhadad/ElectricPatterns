@@ -128,10 +128,9 @@ def filter_transient_events(
 ) -> tuple:
     """Filter out transient (spike) events that are too short to classify.
 
-    Events shorter than ``min_duration`` minutes cannot be classified as any
-    known device type (boiler ≥25 min, AC cycle ≥3 min) and represent
-    transient noise from appliances not targeted by identification (microwave,
-    oven, washing machine motor starts, etc.).
+    Events shorter than ``min_duration`` minutes (currently 2 min — filters
+    only 1-min spikes) represent transient noise from appliances not targeted
+    by identification (microwave, oven, washing machine motor starts, etc.).
 
     This replaces the former ``deduplicate_cross_iteration`` which made
     assumptions about which events are "the same physical event".
@@ -192,9 +191,8 @@ def _compute_spike_stats(
     spike_minutes = float(spikes['duration'].sum()) if len(spikes) > 0 else 0.0
     kept_minutes = float(kept['duration'].sum()) if len(kept) > 0 else 0.0
 
-    # Duration breakdown of kept events: short (3-25 min) vs long (>=25 min)
-    # Aligns with device classification: AC cycles are 3-30 min, boilers >=25 min
-    LONG_DURATION_THRESHOLD = 25  # minutes — matches boiler min duration
+    # Duration breakdown of kept events: short (2-15 min) vs long (>=15 min)
+    LONG_DURATION_THRESHOLD = 15  # minutes
     if len(kept) > 0:
         short_mask = kept['duration'] < LONG_DURATION_THRESHOLD
         short_count = int(short_mask.sum())

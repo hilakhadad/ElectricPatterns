@@ -46,6 +46,155 @@ from visualization.classification_charts import create_quality_section
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Pre-analysis quality helpers (mirrors disaggregation_analysis logic)
+# ---------------------------------------------------------------------------
+
+def _load_pre_analysis_scores(house_analysis_path) -> Dict[str, Any]:
+    """
+    Load quality scores from house_analysis output.
+
+    Supports:
+    - Directory containing per-house JSON files (per_house/ or direct)
+    - Single JSON file with list of analyses or 'analyses' key
+    """
+    import json as _json
+    scores = {}
+    house_analysis_path = Path(house_analysis_path)
+
+    if not house_analysis_path.exists():
+        return scores
+
+    def _extract(analysis: dict):
+        house_id = str(analysis.get('house_id', ''))
+        if not house_id:
+            return None
+        quality = analysis.get('data_quality', {})
+        quality_label = quality.get('quality_label')
+        quality_score = quality.get('quality_score')
+
+        if quality_label and quality_label.startswith('faulty'):
+            qs = quality_label
+        elif quality_score is not None:
+            qs = quality_score
+        else:
+            return None
+
+        return house_id, {
+            'quality_score': qs,
+            'nan_continuity': quality.get('nan_continuity_label', 'unknown'),
+            'max_nan_pct': quality.get('max_phase_nan_pct', 0),
+        }
+
+    if house_analysis_path.is_dir():
+        per_house_dir = house_analysis_path / "per_house"
+        if not per_house_dir.exists():
+            per_house_dir = house_analysis_path
+
+        for json_file in per_house_dir.glob("analysis_*.json"):
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    analysis = _json.load(f)
+                result = _extract(analysis)
+                if result:
+                    scores[result[0]] = result[1]
+            except Exception:
+                pass
+        return scores
+
+    try:
+        with open(house_analysis_path, 'r', encoding='utf-8') as f:
+            data = _json.load(f)
+
+        analyses = data if isinstance(data, list) else data.get('analyses', [])
+        for analysis in analyses:
+            result = _extract(analysis)
+            if result:
+                scores[result[0]] = result[1]
+    except Exception:
+        pass
+
+    return scores
+
+
+def _assign_tier(pre_quality) -> str:
+    """Assign quality tier based on pre-analysis quality score."""
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        return pre_quality
+    elif pre_quality is None:
+        return 'unknown'
+    elif pre_quality >= 90:
+        return 'excellent'
+    elif pre_quality >= 75:
+        return 'good'
+    elif pre_quality >= 50:
+        return 'fair'
+    else:
+        return 'poor'
+
+
+def _format_pre_quality(pre_quality) -> str:
+    """Format pre-quality score as colored HTML."""
+    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
+        _faulty_labels = {
+            'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
+            'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
+            'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
+        }
+        _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
+        return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
+    elif pre_quality is None:
+        return '<span style="color:#999;">-</span>'
+    else:
+        if pre_quality >= 90:
+            color = '#28a745'
+        elif pre_quality >= 75:
+            color = '#007bff'
+        elif pre_quality >= 50:
+            color = '#ffc107'
+        else:
+            color = '#dc3545'
+        return f'<span style="color:{color};font-weight:bold;">{pre_quality:.0f}</span>'
+
+
+def _build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
+    """Build quality distribution bar HTML — shared visual pattern across all reports."""
+    tier_config = [
+        ('excellent', 'Excellent', '#28a745'),
+        ('good', 'Good', '#007bff'),
+        ('fair', 'Fair', '#ffc107'),
+        ('poor', 'Poor', '#dc3545'),
+        ('faulty_dead_phase', 'Faulty (Dead)', '#5a3d7a'),
+        ('faulty_high_nan', 'Faulty (NaN)', '#6f42c1'),
+        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
+        ('unknown', 'Unknown', '#6c757d'),
+    ]
+
+    segments = ''
+    legend_items = ''
+    for key, label, color in tier_config:
+        count = tier_counts.get(key, 0)
+        if count == 0:
+            continue
+        pct = count / n_houses * 100 if n_houses > 0 else 0
+        segments += (f'<div style="width:{pct:.1f}%;background:{color};height:100%;'
+                     f'display:inline-block;" title="{label}: {count} ({pct:.0f}%)"></div>')
+        legend_items += (f'<span style="display:inline-flex;align-items:center;gap:4px;'
+                         f'margin-right:12px;font-size:0.82em;">'
+                         f'<span style="width:10px;height:10px;border-radius:50%;'
+                         f'background:{color};display:inline-block;"></span>'
+                         f'{label}: {count} ({pct:.0f}%)</span>')
+
+    return f'''
+    <div style="margin:18px 0;">
+        <div style="font-size:0.82em;font-weight:600;color:#555;margin-bottom:6px;">
+            Input Quality Distribution</div>
+        <div style="width:100%;height:18px;border-radius:9px;overflow:hidden;
+                    background:#e9ecef;font-size:0;line-height:0;">{segments}</div>
+        <div style="margin-top:6px;line-height:1.8;">{legend_items}</div>
+    </div>'''
+
+
 def _load_summarized_power(experiment_dir: Path, house_id: str):
     """Load summarized power: true original from first run + final remaining from last run.
 
@@ -220,9 +369,11 @@ def _load_spike_intervals(experiment_dir: Path, house_id: str) -> dict:
 def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
     """Load all matches from all iterations as intervals per phase.
 
-    Returns dict: {phase: [(on_start_iso, off_end_iso, magnitude, duration), ...]}
-    Used by chart visualization to show individual match rectangles
-    instead of computing segregated = original - remaining.
+    Returns dict: {phase: [(on_start_iso, off_end_iso, magnitude, duration,
+                            on_end_iso, off_start_iso), ...]}
+    Used by chart visualization to show individual match shapes.
+    on_end and off_start enable trapezoidal rendering (ramp up → stable → ramp down)
+    as fallback when per-minute power_profile is not available.
     """
     import pandas as pd
 
@@ -239,7 +390,7 @@ def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
             try:
                 df = pd.read_pickle(pkl_file)
                 if not df.empty:
-                    cols = ['phase', 'on_start', 'off_end', 'off_start',
+                    cols = ['phase', 'on_start', 'on_end', 'off_start', 'off_end',
                             'on_magnitude', 'duration']
                     available = [c for c in cols if c in df.columns]
                     all_dfs.append(df[available].copy())
@@ -259,6 +410,15 @@ def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
             combined.get('off_start', combined['on_start']))
     else:
         combined['off_end'] = combined.get('off_start', combined['on_start'])
+    # Fill missing on_end / off_start with on_start / off_end respectively
+    if 'on_end' not in combined.columns:
+        combined['on_end'] = combined['on_start']
+    else:
+        combined['on_end'] = combined['on_end'].fillna(combined['on_start'])
+    if 'off_start' not in combined.columns:
+        combined['off_start'] = combined['off_end']
+    else:
+        combined['off_start'] = combined['off_start'].fillna(combined['off_end'])
 
     result = {}
     for phase in ['w1', 'w2', 'w3']:
@@ -267,9 +427,11 @@ def _load_all_match_intervals(experiment_dir: Path, house_id: str) -> dict:
             continue
         starts = pd.to_datetime(pm['on_start']).apply(lambda x: x.isoformat())
         ends = pd.to_datetime(pm['off_end']).apply(lambda x: x.isoformat())
+        on_ends = pd.to_datetime(pm['on_end']).apply(lambda x: x.isoformat())
+        off_starts = pd.to_datetime(pm['off_start']).apply(lambda x: x.isoformat())
         mags = pm['on_magnitude'].abs().round().astype(int)
         durs = pm['duration'].fillna(0).round(1)
-        intervals = sorted(zip(starts, ends, mags, durs))
+        intervals = sorted(zip(starts, ends, mags, durs, on_ends, off_starts))
         result[phase] = intervals
 
     logger.info(f"Loaded {sum(len(v) for v in result.values())} match intervals for house {house_id}")
@@ -659,6 +821,7 @@ def generate_identification_aggregate_report(
     precomputed_metrics: Optional[Dict[str, dict]] = None,
     show_timing: bool = False,
     per_house_filename_pattern: Optional[str] = None,
+    pre_analysis_scores: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Generate aggregate identification report across multiple houses.
@@ -697,7 +860,41 @@ def generate_identification_aggregate_report(
         sessions = sessions_data.get('sessions', [])
         summary = sessions_data.get('summary', {})
 
+        # Spike filter info
+        spike_filter = sessions_data.get('spike_filter', {})
+        spike_count = spike_filter.get('spike_count', 0)
+
+        # Report link (always generate, even for empty houses)
+        report_link = None
+        if house_reports_subdir:
+            if per_house_filename_pattern:
+                per_house_file = per_house_filename_pattern.replace('{house_id}', house_id)
+            else:
+                per_house_file = f'identification_report_{house_id}.html'
+            report_link = f'{house_reports_subdir}/{per_house_file}'
+
+        # Pre-analysis quality for this house
+        house_pre = (pre_analysis_scores or {}).get(house_id, {})
+        if isinstance(house_pre, dict):
+            pre_quality = house_pre.get('quality_score')
+        else:
+            pre_quality = house_pre
+
         if not sessions:
+            house_summaries.append({
+                'house_id': house_id,
+                'total_sessions': 0,
+                'classified': 0,
+                'classified_pct': 0,
+                'avg_confidence': 0,
+                'quality_score': None,
+                'device_counts': {},
+                'report_link': report_link,
+                'days_span': 0,
+                'sessions_per_day': 0,
+                'spike_count': spike_count,
+                'pre_quality': pre_quality,
+            })
             continue
 
         # Collect per-house summary
@@ -711,10 +908,6 @@ def generate_identification_aggregate_report(
         for s in sessions:
             dt = s.get('device_type', 'unknown')
             device_counts[dt] = device_counts.get(dt, 0) + 1
-
-        # Spike filter info
-        spike_filter = sessions_data.get('spike_filter', {})
-        spike_count = spike_filter.get('spike_count', 0)
 
         # Days span and sessions/day from session timestamps
         session_dates = set()
@@ -760,13 +953,6 @@ def generate_identification_aggregate_report(
             all_confidence.append(confidence)
 
         quality_score = quality.get('overall_quality_score') if quality else None
-        report_link = None
-        if house_reports_subdir:
-            if per_house_filename_pattern:
-                per_house_file = per_house_filename_pattern.replace('{house_id}', house_id)
-            else:
-                per_house_file = f'identification_report_{house_id}.html'
-            report_link = f'{house_reports_subdir}/{per_house_file}'
 
         house_summaries.append({
             'house_id': house_id,
@@ -780,6 +966,7 @@ def generate_identification_aggregate_report(
             'days_span': days_span,
             'sessions_per_day': sessions_per_day,
             'spike_count': spike_count,
+            'pre_quality': pre_quality,
         })
 
     if show_timing:
@@ -841,10 +1028,20 @@ def _build_aggregate_html(
     quality_scores = [h['quality_score'] for h in house_summaries if h['quality_score'] is not None]
     median_quality = sorted(quality_scores)[len(quality_scores) // 2] if quality_scores else 0
 
+    # Total data days
+    total_days = sum(h.get('days_span', 0) for h in house_summaries)
+
     # Device detection rates
     has_boiler = sum(1 for h in house_summaries if h['device_counts'].get('boiler', 0) > 0)
     has_central = sum(1 for h in house_summaries if h['device_counts'].get('central_ac', 0) > 0)
     has_regular = sum(1 for h in house_summaries if h['device_counts'].get('regular_ac', 0) > 0)
+
+    # Input quality tier counts
+    tier_counts = {}
+    for h in house_summaries:
+        tier = _assign_tier(h.get('pre_quality'))
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    quality_dist_bar = _build_quality_dist_bar(tier_counts, n)
 
     # Population stats section
     pop_html = _build_population_section(population_stats) if population_stats else ''
@@ -855,6 +1052,10 @@ def _build_aggregate_html(
     for h in sorted(house_summaries, key=lambda x: x['house_id']):
         hid = h['house_id']
         link = f'<a href="{h["report_link"]}" style="color: #667eea; text-decoration: none;">{hid}</a>' if h.get('report_link') else hid
+
+        # Pre-quality
+        pq_html = _format_pre_quality(h.get('pre_quality'))
+        tier = _assign_tier(h.get('pre_quality'))
 
         # Device type badges
         badges = ''
@@ -874,9 +1075,10 @@ def _build_aggregate_html(
         spikes = h.get('spike_count', 0)
 
         table_rows += f'''
-        <tr>
+        <tr data-tier="{tier}">
             <td style="{_td}" data-value="{hid}">{link}</td>
             <td style="{_td}text-align:center;" data-value="{days}">{days}</td>
+            <td style="{_td}text-align:center;">{pq_html}</td>
             <td style="{_td}text-align:center;" data-value="{h['total_sessions']}">{h['total_sessions']}</td>
             <td style="{_td}text-align:center;" data-value="{spd:.2f}">{spd:.1f}</td>
             <td style="{_td}text-align:center;" data-value="{spikes}">{spikes}</td>
@@ -885,6 +1087,29 @@ def _build_aggregate_html(
             <td style="{_td}text-align:center;color:{q_color};font-weight:600;" data-value="{q_val:.3f}">{q_str}</td>
             <td style="{_td}">{badges}</td>
         </tr>'''
+
+    # Tier filter bar
+    _tier_styles = {
+        'excellent': ('Excellent', '#d4edda', '#155724'),
+        'good': ('Good', '#cce5ff', '#004085'),
+        'fair': ('Fair', '#fff3cd', '#856404'),
+        'poor': ('Poor', '#fde2d4', '#813e1a'),
+        'faulty_dead_phase': ('Dead Phase', '#d4c5e2', '#5a3d7a'),
+        'faulty_high_nan': ('High NaN', '#e2d5f0', '#6f42c1'),
+        'faulty_both': ('Faulty Both', '#c9a3d4', '#4a0e6b'),
+        'unknown': ('Unknown', '#e9ecef', '#495057'),
+    }
+    filter_checkboxes = ''
+    for tier_key, (label, bg, fg) in _tier_styles.items():
+        cnt = tier_counts.get(tier_key, 0)
+        if cnt == 0:
+            continue
+        filter_checkboxes += (
+            f'<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;'
+            f'border-radius:4px;font-size:0.85em;background:{bg};color:{fg};cursor:pointer;">'
+            f'<input type="checkbox" data-filter-tier="{tier_key}" checked '
+            f'onchange="updateIdFilter()"> {label} ({cnt})</label> '
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -899,7 +1124,7 @@ def _build_aggregate_html(
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #f5f7fa; color: #333; line-height: 1.6;
         }}
-        .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; padding: 20px; }}
         header {{
             background: linear-gradient(135deg, #1a365d 0%, #2a4365 50%, #2c5282 100%);
             color: white; padding: 30px; margin-bottom: 30px; border-radius: 10px;
@@ -910,6 +1135,17 @@ def _build_aggregate_html(
             margin-bottom: 25px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }}
         section h2 {{ color: #2a4365; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }}
+        .summary-card {{
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            padding: 25px; border-radius: 10px; text-align: center;
+        }}
+        .summary-number {{ font-size: 2.2em; font-weight: bold; color: #2d3748; }}
+        .summary-label {{ color: #666; margin-top: 5px; font-size: 0.9em; }}
+        .filter-bar {{
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            margin-bottom: 12px; padding: 10px 15px; background: #f8f9fa; border-radius: 8px;
+        }}
+        .filter-bar label {{ font-weight: 600; color: #555; margin-right: 5px; }}
         footer {{ text-align: center; padding: 20px; color: #888; font-size: 0.9em; }}
     </style>
 </head>
@@ -917,16 +1153,26 @@ def _build_aggregate_html(
     <div class="container">
         <header>
             <h1>Device Identification &mdash; Aggregate Report</h1>
-            <div style="opacity:0.9;">Generated: {generated_at} | {n} houses analyzed</div>
+            <div style="opacity:0.9;">Generated: {generated_at}</div>
         </header>
 
         <section>
-            <h2>Population Summary</h2>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
-                <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#2d3748;">{n}</div>
-                    <div style="font-size:0.85em;color:#666;">Houses Analyzed</div>
+            <h2>Summary</h2>
+            <!-- Row 1: Houses + Days -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
+                <div class="summary-card">
+                    <div class="summary-number">{n}</div>
+                    <div class="summary-label">Houses Analyzed</div>
                 </div>
+                <div class="summary-card">
+                    <div class="summary-number">{total_days:,}</div>
+                    <div class="summary-label">Total Days of Data</div>
+                </div>
+            </div>
+            <!-- Row 2: Quality distribution -->
+            {quality_dist_bar}
+            <!-- Row 3: Report-specific metrics -->
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;margin-bottom:20px;">
                 <div style="background:#d4edda;border-radius:8px;padding:16px;text-align:center;">
                     <div style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
                     <div style="font-size:0.85em;color:#666;">Avg Classified</div>
@@ -960,9 +1206,15 @@ def _build_aggregate_html(
 
         <section>
             <h2>Per-House Results</h2>
+            <div class="filter-bar">
+                <span style="font-weight:600;color:#555;margin-right:5px;">Quality Tier:</span>
+                {filter_checkboxes}
+                <span id="id-filter-status" style="font-size:0.85em;color:#888;margin-left:auto;"></span>
+            </div>
             <div style="font-size:0.82em;color:#666;margin-bottom:10px;line-height:1.7;">
                 <strong>Column descriptions:</strong>
                 <strong>Days</strong> = calendar days from first to last session |
+                <strong>Pre-Quality</strong> = input data quality from house pre-analysis |
                 <strong>Sessions</strong> = total device sessions found |
                 <strong>Sess/Day</strong> = average sessions per day (higher = more device activity detected) |
                 <strong>Spikes</strong> = transient events filtered out (&lt;3 min) |
@@ -974,14 +1226,15 @@ def _build_aggregate_html(
             <table id="agg-table" style="width:100%;border-collapse:collapse;font-size:0.88em;">
                 <thead>
                     <tr style="background:#2d3748;color:white;">
-                        <th style="padding:8px 10px;text-align:left;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(0,'str')" title="House identifier (click to sort)">House &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:left;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(0,'str')" title="House identifier">House &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(1,'num')" title="Calendar days from first to last session">Days &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(2,'num')" title="Total device sessions found">Sessions &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(3,'num')" title="Average sessions per day">Sess/Day &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(4,'num')" title="Transient events filtered (<3 min)">Spikes &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(5,'num')" title="% of sessions assigned to a device type">Classified &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(6,'num')" title="Average classification confidence (0-1)">Confidence &#x25B4;&#x25BE;</th>
-                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(7,'num')" title="Internal consistency quality score (0-1)">Quality &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(2,'num')" title="Input data quality score from house pre-analysis">Pre-Quality &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(3,'num')" title="Total device sessions found">Sessions &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(4,'num')" title="Average sessions per day">Sess/Day &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(5,'num')" title="Transient events filtered (<3 min)">Spikes &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(6,'num')" title="% of sessions assigned to a device type">Classified &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(7,'num')" title="Average classification confidence (0-1)">Confidence &#x25B4;&#x25BE;</th>
+                        <th style="padding:8px 10px;text-align:center;cursor:pointer;white-space:nowrap;" onclick="sortAggTable(8,'num')" title="Internal consistency quality score (0-1)">Quality &#x25B4;&#x25BE;</th>
                         <th style="padding:8px 10px;text-align:left;white-space:nowrap;">Devices</th>
                     </tr>
                 </thead>
@@ -1022,12 +1275,32 @@ def _build_aggregate_html(
             return asc ? (vA - vB) : (vB - vA);
         }});
         rows.forEach(function(row) {{ tbody.appendChild(row); }});
-        // Update header indicator
         var ths = table.querySelectorAll('thead th');
         ths.forEach(function(th, i) {{
             th.style.fontWeight = (i === colIdx) ? '900' : 'normal';
         }});
     }}
+
+    function updateIdFilter() {{
+        var checkedTiers = [];
+        document.querySelectorAll('[data-filter-tier]').forEach(function(cb) {{
+            if (cb.checked) checkedTiers.push(cb.getAttribute('data-filter-tier'));
+        }});
+        var rows = document.querySelectorAll('#agg-table tbody tr');
+        var shown = 0;
+        rows.forEach(function(row) {{
+            var tier = row.getAttribute('data-tier') || 'unknown';
+            if (checkedTiers.indexOf(tier) !== -1) {{
+                row.style.display = '';
+                shown++;
+            }} else {{
+                row.style.display = 'none';
+            }}
+        }});
+        var status = document.getElementById('id-filter-status');
+        if (status) status.textContent = 'Showing ' + shown + ' / ' + rows.length + ' houses';
+    }}
+    updateIdFilter();
     </script>
 </body>
 </html>"""

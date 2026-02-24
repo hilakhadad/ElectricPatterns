@@ -45,6 +45,7 @@ from .config import (
     THREE_PHASE_OVERLAP_TOLERANCE,
     THREE_PHASE_MAX_DURATION_RATIO,
     THREE_PHASE_MIN_PHASES,
+    THREE_PHASE_MIN_OVERLAP_RATIO,
 )
 from .session_grouper import Session, MultiPhaseSession, build_single_event_session
 
@@ -225,11 +226,26 @@ def _identify_boiler_events(
     Returns:
         (boiler_classified, three_phase_classified, remaining_matches)
     """
-    boiler_candidates: List[Tuple[int, pd.Series]] = []  # (index, row)
     consumed_indices: Set[int] = set()
 
+    # --- Pass 1: find all boiler SIZE candidates (duration + magnitude only) ---
+    # We collect these first so that in pass 2, other boiler-sized events are
+    # excluded from the isolation check — two consecutive boiler activations
+    # should not disqualify each other as "compressor cycles".
+    size_candidate_indices: Set[int] = set()
     for idx, row in all_matches.iterrows():
-        if not _is_boiler_candidate_event(row, all_matches):
+        duration = row.get('duration', 0) or 0
+        magnitude = abs(row.get('on_magnitude', 0) or 0)
+        if duration >= BOILER_MIN_DURATION and magnitude >= BOILER_MIN_MAGNITUDE:
+            size_candidate_indices.add(idx)
+
+    # --- Pass 2: check isolation, excluding other size candidates from pool ---
+    boiler_candidates: List[Tuple[int, pd.Series]] = []
+    for idx in size_candidate_indices:
+        row = all_matches.loc[idx]
+        peer_indices = size_candidate_indices - {idx}
+        pool = all_matches.loc[~all_matches.index.isin(peer_indices)]
+        if not _is_boiler_candidate_event(row, pool):
             continue
         boiler_candidates.append((idx, row))
 
@@ -420,6 +436,16 @@ def _find_simultaneous_long_events(
             other_end = pd.Timestamp(other_row.get('off_end') or other_row.get('off_start') or other_row['on_start'])
 
             if (ref_start - tolerance <= other_end) and (other_start - tolerance <= ref_end):
+                # Compute actual overlap ratio (without tolerance)
+                overlap_start = max(ref_start, other_start)
+                overlap_end = min(ref_end, other_end)
+                actual_overlap = max(0, (overlap_end - overlap_start).total_seconds() / 60)
+                shorter_duration = min(ref_duration, other_duration)
+                overlap_ratio = actual_overlap / shorter_duration if shorter_duration > 0 else 0
+
+                if overlap_ratio < THREE_PHASE_MIN_OVERLAP_RATIO:
+                    continue
+
                 results.append((other_idx, other_row))
                 break  # one match per phase is enough
 
@@ -430,13 +456,26 @@ def _three_phase_confidence(mp: MultiPhaseSession) -> Tuple[float, dict]:
     """Compute confidence for three_phase_device classification.
 
     Factors:
-        - phase_count: 2 phases → 0.7, 3 phases → 1.0
+        - phase_count: 2 phases → lower confidence, 3 phases → can reach 100%
+        - magnitude_similarity: CV of magnitudes across phases (≤10% → perfect)
         - timing_sync: how close start times are
         - duration_similarity: how similar durations are across phases
+
+    100% confidence requires: 3 phases + magnitudes within 10% CV.
     """
     breakdown = {}
 
     n_phases = len(mp.phases)
+
+    # Magnitude similarity across phases (CV)
+    magnitudes = [ps.avg_magnitude for ps in mp.phase_sessions.values()]
+    if len(magnitudes) >= 2 and np.mean(magnitudes) > 0:
+        mag_cv = float(np.std(magnitudes) / np.mean(magnitudes))
+        breakdown['magnitude_similarity'] = round(_inverse_linear_score(mag_cv, 0, 0.3), 2)
+    else:
+        breakdown['magnitude_similarity'] = 0.5
+
+    # Phase count: 2 phases caps at 0.7, 3 phases at 1.0
     breakdown['phase_count'] = 1.0 if n_phases >= 3 else 0.7
 
     # Timing sync
@@ -456,6 +495,13 @@ def _three_phase_confidence(mp: MultiPhaseSession) -> Tuple[float, dict]:
         breakdown['duration_similarity'] = 0.5
 
     confidence = round(float(np.mean(list(breakdown.values()))), 2)
+
+    # Perfect score: 3 phases + magnitude CV ≤ 10%
+    if n_phases >= 3 and len(magnitudes) >= 3:
+        mag_cv = float(np.std(magnitudes) / np.mean(magnitudes))
+        if mag_cv <= 0.10:
+            confidence = 1.0
+
     return confidence, breakdown
 
 
@@ -465,7 +511,16 @@ def _has_nearby_compressor_cycles(
     phase: str,
     boiler_magnitude: float,
 ) -> bool:
-    """Check if compressor cycles exist near a boiler candidate event."""
+    """Check if compressor cycles exist near a boiler candidate event.
+
+    Two filters prevent false positives:
+    1. Events that ended well before the boiler started are from separate
+       devices and should not count (e.g., AC session that finished 38 min
+       before a boiler turned on).
+    2. Events temporally contained within the boiler's time range are likely
+       iterative-detection artifacts (same physical device captured at
+       different thresholds) and should not count.
+    """
     phase_matches = all_matches[all_matches['phase'] == phase]
     if phase_matches.empty:
         return False
@@ -481,6 +536,35 @@ def _has_nearby_compressor_cycles(
         (phase_matches['on_start'] <= window_end) &
         (phase_matches['on_start'] != event_start)  # exclude self
     ]
+
+    if nearby.empty:
+        return False
+
+    # --- Filter 1: exclude events that ended before the boiler started ---
+    # An event that finished well before the boiler turned on is from a
+    # separate device, not interleaved cycling.
+    pre_boiler_margin = pd.Timedelta(minutes=5)
+    nearby_off_end = nearby['off_end'].combine_first(
+        nearby['off_start'].combine_first(nearby['on_start'])
+    )
+    nearby = nearby[nearby_off_end >= (event_start - pre_boiler_margin)]
+
+    if nearby.empty:
+        return False
+
+    # --- Filter 2: exclude events contained within the boiler's time range ---
+    # When iterative detection captures the same device at different thresholds,
+    # the resulting "events" overlap the boiler period — they are artifacts,
+    # not independent compressor cycles.
+    containment_margin = pd.Timedelta(minutes=2)
+    contained = (
+        (nearby['on_start'] >= event_start) &
+        (nearby_off_end.loc[nearby.index] <= event_end + containment_margin)
+    )
+    nearby = nearby[~contained]
+
+    if nearby.empty:
+        return False
 
     cycles = nearby[
         (nearby['duration'] >= AC_MIN_CYCLE_DURATION) &

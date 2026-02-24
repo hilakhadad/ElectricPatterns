@@ -10,6 +10,15 @@
 6. **Ask user when uncertain** — if requirements are ambiguous, ask before implementing
 7. **Don't modify OUTPUT files** — pipeline output (pkl, csv) under `OUTPUT/` is generated data
 8. **Preserve data integrity** — never modify files under `INPUT/HouseholdData/`
+9. **Preserve signal integrity** — The pipeline must satisfy `input = remaining + segregated` at every minute. Matching manipulations (e.g. tail extension to reach target magnitude) are permitted as matching artifacts only, documented via match tags. They must never affect the actual segmented data or the reported device duration.
+
+## Python Environment
+
+**Always use the `role_seg_env` conda environment** for running anything in this project:
+```bash
+conda activate role_seg_env
+```
+Python executable: `C:\Users\hilak\anaconda3\envs\role_seg_env\python.exe`
 
 ## Project Overview
 

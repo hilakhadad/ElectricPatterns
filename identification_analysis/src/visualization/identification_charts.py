@@ -428,12 +428,36 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
                         </tr>'''
         elif dtype == 'unknown':
             # Unknown sessions: show Not Boiler / Not AC instead of single Confidence
-            events.sort(key=lambda r: r['date'] + r['start'])
-            count = len(events)
-            for r in events:
+            # Split into short (<5 min) and normal (>=5 min) — short ones get a summary line
+            SHORT_THRESHOLD = 5  # minutes
+            short_events = [r for r in events if r['duration'] < SHORT_THRESHOLD]
+            normal_events = [r for r in events if r['duration'] >= SHORT_THRESHOLD]
+            normal_events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(normal_events)  # table row count (excluding short)
+            if short_events:
+                filter_note = f' (\u2265{SHORT_THRESHOLD} min, +{len(short_events)} short)'
+            for r in normal_events:
                 if r['date'] and r['start']:
                     copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
-            for i, r in enumerate(events, 1):
+
+            # Summary line for short events
+            if short_events:
+                n_short = len(short_events)
+                total_dur = sum(r['duration'] for r in short_events)
+                total_energy_wh = sum(
+                    r['magnitude'] * r['duration'] / 60 for r in short_events
+                )
+                total_energy_kwh = total_energy_wh / 1000
+                rows += f'''
+            <tr style="background: #f7f7f7; font-style: italic; color: #888;">
+                <td colspan="10" style="{_cell}">
+                    {n_short} unclassified events shorter than {SHORT_THRESHOLD} min
+                    &mdash; total duration: {total_dur:.0f} min,
+                    total energy: {total_energy_kwh:.1f} kWh
+                </td>
+            </tr>'''
+
+            for i, r in enumerate(normal_events, 1):
                 act_idx = global_act_idx
                 global_act_idx += 1
                 bd = r.get('confidence_breakdown', {})
@@ -494,6 +518,65 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 7, 'num')">Cycles &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 8, 'num')">Not Boiler &#x25B4;&#x25BE;</th>
                             <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Not AC &#x25B4;&#x25BE;</th>
+                        </tr>'''
+        elif dtype == 'three_phase_device':
+            # 3-Phase Device (Charger?) — same layout as central_ac with w1/w2/w3 columns
+            events.sort(key=lambda r: r['date'] + r['start'])
+            count = len(events)
+            for r in events:
+                if r['date'] and r['start']:
+                    copyable_dates.append(f"{r['date']} {r['start']}-{r['end']}")
+            for i, r in enumerate(events, 1):
+                act_idx = global_act_idx
+                global_act_idx += 1
+                conf_val = r.get('confidence', 0)
+                conf_pct = f'{conf_val:.0%}' if conf_val else '-'
+                conf_color = '#48bb78' if conf_val >= 0.8 else '#ecc94b' if conf_val >= 0.6 else '#fc8181' if conf_val > 0 else '#ccc'
+                click_attr = f' style="cursor:pointer;" onclick="toggleActChart({act_idx})"' if has_charts else ''
+                rows += f'''
+            <tr{click_attr}>
+                <td style="{_cell} text-align: center; color: #aaa; font-size: 0.85em;">{i}</td>
+                <td style="{_cell}" data-value="{r['date']}">{r['date']}</td>
+                <td style="{_cell} text-align: center;">{r['start']}</td>
+                <td style="{_cell} text-align: center;">{r['end']}</td>
+                <td style="{_cell} text-align: center;" data-value="{r['duration']}">{r['dur_str']}</td>
+                <td style="{_cell} text-align: right;" data-value="{r['magnitude']}">{r['magnitude']:,.0f}W</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w1"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w1"]=="V" else "normal"};">{r['w1']}</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w2"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w2"]=="V" else "normal"};">{r['w2']}</td>
+                <td style="{_cell} text-align: center; color: {"#48bb78" if r["w3"]=="V" else "#e2e8f0"}; font-weight: {"bold" if r["w3"]=="V" else "normal"};">{r['w3']}</td>
+                <td style="{_cell} text-align: center;">{r['cycle_count']}</td>
+                <td style="{_cell} text-align: center; color: {conf_color}; font-weight: 600;" data-value="{conf_val}">{conf_pct}</td>
+            </tr>'''
+                if has_charts:
+                    rows += _build_chart_row_html(act_idx, 11)
+                    session_phases = r.get('phase_magnitudes', {})
+                    if not session_phases:
+                        mag = r.get('magnitude', 0)
+                        for ph in ['w1', 'w2', 'w3']:
+                            if r.get(ph) == 'V':
+                                session_phases[ph] = mag
+                    cd = _extract_chart_window(
+                        summarized_data, r.get('on_start_iso', ''),
+                        r.get('off_end_iso', ''), session_phases, dtype,
+                        all_match_intervals=all_match_intervals,
+                        constituent_events=r.get('constituent_events', []),
+                    )
+                    if cd:
+                        all_chart_data[str(act_idx)] = cd
+
+            table_header = f'''
+                        <tr style="background: #f8f9fa;">
+                            <th style="{_th} text-align: center; width: 35px;">#</th>
+                            <th style="{_th} text-align: left; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 1, 'str')">Date &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">Start</th>
+                            <th style="{_th} text-align: center;">End</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 4, 'num')">Duration &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: right; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 5, 'num')">Avg Power &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center;">w1</th>
+                            <th style="{_th} text-align: center;">w2</th>
+                            <th style="{_th} text-align: center;">w3</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 9, 'num')">Cycles &#x25B4;&#x25BE;</th>
+                            <th style="{_th} text-align: center; cursor: pointer;" onclick="sortDeviceTable('{section_id}-table', 10, 'num')">Confidence &#x25B4;&#x25BE;</th>
                         </tr>'''
         else:
             # Boiler / Regular AC
@@ -1366,11 +1449,12 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
         charts_html = ''
 
     # Pie chart: Event breakdown by duration category
-    # Categories: Spikes (<3 min), Short (3-25 min), Long (>=25 min)
+    # Categories: Spikes (<2 min), Short (2-15 min), Long (>=15 min)
     short_count = spike_filter.get('short_count', 0)
     long_count = spike_filter.get('long_count', 0)
     short_min = spike_filter.get('short_minutes', 0)
     long_min = spike_filter.get('long_minutes', 0)
+    long_threshold = spike_filter.get('long_duration_threshold', 15)
 
     # If short/long aren't in spike_filter, estimate from kept events
     if short_count == 0 and long_count == 0 and kept_count > 0:
@@ -1389,12 +1473,12 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
         pie_values_min.append(spike_min)
         pie_colors.append(RED)
     if short_count > 0:
-        pie_labels.append(f'Short ({threshold}-25 min)')
+        pie_labels.append(f'Short ({threshold}-{long_threshold} min)')
         pie_values_count.append(short_count)
         pie_values_min.append(short_min)
         pie_colors.append(ORANGE)
     if long_count > 0:
-        pie_labels.append('Long (>=25 min)')
+        pie_labels.append(f'Long (>={long_threshold} min)')
         pie_values_count.append(long_count)
         pie_values_min.append(long_min)
         pie_colors.append(GREEN)
@@ -1520,19 +1604,20 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
         remain_col = f'remaining_{phase}'
         if orig_col in window.columns:
             result[f'o_{phase}'] = [
-                int(round(v)) if pd.notna(v) else 0
+                int(round(v)) if pd.notna(v) else None
                 for v in window[orig_col]
             ]
         if remain_col in window.columns:
             result[f'r_{phase}'] = [
-                int(round(v)) if pd.notna(v) else 0
+                int(round(v)) if pd.notna(v) else None
                 for v in window[remain_col]
             ]
 
     # Add match rectangles for each phase (individual match shapes)
     if all_match_intervals:
-        # Build set of session event keys for fast lookup
+        # Build lookup dicts from session events for classification and profiles
         ses_keys = set()
+        ses_profiles = {}  # (phase, normalized_start) -> power_profile
         for ce in (constituent_events or []):
             ce_start = ce.get('on_start', '')
             ce_phase = ce.get('phase', '')
@@ -1540,6 +1625,10 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
                 try:
                     normalized = pd.Timestamp(ce_start).strftime('%Y-%m-%dT%H:%M')
                     ses_keys.add((ce_phase, normalized))
+                    # Store power profile if available
+                    pp = ce.get('power_profile')
+                    if pp and pp.get('values'):
+                        ses_profiles[(ce_phase, normalized)] = pp
                 except (ValueError, TypeError):
                     pass
 
@@ -1552,7 +1641,13 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
             if not phase_matches:
                 continue
             rects = []
-            for (m_start, m_end, m_mag, m_dur) in phase_matches:
+            for interval in phase_matches:
+                # Support both old 4-tuple and new 6-tuple format
+                if len(interval) >= 6:
+                    m_start, m_end, m_mag, m_dur, m_on_end, m_off_start = interval[:6]
+                else:
+                    m_start, m_end, m_mag, m_dur = interval[:4]
+                    m_on_end, m_off_start = m_start, m_end
                 try:
                     ts_s = pd.Timestamp(m_start)
                     ts_e = pd.Timestamp(m_end)
@@ -1569,12 +1664,32 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
                     cat = 'spk'
                 else:
                     cat = 'oth'
-                rects.append({
+                rect = {
                     's': ts_s.strftime('%Y-%m-%d %H:%M'),
                     'e': ts_e.strftime('%Y-%m-%d %H:%M'),
                     'm': m_mag,
                     'c': cat,
-                })
+                }
+                # Add per-minute profile if available (session events)
+                pp = ses_profiles.get((phase, normalized_start))
+                if pp:
+                    # Normalize timestamps to chart format
+                    try:
+                        rect['pt'] = [
+                            pd.Timestamp(t).strftime('%Y-%m-%d %H:%M')
+                            for t in pp['timestamps']
+                        ]
+                    except (ValueError, TypeError):
+                        rect['pt'] = pp['timestamps']
+                    rect['pp'] = pp['values']
+                else:
+                    # Add on_end/off_start for trapezoidal fallback
+                    try:
+                        rect['oe'] = pd.Timestamp(m_on_end).strftime('%Y-%m-%d %H:%M')
+                        rect['os'] = pd.Timestamp(m_off_start).strftime('%Y-%m-%d %H:%M')
+                    except (ValueError, TypeError):
+                        pass
+                rects.append(rect)
             if rects:
                 result[f'mt_{phase}'] = rects
 
@@ -1691,6 +1806,7 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
             }}), cfg);
 
             // Row 3: Segregated — individual match rectangles as toself polygons
+            var segTraces = [];
             var matchRects = d['mt_'+ph]||[];
             var sesX=[],sesY=[],spkX=[],spkY=[],othX=[],othY=[];
             matchRects.forEach(function(r) {{
@@ -1698,11 +1814,27 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
                 if (r.c==='ses') {{ bx=sesX; by=sesY; }}
                 else if (r.c==='spk') {{ bx=spkX; by=spkY; }}
                 else {{ bx=othX; by=othY; }}
-                bx.push(r.s,r.s,r.e,r.e,r.s,null);
-                by.push(0,r.m,r.m,0,0,null);
+
+                if (r.pp && r.pt && r.pp.length>0) {{
+                    // Per-minute profile: draw actual extraction shape
+                    for (var i=0;i<r.pt.length;i++) {{
+                        bx.push(r.pt[i]);
+                        by.push(r.pp[i]);
+                    }}
+                    // Close polygon back to zero
+                    bx.push(r.pt[r.pt.length-1],r.pt[0],null);
+                    by.push(0,0,null);
+                }} else if (r.oe && r.os && r.oe!==r.s && r.os!==r.e) {{
+                    // Trapezoidal fallback (ramp up → stable → ramp down)
+                    bx.push(r.s,r.oe,r.os,r.e,r.s,null);
+                    by.push(0,r.m,r.m,0,0,null);
+                }} else {{
+                    // Flat rectangle fallback
+                    bx.push(r.s,r.s,r.e,r.e,r.s,null);
+                    by.push(0,r.m,r.m,0,0,null);
+                }}
             }});
 
-            var segTraces = [];
             if (sesX.length) segTraces.push({{
                 x:sesX,y:sesY,type:'scatter',mode:'lines',
                 fill:'toself',fillcolor:_hexRgba(d.dc,0.55),
@@ -1714,7 +1846,7 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
                 x:spkX,y:spkY,type:'scatter',mode:'lines',
                 fill:'toself',fillcolor:'rgba(255,165,0,0.4)',
                 line:{{color:'#e67e22',width:1}},
-                name:'Filtered (<3 min)',legendgroup:'spk',showlegend:true,
+                name:'Filtered (<2 min)',legendgroup:'spk',showlegend:true,
                 hovertemplate:'Spike: %{{y:.0f}}W<extra></extra>'
             }});
             if (othX.length) segTraces.push({{

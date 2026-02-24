@@ -234,7 +234,7 @@ def process_detection(house_id: str, run_number: int, threshold: int = DEFAULT_T
         for _, row in filtered.iterrows():
             key = (row['phase'], row['event'])
             event_counters[key] += 1
-            event_ids.append(f"{row['event']}_{row['phase']}_{event_counters[key]}")
+            event_ids.append(f"{row['event']}_it{run_number}_{row['phase']}_{event_counters[key]}")
         filtered['event_id'] = event_ids
 
         # Extract month/year from filename or data

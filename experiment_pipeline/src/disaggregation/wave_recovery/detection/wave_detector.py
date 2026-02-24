@@ -76,6 +76,13 @@ def detect_wave_patterns(
     timestamps = remaining.index
     diffs = np.diff(values)
 
+    # Neutralize diffs at time gaps (NaN regions removed by dropna upstream)
+    # to prevent false wave detection from communication holes.
+    MAX_CONTINUITY_GAP_MINUTES = 5
+    time_gaps = np.diff(timestamps).astype('timedelta64[m]').astype(float)
+    gap_mask = time_gaps > MAX_CONTINUITY_GAP_MINUTES
+    diffs[gap_mask] = 0.0
+
     # Find candidate sharp-rise indices (minute *before* the rise ends)
     rise_indices = np.where(diffs >= min_rise)[0]
 
