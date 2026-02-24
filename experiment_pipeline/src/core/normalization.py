@@ -57,7 +57,7 @@ def detrend_moving_average(
             window=window_minutes, min_periods=1, center=True
         ).mean()
         global_mean = series.mean()
-        result[phase] = series - rolling_mean + global_mean
+        result[phase] = (series - rolling_mean + global_mean).clip(lower=0)
 
     return result
 
@@ -90,7 +90,7 @@ def balance_phases(
     global_median = np.mean(list(medians.values()))
 
     for phase in phases:
-        result[phase] = result[phase] - medians[phase] + global_median
+        result[phase] = (result[phase] - medians[phase] + global_median).clip(lower=0)
 
     return result
 
