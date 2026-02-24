@@ -110,6 +110,32 @@ def run_pipeline(
         logger.info(f"Threshold: {exp_config.threshold}W, Max iterations: {max_iterations}")
     logger.info(f"Output path: {output_path}")
 
+    # Preprocessing: normalization (before iteration loop)
+    use_normalization = getattr(exp_config, 'use_normalization', False)
+    if use_normalization:
+        norm_method = getattr(exp_config, 'normalization_method', 'none')
+        norm_params = getattr(exp_config, 'normalization_params', None)
+        logger.info(f"Normalization enabled: method='{norm_method}'")
+
+        from core.normalization import preprocess_normalize
+        t0_norm = time.time()
+        preprocessed_base = preprocess_normalize(
+            input_path=input_path,
+            house_id=house_id,
+            output_path=output_path,
+            method=norm_method,
+            params=norm_params,
+            logger=logger,
+        )
+        logger.info(f"Normalization complete ({time.time() - t0_norm:.1f}s)")
+
+        # Override input paths so all pipeline steps use normalized data
+        input_path = preprocessed_base
+        import core
+        import core.paths
+        core.paths.RAW_INPUT_DIRECTORY = preprocessed_base
+        core.RAW_INPUT_DIRECTORY = preprocessed_base
+
     iterations_completed = 0
     all_device_profiles = {}  # Dynamic mode: collect profiles across iterations
 

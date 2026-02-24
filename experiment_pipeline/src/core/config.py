@@ -47,6 +47,9 @@ class ExperimentConfig:
     wave_max_duration_minutes: int = 45  # Maximum wave duration
     wave_monotonic_tolerance: float = 0.15  # Fraction of points allowed to be non-monotonic
     wave_min_decay_fraction: float = 0.3  # Must decay at least 30% from peak to qualify
+    use_normalization: bool = False  # Apply normalization preprocessing before pipeline starts
+    normalization_method: str = 'none'  # 'ma_detrend', 'phase_balance', 'mad_clean', 'combined'
+    normalization_params: Optional[dict] = None  # Method-specific parameters (e.g., window size)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary for serialization."""
@@ -85,6 +88,9 @@ class ExperimentConfig:
             'wave_max_duration_minutes': self.wave_max_duration_minutes,
             'wave_monotonic_tolerance': self.wave_monotonic_tolerance,
             'wave_min_decay_fraction': self.wave_min_decay_fraction,
+            'use_normalization': self.use_normalization,
+            'normalization_method': self.normalization_method,
+            'normalization_params': self.normalization_params,
         }
 
     def to_json(self, file_path: str):
@@ -191,6 +197,100 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+    ),
+
+    'exp016_ma_detrend': ExperimentConfig(
+        exp_id='exp016',
+        description='exp015 + 2-hour moving average detrending (removes baseline drift, preserves watt scale)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
+        use_normalization=True,
+        normalization_method='ma_detrend',
+        normalization_params={'ma_detrend': {'window_minutes': 120}},
+    ),
+
+    'exp017_phase_balance': ExperimentConfig(
+        exp_id='exp017',
+        description='exp015 + phase balancing (equalizes 3-phase baselines to common median)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
+        use_normalization=True,
+        normalization_method='phase_balance',
+    ),
+
+    'exp018_mad_clean': ExperimentConfig(
+        exp_id='exp018',
+        description='exp015 + MAD-based outlier cleaning (removes measurement spikes, preserves real events)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
+        use_normalization=True,
+        normalization_method='mad_clean',
+        normalization_params={'mad_clean': {'window_minutes': 240, 'k': 5.0}},
+    ),
+
+    'exp019_combined_norm': ExperimentConfig(
+        exp_id='exp019',
+        description='exp015 + combined normalization (MA detrend → phase balance → MAD clean)',
+        threshold=2000,
+        off_threshold_factor=1.0,
+        expand_event_factor=0.2,
+        use_gradual_detection=True,
+        gradual_window_minutes=3,
+        gradual_direction_consistency=0.7,
+        progressive_window_search=True,
+        use_near_threshold_detection=False,
+        use_tail_extension=True,
+        threshold_schedule=[2000, 1500, 1100, 800],
+        use_nan_imputation=True,
+        use_settling_extension=True,
+        use_split_off_merger=True,
+        use_guided_recovery=True,
+        use_wave_recovery=True,
+        use_normalization=True,
+        normalization_method='combined',
+        normalization_params={
+            'ma_detrend': {'window_minutes': 120},
+            'mad_clean': {'window_minutes': 240, 'k': 5.0},
+        },
     ),
 }
 
