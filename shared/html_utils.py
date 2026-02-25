@@ -469,6 +469,8 @@ def assign_tier(pre_quality) -> str:
         return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
     elif pre_quality is None:
         return 'unknown'
+    elif not isinstance(pre_quality, (int, float)):
+        return 'unknown'
     elif pre_quality >= 90:
         return 'excellent'
     elif pre_quality >= 75:
@@ -496,7 +498,7 @@ def format_pre_quality(pre_quality) -> str:
         }
         _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
         return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
-    elif pre_quality is None:
+    elif pre_quality is None or not isinstance(pre_quality, (int, float)):
         return '<span style="color:#999;">-</span>'
     else:
         if pre_quality >= 90:

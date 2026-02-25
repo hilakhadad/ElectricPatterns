@@ -860,6 +860,8 @@ def generate_identification_aggregate_report(
         device_counts = {}
         for s in sessions:
             dt = s.get('device_type', 'unknown')
+            if not isinstance(dt, str):
+                dt = str(dt) if dt is not None else 'unknown'
             device_counts[dt] = device_counts.get(dt, 0) + 1
 
         # Days span and classified minutes/day from session timestamps
@@ -986,7 +988,8 @@ def _build_aggregate_html(
     # Aggregate stats
     avg_classified = sum(h['classified_pct'] for h in house_summaries) / n
     avg_conf = sum(h['avg_confidence'] for h in house_summaries) / n
-    quality_scores = [h['quality_score'] for h in house_summaries if h['quality_score'] is not None]
+    quality_scores = [h['quality_score'] for h in house_summaries
+                      if h['quality_score'] is not None and isinstance(h['quality_score'], (int, float))]
     median_quality = sorted(quality_scores)[len(quality_scores) // 2] if quality_scores else 0
 
     # Total data days

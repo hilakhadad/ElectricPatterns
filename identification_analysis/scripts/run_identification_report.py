@@ -20,6 +20,7 @@ import os
 import json
 import logging
 import time
+import traceback
 from pathlib import Path
 from datetime import datetime
 import argparse
@@ -377,6 +378,7 @@ def main():
                       flush=True)
         except Exception as e:
             print(f"  Cross-house pattern matching failed: {e}", flush=True)
+            traceback.print_exc()
 
     # ── Phase 2: Aggregate report ─────────────────────────────────
     if len(agg_house_ids) > 1 and (successful > 0 or resume_mode or args.aggregate_only):
@@ -401,6 +403,7 @@ def main():
             print(f"Aggregate M2 report: OK ({time.time() - agg_start:.1f}s)", flush=True)
         except Exception as e:
             print(f"Aggregate M2 report: FAILED: {e}", flush=True)
+            traceback.print_exc()
 
     # ── Summary ───────────────────────────────────────────────────
     elapsed = time.time() - start_time
