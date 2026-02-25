@@ -399,14 +399,13 @@ def _build_aggregate_html(
         }}
         .filter-bar label {{ font-weight: 600; color: #3D3D50; margin-right: 5px; }}
         footer {{ text-align: center; padding: 20px; color: #7D7D92; font-size: 0.9em; }}
-        .compact-btn {{
-            position:fixed; bottom:20px; right:20px; z-index:9999;
-            padding:10px 22px; border-radius:25px; border:none;
-            background:#667eea; color:white; font-size:14px; font-weight:600;
-            cursor:pointer; box-shadow:0 3px 12px rgba(0,0,0,0.25); transition:all 0.2s;
-        }}
-        .compact-btn:hover {{ background:#5a67d8; transform:scale(1.05); }}
-        body.compact-mode .hide-compact {{ display:none !important; }}
+        details.ep-collapsible {{ background:#FFFFFF;border-radius:14px;margin-bottom:22px;box-shadow:0 2px 12px rgba(120,100,160,0.07);border:1px solid #E8E4F0; }}
+        details.ep-collapsible > summary {{ cursor:pointer;padding:20px 28px;font-size:1.3em;font-weight:700;color:#3D3D50;list-style:none;user-select:none; }}
+        details.ep-collapsible > summary::-webkit-details-marker {{ display:none; }}
+        details.ep-collapsible > summary::before {{ content:'\\25B8';display:inline-block;margin-right:10px;transition:transform 0.2s; }}
+        details.ep-collapsible[open] > summary::before {{ transform:rotate(90deg); }}
+        details.ep-collapsible[open] > summary {{ padding-bottom:16px;border-bottom:2px solid #E8E4F0; }}
+        details.ep-collapsible > .collapsible-body {{ padding:20px 28px 28px; }}
     </style>
 </head>
 <body>
@@ -416,7 +415,7 @@ def _build_aggregate_html(
             <div style="opacity:0.92;">Generated: {generated_at}</div>
         </header>
 
-        <div class="hide-compact">{about_html}</div>
+        {about_html}
 
         <section>
             <h2>Summary</h2>
@@ -464,9 +463,9 @@ def _build_aggregate_html(
             </div>
         </section>
 
-        <div class="hide-compact">{pop_html}</div>
+        {pop_html}
 
-        <div class="hide-compact">{cross_house_html}</div>
+        {cross_house_html}
 
         <section>
             <h2>Per-House Results</h2>
@@ -509,7 +508,7 @@ def _build_aggregate_html(
             </div>
         </section>
 
-        <div class="hide-compact">{glossary_html}</div>
+        {glossary_html}
 
         <footer>
             ElectricPatterns &mdash; Module 2: Device Identification Aggregate Report
@@ -603,19 +602,6 @@ def _build_aggregate_html(
     }}
 
     updateIdFilter();
-
-    // Compact mode toggle
-    (function() {{
-        var btn = document.createElement('button');
-        btn.className = 'compact-btn';
-        btn.textContent = '\u25A0 Compact';
-        btn.onclick = function() {{
-            document.body.classList.toggle('compact-mode');
-            var on = document.body.classList.contains('compact-mode');
-            btn.textContent = on ? '\u25A1 Full View' : '\u25A0 Compact';
-        }};
-        document.body.appendChild(btn);
-    }})();
     </script>
 </body>
 </html>"""
@@ -756,8 +742,9 @@ def _build_cross_house_section(
     dur_tol_pct = int(settings.get('duration_tolerance', 0.20) * 100)
 
     return f'''
-        <section>
-            <h2>Cross-House Recurring Patterns</h2>
+        <details class="ep-collapsible">
+            <summary>Cross-House Recurring Patterns</summary>
+            <div class="collapsible-body">
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:15px;">
                 <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;text-align:center;">
                     <div style="font-size:1.5em;font-weight:700;color:#0d9488;">{n_global}</div>
@@ -784,7 +771,8 @@ def _build_cross_house_section(
             </p>
             {pattern_cards}
             {unmatched_html}
-        </section>'''
+            </div>
+        </details>'''
 
 
 def _build_population_section(population_stats: Dict[str, Any]) -> str:
@@ -826,8 +814,9 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
         </div>'''
 
     return f'''
-    <section>
-        <h2>Population Statistics</h2>
+    <details class="ep-collapsible">
+        <summary>Population Statistics</summary>
+        <div class="collapsible-body">
         <p style="color:#666;margin-bottom:12px;font-size:0.85em;">
             Cross-house analysis of device identification patterns.
             Z-scores flag houses with unusual device characteristics.
@@ -836,7 +825,8 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
             {device_cards}
         </div>
         {outlier_html}
-    </section>'''
+        </div>
+    </details>'''
 
 
 def _build_empty_aggregate_html(generated_at: str, experiment_dir: str) -> str:

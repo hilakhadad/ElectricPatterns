@@ -308,6 +308,24 @@ def _build_html_document(title: str, summary: str, table: str,
             font-size: 0.9em;
         }}
 
+        details.ep-collapsible {{
+            background: #FFFFFF; border-radius: 14px; margin-bottom: 22px;
+            box-shadow: 0 2px 12px rgba(120,100,160,0.07); border: 1px solid #E8E4F0;
+        }}
+        details.ep-collapsible > summary {{
+            cursor: pointer; padding: 20px 28px; font-size: 1.3em; font-weight: 700;
+            color: #3D3D50; list-style: none; user-select: none;
+        }}
+        details.ep-collapsible > summary::-webkit-details-marker {{ display: none; }}
+        details.ep-collapsible > summary::before {{
+            content: '\\25B8'; display: inline-block; margin-right: 10px; transition: transform 0.2s;
+        }}
+        details.ep-collapsible[open] > summary::before {{ transform: rotate(90deg); }}
+        details.ep-collapsible[open] > summary {{
+            padding-bottom: 16px; border-bottom: 2px solid #E8E4F0;
+        }}
+        details.ep-collapsible > .collapsible-body {{ padding: 20px 28px 28px; }}
+
         @media (max-width: 768px) {{
             .container {{ padding: 10px; }}
             header {{ padding: 20px; }}
@@ -370,10 +388,10 @@ def _build_html_document(title: str, summary: str, table: str,
             {table}
         </section>
 
-        <section>
-            <h2>Analysis Charts</h2>
-            {charts}
-        </section>
+        <details class="ep-collapsible">
+            <summary>Analysis Charts</summary>
+            <div class="collapsible-body">{charts}</div>
+        </details>
 
         {glossary_html}
 

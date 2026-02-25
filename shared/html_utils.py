@@ -240,6 +240,41 @@ def get_unified_css() -> str:
             font-size: 0.9em;
         }}}}
 
+        /* Collapsible sections (collapsed by default) */
+        details.ep-collapsible {{{{
+            background: {EP_CARD_BG};
+            border-radius: {EP_CARD_RADIUS};
+            margin-bottom: 22px;
+            box-shadow: {EP_CARD_SHADOW};
+            border: 1px solid {EP_CARD_BORDER};
+        }}}}
+        details.ep-collapsible > summary {{{{
+            cursor: pointer;
+            padding: 20px 28px;
+            font-size: 1.3em;
+            font-weight: 700;
+            color: {EP_TEXT_PRIMARY};
+            list-style: none;
+            user-select: none;
+        }}}}
+        details.ep-collapsible > summary::-webkit-details-marker {{{{ display: none; }}}}
+        details.ep-collapsible > summary::before {{{{
+            content: '\\25B8';
+            display: inline-block;
+            margin-right: 10px;
+            transition: transform 0.2s;
+        }}}}
+        details.ep-collapsible[open] > summary::before {{{{
+            transform: rotate(90deg);
+        }}}}
+        details.ep-collapsible[open] > summary {{{{
+            padding-bottom: 16px;
+            border-bottom: 2px solid {EP_SECTION_BORDER_BOTTOM};
+        }}}}
+        details.ep-collapsible > .collapsible-body {{{{
+            padding: 20px 28px 28px;
+        }}}}
+
         @media (max-width: 768px) {{{{
             .container {{{{ padding: 10px; }}}}
             header {{{{ padding: 20px; }}}}
@@ -249,6 +284,18 @@ def get_unified_css() -> str:
             .info-bar {{{{ flex-direction: column; gap: 5px; }}}}
         }}}}
     """
+
+
+def build_collapsible_section(title: str, content: str) -> str:
+    """Wrap content in a collapsible <details> section, collapsed by default.
+
+    Requires the ep-collapsible CSS from get_unified_css() in the page.
+    """
+    return f'''
+    <details class="ep-collapsible">
+        <summary>{title}</summary>
+        <div class="collapsible-body">{content}</div>
+    </details>'''
 
 
 def build_glossary_section() -> str:

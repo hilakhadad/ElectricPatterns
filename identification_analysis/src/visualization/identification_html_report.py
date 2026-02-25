@@ -1121,6 +1121,13 @@ def _build_aggregate_html(
         }}
         .filter-bar label {{ font-weight: 600; color: #555; margin-right: 5px; }}
         footer {{ text-align: center; padding: 20px; color: #888; font-size: 0.9em; }}
+        details.ep-collapsible {{ background:#FFFFFF;border-radius:14px;margin-bottom:22px;box-shadow:0 2px 12px rgba(120,100,160,0.07);border:1px solid #E8E4F0; }}
+        details.ep-collapsible > summary {{ cursor:pointer;padding:20px 28px;font-size:1.3em;font-weight:700;color:#3D3D50;list-style:none;user-select:none; }}
+        details.ep-collapsible > summary::-webkit-details-marker {{ display:none; }}
+        details.ep-collapsible > summary::before {{ content:'\\25B8';display:inline-block;margin-right:10px;transition:transform 0.2s; }}
+        details.ep-collapsible[open] > summary::before {{ transform:rotate(90deg); }}
+        details.ep-collapsible[open] > summary {{ padding-bottom:16px;border-bottom:2px solid #E8E4F0; }}
+        details.ep-collapsible > .collapsible-body {{ padding:20px 28px 28px; }}
     </style>
 </head>
 <body>
@@ -1351,8 +1358,9 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
         </div>'''
 
     return f'''
-    <section>
-        <h2>Population Statistics</h2>
+    <details class="ep-collapsible">
+        <summary>Population Statistics</summary>
+        <div class="collapsible-body">
         <p style="color:#666;margin-bottom:12px;font-size:0.85em;">
             Cross-house analysis of device identification patterns.
             Z-scores flag houses with unusual device characteristics.
@@ -1361,7 +1369,8 @@ def _build_population_section(population_stats: Dict[str, Any]) -> str:
             {device_cards}
         </div>
         {outlier_html}
-    </section>'''
+        </div>
+    </details>'''
 
 
 def _build_empty_aggregate_html(generated_at: str, experiment_dir: str) -> str:
