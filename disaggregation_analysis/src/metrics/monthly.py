@@ -3,11 +3,14 @@ Monthly breakdown metrics for experiment results.
 
 Analyzes performance per month to identify problematic periods.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
@@ -31,6 +34,7 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with monthly breakdown metrics
     """
+    logger.debug("calculate_monthly_metrics: house_id=%s, run_number=%d", house_id, run_number)
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -47,6 +51,8 @@ def calculate_monthly_metrics(experiment_dir: Path, house_id: str,
         on_off_files = list(house_dir.glob("on_off_*.pkl"))
 
     if not on_off_files:
+        logger.warning("calculate_monthly_metrics: No on_off files found for house %s run %d",
+                       house_id, run_number)
         return metrics
 
     # Load matches with month info
@@ -220,6 +226,7 @@ def get_monthly_summary(experiment_dir: Path, house_id: str,
     Returns:
         Formatted summary string
     """
+    logger.debug("get_monthly_summary: house_id=%s, run_number=%d", house_id, run_number)
     metrics = calculate_monthly_metrics(experiment_dir, house_id, run_number)
 
     lines = []
@@ -270,7 +277,11 @@ def create_monthly_comparison_table(analyses: List[Dict[str, Any]]) -> pd.DataFr
     Returns:
         DataFrame with monthly comparison
     """
+    logger.debug("create_monthly_comparison_table: %d analyses provided", len(analyses))
     rows = []
+
+    if not analyses:
+        logger.warning("create_monthly_comparison_table: empty analyses list")
 
     for a in analyses:
         house_id = a.get('house_id', 'unknown')
@@ -308,6 +319,8 @@ def find_common_problematic_months(analyses: List[Dict[str, Any]],
     Returns:
         Dict of month -> list of house_ids with issues
     """
+    logger.debug("find_common_problematic_months: %d analyses, threshold=%.2f",
+                 len(analyses), threshold)
     month_issues = {}
 
     for a in analyses:

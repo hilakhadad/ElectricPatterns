@@ -4,9 +4,12 @@ Spike analysis charts for identification reports.
 Extracted from identification_charts.py.
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Color constants (consistent with classification_charts.py)
 GREEN = '#28a745'
@@ -44,6 +47,7 @@ def create_spike_analysis(spike_filter: Dict[str, Any]) -> str:
     1. Bar chart: event count — spikes vs. kept, by iteration
     2. Bar chart: total minutes — spikes vs. kept, by iteration
     """
+    logger.debug("Creating spike analysis chart")
     if not spike_filter or spike_filter.get('spike_count', 0) == 0:
         kept = spike_filter.get('kept_count', 0) if spike_filter else 0
         threshold = spike_filter.get('min_duration_threshold', 3) if spike_filter else 3

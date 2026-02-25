@@ -21,6 +21,7 @@ from ..detection.wave_detector import WavePattern
 def extract_wave_power(
     remaining: pd.Series,
     wave: WavePattern,
+    logger=None,
 ) -> Tuple[pd.Series, pd.Series]:
     """
     Extract wave-shaped power from remaining and return updated remaining.
@@ -64,5 +65,9 @@ def extract_wave_power(
 
         extracted.loc[ts] = to_extract
         updated_remaining.loc[ts] = remaining.loc[ts] - to_extract
+
+    if logger:
+        total = extracted.sum()
+        logger.debug(f"Wave extraction {wave.phase}: extracted {total:.0f}W-min over {wave.duration_minutes} min")
 
     return extracted, updated_remaining

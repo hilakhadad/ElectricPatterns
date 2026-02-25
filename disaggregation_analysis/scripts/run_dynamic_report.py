@@ -24,6 +24,7 @@ Examples:
 import sys
 import os
 import json
+import logging
 import time
 from pathlib import Path
 from datetime import datetime
@@ -121,6 +122,12 @@ def house_iterations(experiment_dir: Path, house_id: str) -> int:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+
     parser = argparse.ArgumentParser(
         description="Generate dynamic threshold HTML reports"
     )

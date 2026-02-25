@@ -6,11 +6,15 @@ Output files are split by month for easier visualization:
 - matches/matches_{house_id}_{MM}_{YYYY}.pkl
 - summarized/summarized_{house_id}_{MM}_{YYYY}.pkl
 """
+import logging
 import os
+
 import pandas as pd
 from pathlib import Path
 from typing import Union, Optional
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 def save_dataframe_by_month(
@@ -65,6 +69,7 @@ def save_dataframe_by_month(
         group.to_pickle(monthly_file)
         months_saved += 1
 
+    logger.debug(f"Saved {len(df)} rows to {folder_name}/ ({months_saved} monthly files)")
     return months_saved
 
 
@@ -103,6 +108,7 @@ def load_dataframe_from_folder(
         df = pd.read_pickle(f)
         dfs.append(df)
 
+    logger.debug(f"Loading {len(files)} files from {folder.name}/")
     return pd.concat(dfs, ignore_index=True)
 
 

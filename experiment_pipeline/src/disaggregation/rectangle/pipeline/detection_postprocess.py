@@ -18,7 +18,8 @@ def apply_near_threshold(results_on, results_off, data, data_indexed, diff_col,
         data, data_indexed, diff_col, threshold, off_threshold,
         results_on, results_off, phase,
         min_factor=min_factor,
-        max_extend_minutes=max_extend_minutes
+        max_extend_minutes=max_extend_minutes,
+        logger=logger
     )
     if len(near_on) > 0:
         logger.info(f"    Found {len(near_on)} near-threshold ON events for {phase}")
@@ -27,8 +28,8 @@ def apply_near_threshold(results_on, results_off, data, data_indexed, diff_col,
         logger.info(f"    Found {len(near_off)} near-threshold OFF events for {phase}")
         results_off = pd.concat([results_off, near_off], ignore_index=True)
     # Merge overlapping in case near-threshold events overlap with existing
-    results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase)
-    results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase)
+    results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase, logger=logger)
+    results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase, logger=logger)
     return results_on, results_off
 
 
@@ -42,7 +43,8 @@ def apply_tail_extension(results_off, data_indexed, phase, logger,
         results_off, data_indexed, phase,
         max_minutes=max_minutes, min_residual=min_residual,
         noise_tolerance=noise_tolerance, min_gain=min_gain,
-        min_residual_fraction=min_residual_fraction
+        min_residual_fraction=min_residual_fraction,
+        logger=logger
     )
     extended = results_off['tail_extended'].sum() if 'tail_extended' in results_off.columns else 0
     if extended > 0:
@@ -58,7 +60,8 @@ def apply_split_off_merger(results_off, results_on, data_indexed, phase, logger,
     results_off = merge_split_off_events(
         results_off, results_on,
         max_gap_minutes=max_gap_minutes,
-        data=data_indexed, phase=phase
+        data=data_indexed, phase=phase,
+        logger=logger
     )
     if len(results_off) < before_merge:
         logger.info(f"    Split-OFF merged: {before_merge - len(results_off)} events for {phase}")
@@ -78,6 +81,7 @@ def apply_settling_extension(results_on, results_off, data_indexed, phase, logge
             off_events=results_off,
             settling_factor=settling_factor,
             max_settling_minutes=max_settling_minutes,
+            logger=logger,
         )
         extended_count = (results_on['magnitude'] != before_mags.values).sum() if len(results_on) == len(before_mags) else 0
         if extended_count > 0:
@@ -90,6 +94,7 @@ def apply_settling_extension(results_on, results_off, data_indexed, phase, logge
             on_events=results_on,
             settling_factor=settling_factor,
             max_settling_minutes=max_settling_minutes,
+            logger=logger,
         )
         extended_count = (results_off['magnitude'] != before_mags.values).sum() if len(results_off) == len(before_mags) else 0
         if extended_count > 0:

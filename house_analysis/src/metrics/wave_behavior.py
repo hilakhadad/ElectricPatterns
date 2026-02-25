@@ -5,9 +5,12 @@ Detects periodic cycling patterns (AC compressor) in raw power data using
 autocorrelation of the minute-to-minute diff signal. Classifies each house
 as wave_dominant / has_waves / no_waves.
 """
+import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # --- Constants ---
@@ -277,6 +280,8 @@ def calculate_wave_behavior_metrics(data: pd.DataFrame,
         Dictionary with per-phase metrics, house-level classification,
         and temporal distribution.
     """
+    logger.debug("calculate_wave_behavior_metrics: %d rows", len(data))
+
     if phase_cols is None:
         if 'w1' in data.columns:
             phase_cols = ['w1', 'w2', 'w3']
@@ -324,7 +329,7 @@ def calculate_wave_behavior_metrics(data: pd.DataFrame,
     # Peak season
     peak_season = _determine_peak_season(phases, dominant_phases)
 
-    return {
+    result = {
         'phases': phases,
         'max_wave_score': round(max_wave_score, 4),
         'total_wave_minutes': total_wave_minutes,
@@ -333,6 +338,9 @@ def calculate_wave_behavior_metrics(data: pd.DataFrame,
         'has_wave_behavior': has_wave_behavior,
         'peak_season': peak_season,
     }
+    logger.debug("calculate_wave_behavior_metrics: classification=%s, max_score=%.4f, total_wave_min=%d",
+                 wave_classification, max_wave_score, total_wave_minutes)
+    return result
 
 
 def _determine_peak_season(phases: Dict[str, Dict],

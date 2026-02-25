@@ -105,6 +105,11 @@ def find_cross_phase_waves(
                                 f"found via {source_phase} template"
                             )
 
+    if logger:
+        total_extra = sum(len(v) for v in extra_waves.values())
+        if total_extra:
+            logger.debug(f"Cross-phase: {total_extra} additional waves found")
+
     return extra_waves
 
 

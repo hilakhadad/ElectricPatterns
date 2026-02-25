@@ -8,6 +8,7 @@ This module is a facade — actual implementations are split across:
   - html_report_single.py     — per-house section builders
   - html_templates.py         — CSS and HTML boilerplate
 """
+import logging
 import os
 import sys
 import json
@@ -44,6 +45,8 @@ from visualization.html_templates import (
     _build_house_html_document,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def generate_html_report(analyses: List[Dict[str, Any]],
                          output_path: str,
@@ -59,6 +62,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     Returns:
         Path to the generated HTML file
     """
+    logger.info("Generating aggregate HTML report for %d analyses -> %s", len(analyses), output_path)
     # Extract per-house data for JavaScript filtering
     house_data = _extract_house_data(analyses)
 
@@ -82,6 +86,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+    logger.info("Aggregate HTML report saved to %s", output_path)
     return output_path
 
 
@@ -98,6 +103,7 @@ def generate_house_html_report(analysis: Dict[str, Any],
         Path to the generated HTML file
     """
     house_id = analysis.get('house_id', 'unknown')
+    logger.info("Generating house HTML report for house %s -> %s", house_id, output_path)
 
     # Generate sections
     summary_html = _generate_house_summary(analysis)
@@ -131,4 +137,5 @@ def generate_house_html_report(analysis: Dict[str, Any],
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+    logger.info("House HTML report for house %s saved to %s", house_id, output_path)
     return output_path

@@ -4,9 +4,13 @@ Data loading utilities for experiment pipeline.
 Provides consistent data loading with proper column naming.
 Supports both single pkl files and folders with monthly files.
 """
+import logging
+
 import pandas as pd
 from pathlib import Path
 from typing import Union
+
+logger = logging.getLogger(__name__)
 
 
 def load_power_data(filepath: Union[str, Path], parse_dates: bool = True) -> pd.DataFrame:
@@ -74,6 +78,7 @@ def _load_from_folder(folder: Path, parse_dates: bool) -> pd.DataFrame:
 
     # Concatenate all monthly files
     data = pd.concat(dfs, ignore_index=True)
+    logger.debug(f"Loaded {len(data)} rows from {len(dfs)} monthly files in {folder.name}")
 
     # Sort by timestamp to ensure chronological order
     if 'timestamp' in data.columns:
@@ -118,11 +123,13 @@ def find_house_data_path(base_dir: Union[str, Path], house_id: str) -> Path:
     # Try folder first (new structure)
     folder_path = base / house_id
     if folder_path.is_dir():
+        logger.debug(f"House {house_id} data: {folder_path}")
         return folder_path
 
     # Fall back to single file (old structure)
     file_path = base / f"{house_id}.pkl"
     if file_path.is_file():
+        logger.debug(f"House {house_id} data: {file_path}")
         return file_path
 
     raise FileNotFoundError(f"House data not found: neither {folder_path} nor {file_path} exists")

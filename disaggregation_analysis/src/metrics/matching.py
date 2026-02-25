@@ -3,10 +3,13 @@ Matching metrics for experiment results.
 
 Analyzes ON/OFF event matching performance.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
@@ -51,6 +54,8 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with matching metrics
     """
+    logger.debug("calculate_matching_metrics: house_id=%s, run_number=%d, preloaded=%s",
+                 house_id, run_number, bool(preloaded))
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -64,6 +69,8 @@ def calculate_matching_metrics(experiment_dir: Path, house_id: str,
         on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
 
     if on_off_df is None:
+        logger.warning("calculate_matching_metrics: No on_off data found for house %s run %d",
+                       house_id, run_number)
         metrics['error'] = 'No on_off file found'
         return metrics
 
@@ -235,9 +242,11 @@ def calculate_matching_quality(matches_df: pd.DataFrame) -> Dict[str, Any]:
     Returns:
         Dictionary with quality metrics
     """
+    logger.debug("calculate_matching_quality: %d rows in matches_df", len(matches_df))
     metrics = {}
 
     if matches_df.empty:
+        logger.warning("calculate_matching_quality: empty matches DataFrame")
         return metrics
 
     # Magnitude difference between ON and OFF

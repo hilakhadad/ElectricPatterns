@@ -3,9 +3,12 @@ Data quality metrics for household data.
 
 Detects anomalies, outliers, and potential data issues.
 """
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def _calc_sharp_entry_rate(vals, threshold):
@@ -125,6 +128,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     Returns:
         Dictionary with data quality metrics
     """
+    logger.debug("calculate_data_quality_metrics: %d rows, coverage_ratio=%s", len(data), coverage_ratio)
+
     if phase_cols is None:
         if 'w1' in data.columns:
             phase_cols = ['w1', 'w2', 'w3']
@@ -296,6 +301,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     # Compute quality flags and faulty phase label
     _compute_quality_tier(metrics)
 
+    logger.debug("calculate_data_quality_metrics: quality_score=%.1f, quality_label=%s, flags=%s",
+                 metrics.get('quality_score', 0), metrics.get('quality_label'), metrics.get('quality_flags', []))
     return metrics
 
 

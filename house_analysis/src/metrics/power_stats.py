@@ -3,9 +3,12 @@ Power statistics metrics for household data.
 
 Calculates statistical measures of power consumption.
 """
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> Dict[str, Any]:
@@ -19,6 +22,7 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
     Returns:
         Dictionary with power statistics
     """
+    logger.debug("calculate_power_statistics: %d rows", len(data))
     if phase_cols is None:
         if 'w1' in data.columns:
             phase_cols = ['w1', 'w2', 'w3']
@@ -93,6 +97,8 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
 
         metrics['active_phases'] = sum(1 for m in phase_means if m > 50)  # >50W considered active
 
+    logger.debug("calculate_power_statistics: total_mean=%.1f, high_power_density=%.4f",
+                 metrics.get('total_mean', 0), metrics.get('high_power_density', 0))
     return metrics
 
 
@@ -110,6 +116,7 @@ def calculate_phase_imbalance(data: pd.DataFrame, phase_cols: list = None) -> Di
     Returns:
         Dictionary with imbalance statistics
     """
+    logger.debug("calculate_phase_imbalance: %d rows", len(data))
     if phase_cols is None:
         if 'w1' in data.columns:
             phase_cols = ['w1', 'w2', 'w3']
@@ -183,6 +190,7 @@ def calculate_power_ranges(data: pd.DataFrame, phase_cols: list = None,
     Returns:
         Dictionary with time in each range
     """
+    logger.debug("calculate_power_ranges: %d rows", len(data))
     if ranges is None:
         ranges = [(0, 100), (100, 500), (500, 1000), (1000, 2000), (2000, 5000), (5000, float('inf'))]
 

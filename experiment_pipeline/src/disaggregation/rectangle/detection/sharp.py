@@ -40,7 +40,8 @@ def detect_sharp_events(
     phase: str,
     threshold: int,
     off_threshold_factor: float = 0.8,
-    expand_factor: float = 0.05
+    expand_factor: float = 0.05,
+    logger=None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Detect sharp ON/OFF events (single-minute jumps >= threshold).
@@ -112,4 +113,6 @@ def detect_sharp_events(
             axis=1
         )
 
+    if logger:
+        logger.debug(f"Sharp {phase}: {len(results_on)} ON, {len(results_off)} OFF events (TH={threshold}W)")
     return results_on, results_off

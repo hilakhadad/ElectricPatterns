@@ -3,6 +3,7 @@ Chart generation for house analysis reports.
 
 Uses Plotly to create interactive charts that can be embedded in HTML.
 """
+import logging
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -11,6 +12,8 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 
 from metrics.wave_behavior import WAVE_PRESENT_THRESHOLD, WAVE_DOMINANT_THRESHOLD
+
+logger = logging.getLogger(__name__)
 
 
 def create_days_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
@@ -23,6 +26,7 @@ def create_days_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with embedded chart
     """
+    logger.debug("create_days_distribution_chart: %d analyses", len(analyses))
     # Define day ranges (bins) - 6-month intervals from 0 to 4+ years
     # 6 months ≈ 182 days
     bins = [0, 182, 365, 548, 730, 913, 1095, 1278, 1460, float('inf')]
@@ -88,6 +92,7 @@ def create_quality_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with embedded chart
     """
+    logger.debug("create_quality_distribution_chart: %d analyses", len(analyses))
     scores = []
     house_ids = []
 
@@ -319,6 +324,7 @@ def create_issues_heatmap(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with embedded chart
     """
+    logger.debug("create_issues_heatmap: %d analyses", len(analyses))
     # Collect all flags
     house_ids = []
     all_flags = set()
@@ -560,6 +566,7 @@ def create_hourly_pattern_chart(analysis: Dict[str, Any]) -> str:
     Returns:
         HTML string with embedded chart
     """
+    logger.debug("create_hourly_pattern_chart: house=%s", analysis.get('house_id', 'unknown'))
     temporal = analysis.get('temporal_patterns', {})
     pattern = temporal.get('total_hourly_pattern', {})
 
@@ -880,6 +887,7 @@ def create_score_breakdown_chart(analysis: Dict[str, Any]) -> str:
     Returns:
         HTML string with embedded chart
     """
+    logger.debug("create_score_breakdown_chart: house=%s", analysis.get('house_id', 'unknown'))
     quality = analysis.get('data_quality', {})
 
     # Get score components (6-component scoring system)

@@ -15,11 +15,14 @@ Score components (total = 100 points):
 After the base score, anomaly penalties are applied via _apply_anomaly_penalties().
 Quality tier is assigned via _compute_quality_tier().
 """
+import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional
 
 from metrics.quality import _calc_sharp_entry_rate, _calc_sustained_high_power, _calc_compressor_cycles
+
+logger = logging.getLogger(__name__)
 
 DETECTION_THRESHOLD = 1300  # algorithm's detection threshold in watts
 
@@ -413,6 +416,9 @@ def _apply_anomaly_penalties(metrics: dict,
     metrics['anomaly_penalties'] = total_penalty
     metrics['anomaly_penalty_details'] = anomaly_penalties
     metrics['quality_score'] = round(final_score, 1)
+
+    logger.info("quality_score=%.1f, label=%s (base=%.1f, penalty=%.1f)",
+                final_score, metrics.get('quality_label', 'N/A'), base_score, total_penalty)
 
     return final_score
 

@@ -4,9 +4,12 @@ Confidence distribution and overview charts.
 Extracted from identification_charts.py.
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Color constants (consistent with classification_charts.py)
 GREEN = '#28a745'
@@ -45,6 +48,7 @@ def create_confidence_overview(sessions: List[Dict]) -> str:
     2. Unknown sessions — "Not Boiler" exclusion confidence
     3. Unknown sessions — "Not AC" exclusion confidence
     """
+    logger.debug("Creating confidence overview chart")
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 

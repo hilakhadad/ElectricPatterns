@@ -3,10 +3,13 @@ Event metrics for experiment results.
 
 Analyzes detected events characteristics.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List
+
+logger = logging.getLogger(__name__)
 
 
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
@@ -50,6 +53,8 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with event metrics
     """
+    logger.debug("calculate_event_metrics: house_id=%s, run_number=%d, preloaded=%s",
+                 house_id, run_number, bool(preloaded))
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -62,6 +67,8 @@ def calculate_event_metrics(experiment_dir: Path, house_id: str,
         on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
 
     if on_off_df is None:
+        logger.warning("calculate_event_metrics: No on_off data found for house %s run %d",
+                       house_id, run_number)
         metrics['error'] = 'No on_off file found'
         return metrics
     on_off_df['start'] = pd.to_datetime(on_off_df['start'], format='mixed', dayfirst=True)
@@ -167,6 +174,7 @@ def analyze_unmatched_events(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with unmatched event analysis
     """
+    logger.debug("analyze_unmatched_events: house_id=%s, run_number=%d", house_id, run_number)
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -177,6 +185,10 @@ def analyze_unmatched_events(experiment_dir: Path, house_id: str,
     # Load unmatched files
     un_on = _load_monthly_files(house_dir, "unmatched_on", f"unmatched_on_{house_id}_*.pkl")
     un_off = _load_monthly_files(house_dir, "unmatched_off", f"unmatched_off_{house_id}_*.pkl")
+
+    if un_on is None and un_off is None:
+        logger.warning("analyze_unmatched_events: No unmatched data found for house %s run %d",
+                       house_id, run_number)
 
     if un_on is not None:
         metrics['unmatched_on_count'] = len(un_on)

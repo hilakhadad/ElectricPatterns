@@ -3,10 +3,13 @@ Iteration metrics for experiment results.
 
 Analyzes progress across multiple iterations.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _find_run_dir(experiment_dir: Path, run_number: int) -> Optional[Path]:
@@ -77,6 +80,8 @@ def calculate_iteration_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with iteration metrics
     """
+    logger.debug("calculate_iteration_metrics: house_id=%s, max_iterations=%d",
+                 house_id, max_iterations)
     metrics = {
         'house_id': house_id,
     }
@@ -229,7 +234,11 @@ def analyze_iteration_progression(iterations_data: List[Dict]) -> Dict[str, Any]
     Returns:
         Dictionary with progression analysis
     """
+    logger.debug("analyze_iteration_progression: %d iterations provided",
+                 len(iterations_data) if iterations_data else 0)
     if not iterations_data or len(iterations_data) < 2:
+        logger.warning("analyze_iteration_progression: insufficient iterations data (need >= 2, got %d)",
+                       len(iterations_data) if iterations_data else 0)
         return {}
 
     analysis = {}
@@ -272,6 +281,7 @@ def get_iteration_summary(experiment_dir: Path, house_id: str) -> str:
     Returns:
         Human-readable summary string
     """
+    logger.debug("get_iteration_summary: house_id=%s", house_id)
     metrics = calculate_iteration_metrics(experiment_dir, house_id)
 
     lines = []

@@ -4,9 +4,12 @@ HTML template functions for disaggregation analysis reports.
 Contains CSS and HTML boilerplate for aggregate and single-house reports.
 Extracted from html_report.py.
 """
+import logging
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 from shared.html_utils import build_glossary_section, build_about_section
+
+logger = logging.getLogger(__name__)
 
 
 def _build_html_document(title: str, summary: str, table: str,

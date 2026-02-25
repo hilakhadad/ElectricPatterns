@@ -13,7 +13,8 @@ def calculate_phase_metrics(
     current_remaining: pd.Series,
     prev_remaining: Optional[pd.Series],
     threshold: int,
-    run_number: int
+    run_number: int,
+    logger=None
 ) -> Dict:
     """
     Calculate evaluation metrics for a single phase.
@@ -89,6 +90,12 @@ def calculate_phase_metrics(
         time_pct_iteration = (
             (minutes_below_th_iteration / minutes_above_th * 100)
             if minutes_above_th > 0 else 0.0
+        )
+
+    if logger:
+        logger.debug(
+            f"Phase metrics: explained_pwr={explained_power_iteration_pct:.1f}%, "
+            f"explained_time={time_pct_iteration:.1f}%, negative={minutes_negative} min"
         )
 
     return {

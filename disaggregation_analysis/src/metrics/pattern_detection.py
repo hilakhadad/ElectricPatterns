@@ -4,11 +4,14 @@ Pattern detection and clustering utilities.
 Extracted from patterns.py -- contains recurring pattern detection,
 event clustering, proximity stats, and time distribution analysis.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 def _calculate_daily_stats(on_off_df: pd.DataFrame,
@@ -673,11 +676,14 @@ def find_periodic_patterns(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with periodic pattern analysis
     """
+    logger.debug("find_periodic_patterns: house_id=%s, run_number=%d", house_id, run_number)
     from metrics.patterns import _get_house_dir, _load_monthly_files
     house_dir = _get_house_dir(experiment_dir, house_id, run_number)
 
     on_off_df = _load_monthly_files(house_dir, "on_off", "on_off_*.pkl")
     if on_off_df is None:
+        logger.warning("find_periodic_patterns: No on_off data found for house %s run %d",
+                       house_id, run_number)
         return {'error': 'No data'}
 
     # Parse timestamps

@@ -9,6 +9,7 @@ Usage:
 """
 import sys
 import os
+import logging
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -281,6 +282,12 @@ def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+
     parser = argparse.ArgumentParser(description='Analyze household power data')
     parser.add_argument('--house', type=str, help='Specific house ID to analyze')
     parser.add_argument('--houses', type=str,

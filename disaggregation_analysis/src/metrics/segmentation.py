@@ -3,10 +3,13 @@ Segmentation metrics for experiment results.
 
 Analyzes power segmentation quality and coverage.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
@@ -34,6 +37,7 @@ def calculate_segmentation_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with segmentation metrics
     """
+    logger.debug("calculate_segmentation_metrics: house_id=%s, run_number=%d", house_id, run_number)
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -57,6 +61,8 @@ def calculate_segmentation_metrics(experiment_dir: Path, house_id: str,
     elif segmented_files:
         data_files = segmented_files
     else:
+        logger.warning("calculate_segmentation_metrics: No segmented/summarized data for house %s run %d",
+                       house_id, run_number)
         metrics['error'] = 'No segmented/summarized file found'
         return metrics
 
@@ -190,10 +196,15 @@ def calculate_segmentation_quality(seg_df: pd.DataFrame,
     Returns:
         Dictionary with quality metrics
     """
+    logger.debug("calculate_segmentation_quality: %d rows in seg_df", len(seg_df))
     if phases is None:
         phases = ['w1', 'w2', 'w3'] if 'w1' in seg_df.columns else ['1', '2', '3']
 
     metrics = {}
+
+    if seg_df.empty:
+        logger.warning("calculate_segmentation_quality: empty segmentation DataFrame")
+        return metrics
 
     remaining_cols = [c for c in seg_df.columns if c.startswith('remaining_power_')]
 
@@ -241,6 +252,8 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with threshold explanation metrics per phase and total
     """
+    logger.debug("calculate_threshold_explanation_metrics: house_id=%s, run_number=%d, threshold=%.0f",
+                 house_id, run_number, threshold)
     metrics = {
         'threshold': threshold,
         'house_id': house_id,
@@ -257,6 +270,8 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
         summarized_files = list(house_dir.glob("summarized_*.pkl"))
 
     if not summarized_files:
+        logger.warning("calculate_threshold_explanation_metrics: No summarized data for house %s run %d",
+                       house_id, run_number)
         metrics['error'] = 'No summarized file found'
         return metrics
 
@@ -341,6 +356,8 @@ def calculate_threshold_explanation_all_iterations(experiment_dir: Path, house_i
     Returns:
         List of dictionaries with metrics per iteration
     """
+    logger.debug("calculate_threshold_explanation_all_iterations: house_id=%s, max_iterations=%d, threshold=%.0f",
+                 house_id, max_iterations, threshold)
     results = []
 
     for run_number in range(max_iterations):

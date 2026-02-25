@@ -4,6 +4,7 @@ Generate plots for recurring patterns.
 Creates individual plots for each occurrence of a recurring pattern,
 organized by house and pattern.
 """
+import logging
 import os
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -17,6 +18,8 @@ try:
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 def generate_pattern_plots(
@@ -43,7 +46,9 @@ def generate_pattern_plots(
     Returns:
         Dictionary with generation statistics
     """
+    logger.debug("Generating pattern plots for house %s (%d patterns)", house_id, len(patterns))
     if not PLOTLY_AVAILABLE:
+        logger.warning("Plotly not available, skipping pattern plot generation")
         return {'error': 'Plotly not available', 'plots_generated': 0}
 
     result = {
@@ -221,6 +226,7 @@ def _create_pattern_plot(
     Layout: 3 columns (phases w1, w2, w3) x 3 rows (Original, Remaining, Segmented)
     All phases share the same Y-axis range.
     """
+    logger.debug("Creating pattern plot for house %s, date %s, phase %s", house_id, date_str, phase)
     phases = ['w1', 'w2', 'w3']
     phase_colors = {'w1': '#1f77b4', 'w2': '#2ca02c', 'w3': '#ff7f0e'}
 
@@ -387,6 +393,7 @@ def _calculate_y_range(df: pd.DataFrame, phases: list) -> tuple:
 
 def _create_pattern_index(house_dir: Path, patterns: List[Dict], house_id: str):
     """Create an index HTML file for easy navigation of pattern plots."""
+    logger.debug("Creating pattern index for house %s at %s", house_id, house_dir)
     html_parts = [f"""
 <!DOCTYPE html>
 <html>

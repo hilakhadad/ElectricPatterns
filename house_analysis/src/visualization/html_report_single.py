@@ -3,10 +3,13 @@ Single-house report builder for house analysis.
 
 Extracted from html_report.py — contains per-house report generation.
 """
+import logging
 import os
 import sys
 from datetime import datetime
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 from shared.html_utils import build_glossary_section as _build_glossary_section, build_about_section as _build_about_section
@@ -389,6 +392,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         Path to the generated HTML file
     """
     house_id = analysis.get('house_id', 'unknown')
+    logger.info("generate_single_house_html_report: house_id=%s, output=%s", house_id, output_path)
+
     coverage = analysis.get('coverage', {})
     quality = analysis.get('data_quality', {})
     power = analysis.get('power_statistics', {})
@@ -1279,6 +1284,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+    logger.info("generate_single_house_html_report: house_id=%s saved to %s", house_id, output_path)
     return output_path
 
 

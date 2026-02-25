@@ -18,6 +18,7 @@ Usage:
 import sys
 import os
 import json
+import logging
 import time
 from pathlib import Path
 from datetime import datetime
@@ -110,6 +111,12 @@ def discover_houses(experiment_dir: Path) -> list:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+
     parser = argparse.ArgumentParser(
         description="Generate device identification (Module 2) HTML reports"
     )

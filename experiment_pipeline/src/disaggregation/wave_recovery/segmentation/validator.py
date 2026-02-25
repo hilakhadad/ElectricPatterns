@@ -25,6 +25,7 @@ def validate_wave_extraction(
     remaining_after: pd.Series,
     extracted: pd.Series,
     wave: WavePattern,
+    logger=None,
 ) -> Tuple[bool, str]:
     """
     Validate that a wave extraction is clean.
@@ -49,13 +50,19 @@ def validate_wave_extraction(
     neg_mask = remaining_after < -INVARIANT_TOLERANCE
     if neg_mask.any():
         worst = remaining_after[neg_mask].min()
-        return False, f"Negative remaining after extraction (min={worst:.1f}W)"
+        reason = f"Negative remaining after extraction (min={worst:.1f}W)"
+        if logger:
+            logger.debug(f"Wave validation failed: {reason}")
+        return False, reason
 
     # 2. Power invariant: before = after + extracted
     diff = remaining_before - remaining_after - extracted
     max_violation = diff.abs().max()
     if max_violation > INVARIANT_TOLERANCE:
-        return False, f"Power invariant violated (max diff={max_violation:.1f}W)"
+        reason = f"Power invariant violated (max diff={max_violation:.1f}W)"
+        if logger:
+            logger.debug(f"Wave validation failed: {reason}")
+        return False, reason
 
     # 3. Wave profile should have no internal zeros (holes)
     wave_mask = (extracted.index >= wave.start) & (extracted.index <= wave.end)
@@ -66,11 +73,19 @@ def validate_wave_extraction(
         if len(inner) > 0:
             zero_fraction = (inner <= 0).sum() / len(inner)
             if zero_fraction > 0.3:  # More than 30% zeros inside wave
-                return False, f"Too many zero-gaps inside wave ({zero_fraction:.0%})"
+                reason = f"Too many zero-gaps inside wave ({zero_fraction:.0%})"
+                if logger:
+                    logger.debug(f"Wave validation failed: {reason}")
+                return False, reason
 
     # 4. Total extracted power should be meaningful
     total_extracted = extracted.sum()
     if total_extracted <= 0:
-        return False, "No power extracted"
+        reason = "No power extracted"
+        if logger:
+            logger.debug(f"Wave validation failed: {reason}")
+        return False, reason
 
+    if logger:
+        logger.debug("Wave validation passed")
     return True, "OK"

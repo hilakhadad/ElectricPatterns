@@ -7,7 +7,8 @@ import pandas as pd
 
 
 def merge_overlapping_events(events_df: pd.DataFrame, max_gap_minutes: int = 0,
-                             data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+                             data: pd.DataFrame = None, phase: str = None,
+                             logger=None) -> pd.DataFrame:
     """
     Merge events that overlap or touch each other.
 
@@ -34,6 +35,8 @@ def merge_overlapping_events(events_df: pd.DataFrame, max_gap_minutes: int = 0,
     if len(events_df) <= 1:
         return events_df
 
+    original_count = len(events_df)
+
     # Sort by start time
     df = events_df.sort_values('start').reset_index(drop=True)
 
@@ -57,12 +60,16 @@ def merge_overlapping_events(events_df: pd.DataFrame, max_gap_minutes: int = 0,
 
     merged.append(current)
 
-    return pd.DataFrame(merged).reset_index(drop=True)
+    result = pd.DataFrame(merged).reset_index(drop=True)
+    if logger and original_count != len(result):
+        logger.debug(f"Merge overlapping: {original_count} -> {len(result)} events")
+    return result
 
 
 def merge_split_off_events(off_events: pd.DataFrame, on_events: pd.DataFrame,
                            max_gap_minutes: int = 2,
-                           data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+                           data: pd.DataFrame = None, phase: str = None,
+                           logger=None) -> pd.DataFrame:
     """
     Merge OFF events that represent a split device shutdown.
 
@@ -89,6 +96,8 @@ def merge_split_off_events(off_events: pd.DataFrame, on_events: pd.DataFrame,
     """
     if len(off_events) <= 1:
         return off_events
+
+    original_count = len(off_events)
 
     # Sort by start time
     df = off_events.sort_values('start').reset_index(drop=True)
@@ -157,12 +166,16 @@ def merge_split_off_events(off_events: pd.DataFrame, on_events: pd.DataFrame,
 
     merged.append(current)
 
-    return pd.DataFrame(merged).reset_index(drop=True)
+    result = pd.DataFrame(merged).reset_index(drop=True)
+    if logger and original_count != len(result):
+        logger.debug(f"Merge split-OFF: {original_count} -> {len(result)} events")
+    return result
 
 
 def merge_consecutive_on_events(on_events: pd.DataFrame, off_events: pd.DataFrame,
                                  max_gap_minutes: int = 2,
-                                 data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+                                 data: pd.DataFrame = None, phase: str = None,
+                                 logger=None) -> pd.DataFrame:
     """
     Merge consecutive ON events that likely represent the same appliance activation.
 
@@ -181,18 +194,20 @@ def merge_consecutive_on_events(on_events: pd.DataFrame, off_events: pd.DataFram
         max_gap_minutes: Maximum gap between ON events to consider merging
         data: Unused, kept for backward compatibility
         phase: Unused, kept for backward compatibility
+        logger: Optional logger for debug messages
 
     Returns:
         DataFrame with merged ON events
     """
     return _merge_consecutive_events(
-        on_events, off_events, max_gap_minutes, data, phase
+        on_events, off_events, max_gap_minutes, data, phase, logger=logger
     )
 
 
 def merge_consecutive_off_events(off_events: pd.DataFrame, on_events: pd.DataFrame,
                                   max_gap_minutes: int = 2,
-                                  data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+                                  data: pd.DataFrame = None, phase: str = None,
+                                  logger=None) -> pd.DataFrame:
     """
     Merge consecutive OFF events that likely represent the same appliance deactivation.
 
@@ -210,18 +225,20 @@ def merge_consecutive_off_events(off_events: pd.DataFrame, on_events: pd.DataFra
         max_gap_minutes: Maximum gap between OFF events to consider merging
         data: Unused, kept for backward compatibility
         phase: Unused, kept for backward compatibility
+        logger: Optional logger for debug messages
 
     Returns:
         DataFrame with merged OFF events
     """
     return _merge_consecutive_events(
-        off_events, on_events, max_gap_minutes, data, phase
+        off_events, on_events, max_gap_minutes, data, phase, logger=logger
     )
 
 
 def _merge_consecutive_events(events: pd.DataFrame, opposite_events: pd.DataFrame,
                                max_gap_minutes: int = 2,
-                               data: pd.DataFrame = None, phase: str = None) -> pd.DataFrame:
+                               data: pd.DataFrame = None, phase: str = None,
+                               logger=None) -> pd.DataFrame:
     """
     Internal function to merge consecutive events of the same type.
 
@@ -250,6 +267,8 @@ def _merge_consecutive_events(events: pd.DataFrame, opposite_events: pd.DataFram
     """
     if len(events) <= 1:
         return events
+
+    original_count = len(events)
 
     # Sort by start time
     df = events.sort_values('start').reset_index(drop=True)
@@ -296,4 +315,7 @@ def _merge_consecutive_events(events: pd.DataFrame, opposite_events: pd.DataFram
 
     merged.append(current)
 
-    return pd.DataFrame(merged).reset_index(drop=True)
+    result = pd.DataFrame(merged).reset_index(drop=True)
+    if logger and original_count != len(result):
+        logger.debug(f"Merge consecutive: {original_count} -> {len(result)} events")
+    return result

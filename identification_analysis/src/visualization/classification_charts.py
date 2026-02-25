@@ -11,7 +11,10 @@ Creates HTML sections with inline Plotly charts for:
   - Flags summary table
 """
 import json
+import logging
 from typing import Dict, Any, List
+
+logger = logging.getLogger(__name__)
 
 # Color constants (consistent with dynamic_report_charts.py)
 GREEN = '#28a745'
@@ -57,6 +60,7 @@ def create_quality_section(quality: Dict[str, Any], confidence: Dict[str, Any]) 
     Returns:
         HTML string for the entire classification quality section.
     """
+    logger.debug("Creating quality section chart")
     if not quality or quality.get('total_sessions', 0) == 0:
         return ''
 

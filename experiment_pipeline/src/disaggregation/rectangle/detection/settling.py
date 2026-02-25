@@ -30,6 +30,7 @@ def extend_settling_on_events(
     settling_factor: float = 0.7,
     max_settling_minutes: int = 5,
     min_threshold: float = 0,
+    logger=None,
 ) -> pd.DataFrame:
     """
     Detect transient spikes in ON events and extend boundaries to include settling.
@@ -83,7 +84,12 @@ def extend_settling_on_events(
         )
         results.append(result)
 
-    return pd.DataFrame(results).reset_index(drop=True)
+    result_df = pd.DataFrame(results).reset_index(drop=True)
+    if logger:
+        extended = sum(1 for r in results if pd.notna(r.get('settling_original_end', pd.NaT)))
+        if extended:
+            logger.debug(f"Settling ON {phase}: {extended}/{len(on_events)} events extended")
+    return result_df
 
 
 def _extend_single_on_event(
@@ -187,6 +193,7 @@ def extend_settling_off_events(
     settling_factor: float = 0.7,
     max_settling_minutes: int = 5,
     min_threshold: float = 0,
+    logger=None,
 ) -> pd.DataFrame:
     """
     Detect outgoing spikes in OFF events and extend boundaries backward.
@@ -238,7 +245,12 @@ def extend_settling_off_events(
         )
         results.append(result)
 
-    return pd.DataFrame(results).reset_index(drop=True)
+    result_df = pd.DataFrame(results).reset_index(drop=True)
+    if logger:
+        extended = sum(1 for r in results if pd.notna(r.get('settling_original_start', pd.NaT)))
+        if extended:
+            logger.debug(f"Settling OFF {phase}: {extended}/{len(off_events)} events extended")
+    return result_df
 
 
 def _extend_single_off_event(

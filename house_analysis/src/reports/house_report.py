@@ -3,12 +3,15 @@ Per-house analysis and report generation.
 
 Analyzes a single house and generates a detailed report.
 """
+import logging
 import pandas as pd
 import json
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from metrics import (
     calculate_coverage_metrics,
@@ -34,6 +37,8 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     Returns:
         Dictionary with all analysis results
     """
+    logger.info("analyze_single_house: house_id=%s, %d rows", house_id, len(data))
+
     results = {
         'house_id': house_id,
         'analysis_timestamp': datetime.now().isoformat(),
@@ -90,6 +95,8 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     # Summary flags for easy filtering
     results['flags'] = _generate_flags(results)
 
+    logger.info("analyze_single_house: house_id=%s complete, quality_score=%.1f",
+                house_id, results.get('data_quality', {}).get('quality_score', 0))
     return results
 
 
@@ -198,6 +205,7 @@ def generate_house_report(analysis: Dict[str, Any], output_dir: str,
     os.makedirs(output_dir, exist_ok=True)
 
     house_id = analysis.get('house_id', 'unknown')
+    logger.info("generate_house_report: house_id=%s, format=%s", house_id, format)
 
     if format == 'json':
         output_path = os.path.join(output_dir, f'analysis_{house_id}.json')

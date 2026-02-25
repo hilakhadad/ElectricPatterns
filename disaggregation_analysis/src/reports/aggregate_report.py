@@ -3,6 +3,7 @@ Aggregate report generation for multiple houses.
 
 Combines experiment results across all houses into summary reports.
 """
+import logging
 import os
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ except ImportError:
 from reports.experiment_report import analyze_experiment_house
 from metrics.monthly import calculate_monthly_metrics, find_common_problematic_months
 import json
+
+logger = logging.getLogger(__name__)
 
 
 def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
@@ -179,10 +182,13 @@ def aggregate_experiment_results(experiment_dir: Path,
     Returns:
         List of analysis results for each house
     """
+    logger.info("Starting aggregate experiment results for %s", experiment_dir)
+
     # Auto-detect houses if not specified
     if house_ids is None:
         house_ids = _detect_houses(experiment_dir)
 
+    logger.info("Aggregating results for %d houses", len(house_ids))
     mode_str = " (FAST MODE)" if fast_mode else ""
     print(f"Detected {len(house_ids)} houses to analyze{mode_str}", flush=True)
     print(f"Houses: {', '.join(house_ids[:5])}{'...' if len(house_ids) > 5 else ''}", flush=True)
@@ -312,6 +318,8 @@ def aggregate_experiment_results(experiment_dir: Path,
         if matched > 0:
             print(f"Injected pre-analysis quality scores for {matched} houses")
 
+    logger.info("Completed aggregate results for %d houses", len(analyses))
+
     return analyses
 
 
@@ -349,6 +357,8 @@ def generate_summary_report(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         Formatted summary text
     """
+    logger.info("Generating summary report for %d analyses", len(analyses))
+
     lines = []
     lines.append("=" * 70)
     lines.append("EXPERIMENT SUMMARY REPORT")
@@ -487,6 +497,8 @@ def generate_summary_report(analyses: List[Dict[str, Any]]) -> str:
     lines.append(f"    - Poor score: {len(poor_houses)}")
     lines.append(f"    - Fair score (improvement potential): {len(fair_houses)}")
 
+    logger.info("Completed summary report for %d houses", n_houses)
+
     return '\n'.join(lines)
 
 
@@ -504,6 +516,8 @@ def generate_monthly_analysis(experiment_dir: Path,
     Returns:
         Formatted monthly analysis report
     """
+    logger.info("Generating monthly analysis for %d analyses (max_houses=%d)", len(analyses), max_houses)
+
     lines = []
     lines.append("=" * 70)
     lines.append("MONTHLY ANALYSIS REPORT")
@@ -583,6 +597,8 @@ def generate_monthly_analysis(experiment_dir: Path,
     else:
         lines.append("  No houses with high variation (std > 15%)")
 
+    logger.info("Completed monthly analysis report")
+
     return '\n'.join(lines)
 
 
@@ -596,6 +612,8 @@ def create_comparison_table(analyses: List[Dict[str, Any]]) -> pd.DataFrame:
     Returns:
         DataFrame with comparison metrics
     """
+    logger.info("Creating comparison table for %d analyses", len(analyses))
+
     rows = []
 
     for a in analyses:
@@ -665,6 +683,8 @@ def create_comparison_table(analyses: List[Dict[str, Any]]) -> pd.DataFrame:
         df = df.sort_values(['_category_order', 'overall_score'], ascending=[True, True])
         df = df.drop('_category_order', axis=1)
 
+    logger.info("Completed comparison table with %d rows", len(df))
+
     return df
 
 
@@ -683,6 +703,8 @@ def get_focus_houses(analyses: List[Dict[str, Any]]) -> pd.DataFrame:
     Returns:
         DataFrame with focus houses sorted by priority
     """
+    logger.info("Identifying focus houses from %d analyses", len(analyses))
+
     focus_rows = []
 
     for a in analyses:
@@ -745,5 +767,7 @@ def get_focus_houses(analyses: List[Dict[str, Any]]) -> pd.DataFrame:
 
     if not df.empty:
         df = df.sort_values(['priority', 'overall_score'], ascending=[True, True])
+
+    logger.info("Completed focus houses: %d houses need attention", len(df))
 
     return df

@@ -142,6 +142,9 @@ def detect_wave_patterns(
                 f"baseline={baseline_power:.0f}W"
             )
 
+    if logger:
+        logger.debug(f"Wave detection {phase}: {len(rise_indices)} rise candidates -> {len(waves)} waves")
+
     return waves
 
 

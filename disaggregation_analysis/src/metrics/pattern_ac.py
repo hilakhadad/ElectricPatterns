@@ -4,11 +4,14 @@ AC pattern detection and validation.
 Extracted from patterns.py -- contains AC session grouping,
 session validation, and AC pattern detection.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 def _group_activations_into_sessions(activations: List[Dict],
@@ -220,6 +223,8 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with central_ac and regular_ac activation lists
     """
+    logger.debug("detect_ac_patterns: house_id=%s, run_number=%d, preloaded=%s",
+                 house_id, run_number, bool(preloaded))
     result = {
         'central_ac': {
             'activations': [],
@@ -246,6 +251,8 @@ def detect_ac_patterns(experiment_dir: Path, house_id: str,
         matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
     if matches_df is None or len(matches_df) == 0:
+        logger.warning("detect_ac_patterns: No matches data found for house %s run %d",
+                       house_id, run_number)
         return result
 
     # Parse timestamps (skip if already datetime)
@@ -512,6 +519,8 @@ def analyze_device_usage_patterns(ac_detection: Dict[str, Any],
     Returns:
         Dictionary with seasonal and time-of-day breakdown for each device type
     """
+    logger.debug("analyze_device_usage_patterns: ac_detection=%s, boiler_detection=%s",
+                 bool(ac_detection), bool(boiler_detection))
     result = {
         'central_ac': {'seasonal': {}, 'time_of_day': {}},
         'regular_ac': {'seasonal': {}, 'time_of_day': {}},

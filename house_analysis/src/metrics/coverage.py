@@ -3,9 +3,12 @@ Coverage metrics for household data.
 
 Calculates data availability and completeness metrics.
 """
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> Dict[str, Any]:
@@ -19,6 +22,7 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
     Returns:
         Dictionary with coverage metrics
     """
+    logger.debug("calculate_coverage_metrics: %d rows, columns=%s", len(data), list(data.columns))
     if phase_cols is None:
         # Try common column naming conventions
         if 'w1' in data.columns:
@@ -135,4 +139,6 @@ def calculate_coverage_metrics(data: pd.DataFrame, phase_cols: list = None) -> D
             max_vals[col] = float(data[col].max()) if not data[col].isna().all() else 0
     metrics['phase_max_values'] = max_vals
 
+    logger.debug("calculate_coverage_metrics: coverage_ratio=%.3f, days_span=%s, avg_nan_pct=%.2f",
+                 metrics.get('coverage_ratio', 0), metrics.get('days_span', 'N/A'), metrics.get('avg_nan_pct', 0))
     return metrics

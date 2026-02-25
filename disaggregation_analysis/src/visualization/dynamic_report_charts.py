@@ -11,11 +11,14 @@ Color scheme (no red):
   Yellow = #eab308 (sub-threshold / warm yellow)
 """
 import json
+import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Color constants
 GREEN = '#28a745'           # Segregated (success)
@@ -37,6 +40,7 @@ def create_summary_boxes(metrics: Dict[str, Any]) -> str:
     Decomposition box (bordered): Segregated + Background + Unmatched + Sub-threshold [+ No Data] = 100%
     Efficiency card (separate): Segregated / (Segregated + Unmatched) — only detectable power.
     """
+    logger.debug("Creating summary boxes")
     totals = metrics.get('totals', {})
     phases = metrics.get('phases', {})
     segregated_pct = totals.get('segregated_pct', 0)
@@ -175,6 +179,7 @@ def create_power_breakdown_bar(metrics: Dict[str, Any]) -> str:
 
     Each phase gets one bar: [Segregated | Background | Unmatched | No Data]
     """
+    logger.debug("Creating power breakdown bar chart")
     phases = metrics.get('phases', {})
     chart_id = 'power-breakdown-chart'
 
@@ -279,6 +284,7 @@ def create_efficiency_gauge(metrics: Dict[str, Any]) -> str:
 
     Green > 70%, Yellow 50-70%, Orange < 50%.
     """
+    logger.debug("Creating efficiency gauge chart")
     phases = metrics.get('phases', {})
     chart_id = 'efficiency-gauge-chart'
 
@@ -347,6 +353,7 @@ def create_threshold_waterfall(metrics: Dict[str, Any]) -> str:
 
     TH=2000 -> TH=1500 -> TH=1100 -> TH=800 -> Total
     """
+    logger.debug("Creating threshold waterfall chart")
     per_threshold = metrics.get('per_threshold', [])
     chart_id = 'threshold-waterfall-chart'
 
@@ -400,6 +407,7 @@ def create_remaining_analysis_chart(metrics: Dict[str, Any]) -> str:
 
     Categories: Noise | Small Events | Large Unmatched
     """
+    logger.debug("Creating remaining analysis chart")
     rc = metrics.get('remaining_classification', {})
     chart_id = 'remaining-analysis-chart'
 
@@ -451,6 +459,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
 
     Columns: Device Type | Count | Avg Power | Avg Duration | % of Segregated
     """
+    logger.debug("Creating device summary table")
     devices = metrics.get('devices', {})
 
     if not devices.get('available', False):
@@ -673,6 +682,7 @@ def create_device_activations_detail(activations: List[Dict[str, Any]]) -> str:
     Filters to high-confidence detections using minimum duration per type.
     Includes sortable columns, per-type Copy Dates, and a Copy All button.
     """
+    logger.debug("Creating device activations detail for %d activations", len(activations) if activations else 0)
     if not activations:
         return '<p style="color: #888;">No device activations data available.</p>'
 
@@ -879,10 +889,11 @@ def create_remaining_events_section(metrics: Dict[str, Any]) -> str:
     """
     Create the Remaining Events section: daily summary table + expandable 3x3 charts.
 
-    Each table row = one day.  Clicking a row expands a 3×3 grid
-    (Original / Remaining / Segregated × w1 / w2 / w3) for the full day,
+    Each table row = one day.  Clicking a row expands a 3x3 grid
+    (Original / Remaining / Segregated x w1 / w2 / w3) for the full day,
     with above-threshold regions highlighted as coloured rectangles.
     """
+    logger.debug("Creating remaining events section")
     re_data = metrics.get('remaining_events', {})
     events = re_data.get('events', [])
     summary = re_data.get('summary', {})

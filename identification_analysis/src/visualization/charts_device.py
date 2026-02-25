@@ -4,9 +4,12 @@ Device activations detail and summary table charts.
 Extracted from identification_charts.py.
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Color constants (consistent with classification_charts.py)
 GREEN = '#28a745'
@@ -64,6 +67,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
 
     Columns: Device Type | Count | Avg Power | Avg Duration | % of Explained
     """
+    logger.debug("Creating device summary table chart")
     devices = metrics.get('devices', {})
 
     if not devices.get('available', False):
@@ -290,6 +294,7 @@ def create_device_activations_detail(sessions: List[Dict[str, Any]], house_id: s
     all_match_intervals: {phase: [(start, end, magnitude, duration), ...]}
         for rendering individual match rectangles in the segregated chart.
     """
+    logger.debug("Creating device activations detail chart")
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 

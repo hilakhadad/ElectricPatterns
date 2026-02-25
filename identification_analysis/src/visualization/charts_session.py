@@ -4,9 +4,12 @@ Session and device analysis charts for identification reports.
 Extracted from identification_charts.py.
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from visualization.charts_device import _parse_iso, _dur_str
 
@@ -48,6 +51,7 @@ def create_session_overview(sessions: List[Dict]) -> str:
     Args:
         sessions: List of session dicts from device_sessions JSON.
     """
+    logger.debug("Creating session overview chart")
     if not sessions:
         return '<p style="color: #888;">No session data available.</p>'
 
@@ -179,6 +183,7 @@ def create_boiler_analysis(sessions: List[Dict]) -> str:
     Boiler-specific analysis: daily pattern (hour histogram),
     monthly consistency, magnitude stability, phase info.
     """
+    logger.debug("Creating boiler analysis chart")
     boilers = [s for s in sessions if s.get('device_type') == 'boiler']
     if not boilers:
         return '<p style="color: #888;">No boiler sessions detected.</p>'
@@ -296,6 +301,7 @@ def create_ac_analysis(sessions: List[Dict]) -> str:
     """
     AC analysis: central vs regular comparison, cycle distribution, seasonal pattern.
     """
+    logger.debug("Creating AC analysis chart")
     central = [s for s in sessions if s.get('device_type') == 'central_ac']
     regular = [s for s in sessions if s.get('device_type') == 'regular_ac']
 
@@ -416,6 +422,7 @@ def create_temporal_heatmap(sessions: List[Dict]) -> str:
     """
     Temporal Patterns: hour (0-23) x day-of-week heatmap of device activations.
     """
+    logger.debug("Creating temporal heatmap chart")
     if not sessions:
         return '<p style="color: #888;">No session data for temporal analysis.</p>'
 
@@ -487,6 +494,7 @@ def create_unclassified_analysis(sessions: List[Dict]) -> str:
     """
     Analysis of unclassified/unknown sessions: power and duration distributions.
     """
+    logger.debug("Creating unclassified analysis chart")
     unknown = [s for s in sessions if s.get('device_type') in ('unknown', 'unclassified')]
     if not unknown:
         return '<p style="color: #888;">No unclassified sessions (all sessions were classified).</p>'

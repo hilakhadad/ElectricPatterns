@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from .config import (
     MIN_EVENT_DURATION_MINUTES,
@@ -79,7 +80,7 @@ def load_all_matches(
     """
     all_dfs: List[pd.DataFrame] = []
 
-    for run_number, threshold in enumerate(threshold_schedule):
+    for run_number, threshold in enumerate(tqdm(threshold_schedule, desc=f"Loading matches {house_id}", leave=False)):
         run_dir = _find_run_dir(experiment_dir, run_number, threshold)
         if run_dir is None:
             continue
@@ -88,7 +89,8 @@ def load_all_matches(
         if not matches_dir.exists():
             continue
 
-        for pkl_file in sorted(matches_dir.glob(f"matches_{house_id}_*.pkl")):
+        pkl_files = sorted(matches_dir.glob(f"matches_{house_id}_*.pkl"))
+        for pkl_file in tqdm(pkl_files, desc=f"  run_{run_number} pkl", leave=False):
             try:
                 df = pd.read_pickle(pkl_file)
                 if df.empty:
@@ -102,7 +104,8 @@ def load_all_matches(
     # Load wave recovery matches from run_post/ (if any)
     post_dir = experiment_dir / "run_post" / f"house_{house_id}" / "matches"
     if post_dir.exists():
-        for pkl_file in sorted(post_dir.glob(f"matches_{house_id}_*.pkl")):
+        post_pkl_files = sorted(post_dir.glob(f"matches_{house_id}_*.pkl"))
+        for pkl_file in tqdm(post_pkl_files, desc="  wave pkl", leave=False):
             try:
                 df = pd.read_pickle(pkl_file)
                 if df.empty:

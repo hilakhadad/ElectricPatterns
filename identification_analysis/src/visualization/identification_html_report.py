@@ -100,7 +100,9 @@ def _load_pre_analysis_scores(house_analysis_path) -> Dict[str, Any]:
         if not per_house_dir.exists():
             per_house_dir = house_analysis_path
 
-        for json_file in per_house_dir.glob("analysis_*.json"):
+        json_files = list(per_house_dir.glob("analysis_*.json"))
+        files_iter = _tqdm(json_files, desc="Loading pre-analysis", unit="file") if _HAS_TQDM else json_files
+        for json_file in files_iter:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     analysis = _json.load(f)

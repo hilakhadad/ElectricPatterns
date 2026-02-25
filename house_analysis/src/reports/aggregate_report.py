@@ -3,12 +3,15 @@ Aggregate report generation for all houses.
 
 Combines per-house analyses into summary statistics and comparative reports.
 """
+import logging
 import pandas as pd
 import json
 import os
 from pathlib import Path
 from typing import Dict, Any, List
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def aggregate_all_houses(house_analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -21,6 +24,8 @@ def aggregate_all_houses(house_analyses: List[Dict[str, Any]]) -> Dict[str, Any]
     Returns:
         Dictionary with aggregated statistics
     """
+    logger.info("aggregate_all_houses: %d houses", len(house_analyses))
+
     if not house_analyses:
         return {}
 
@@ -142,6 +147,9 @@ def aggregate_all_houses(house_analyses: List[Dict[str, Any]]) -> Dict[str, Any]
         'has_waves_houses': has_waves_houses,
     }
 
+    logger.info("aggregate_all_houses: complete, %d houses, tiers=%s",
+                len(house_analyses),
+                {k: len(v['houses']) for k, v in report.get('quality_tiers', {}).items()})
     return report
 
 

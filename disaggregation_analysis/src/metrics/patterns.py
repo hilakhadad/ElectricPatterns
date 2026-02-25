@@ -8,11 +8,14 @@ This module is a facade -- actual implementations are split across:
   - pattern_ac.py         -- AC-specific detection and validation
   - pattern_boiler.py     -- boiler-specific detection and validation
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 def _get_house_dir(experiment_dir: Path, house_id: str, run_number: int) -> Path:
@@ -84,6 +87,8 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with pattern metrics
     """
+    logger.debug("calculate_pattern_metrics: house_id=%s, run_number=%d, preloaded=%s",
+                 house_id, run_number, bool(preloaded))
     metrics = {
         'house_id': house_id,
         'run_number': run_number,
@@ -100,6 +105,8 @@ def calculate_pattern_metrics(experiment_dir: Path, house_id: str,
         matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
     if on_off_df is None:
+        logger.warning("calculate_pattern_metrics: No on_off data found for house %s run %d",
+                       house_id, run_number)
         return metrics
 
     # Parse timestamps (skip if already datetime)
@@ -145,6 +152,8 @@ def get_recurring_patterns_summary(experiment_dir: Path, house_id: str,
     Returns:
         Formatted summary string
     """
+    logger.debug("get_recurring_patterns_summary: house_id=%s, run_number=%d, min_occurrences=%d",
+                 house_id, run_number, min_occurrences)
     metrics = calculate_pattern_metrics(experiment_dir, house_id, run_number)
 
     lines_out = []

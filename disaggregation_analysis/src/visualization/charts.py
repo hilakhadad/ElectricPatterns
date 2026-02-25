@@ -4,8 +4,11 @@ Chart generation for experiment analysis reports.
 Creates meaningful visualizations that show distributions and aggregations,
 not per-house comparisons with meaningless house ID ordering.
 """
-from typing import List, Dict, Any
 import json
+import logging
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 def create_score_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
@@ -18,10 +21,12 @@ def create_score_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating score distribution chart for %d analyses", len(analyses))
     scores = [a.get('scores', {}).get('overall_score', 0)
               for a in analyses if a.get('status') != 'no_data']
 
     if not scores:
+        logger.warning("No scores available for score distribution chart")
         return '<p>No data available</p>'
 
     # Create bins for histogram
@@ -76,9 +81,11 @@ def create_matching_rate_distribution_chart(analyses: List[Dict[str, Any]]) -> s
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating matching rate distribution chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for matching rate distribution chart")
         return '<p>No data available</p>'
 
     matching_rates = [a.get('iterations', {}).get('first_iter_matching_rate', 0) * 100
@@ -144,9 +151,11 @@ def create_segmentation_ratio_distribution_chart(analyses: List[Dict[str, Any]])
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating segmentation ratio distribution chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for segmentation ratio distribution chart")
         return '<p>No data available</p>'
 
     ratios = [a.get('first_iteration', {}).get('segmentation', {}).get('segmentation_ratio', 0) * 100
@@ -210,9 +219,11 @@ def create_minutes_segmentation_distribution_chart(analyses: List[Dict[str, Any]
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating minutes segmentation distribution chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for minutes segmentation distribution chart")
         return '<p>No data available</p>'
 
     # Calculate minutes ratio for each house (NOT x3 - real time only)
@@ -289,6 +300,7 @@ def create_tag_breakdown_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating tag breakdown chart for %d analyses", len(analyses))
     # Aggregate tag counts
     tag_totals = {'NON-M': 0, 'NOISY': 0, 'PARTIAL': 0, 'SPIKE': 0, 'Other': 0}
 
@@ -306,6 +318,7 @@ def create_tag_breakdown_chart(analyses: List[Dict[str, Any]]) -> str:
     tag_totals = {k: v for k, v in tag_totals.items() if v > 0}
 
     if not tag_totals:
+        logger.warning("No tag data available for tag breakdown chart")
         return '<p>No data available</p>'
 
     chart_id = 'tag-breakdown-chart'
@@ -367,9 +380,11 @@ def create_issues_summary_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating issues summary chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for issues summary chart")
         return '<p>No data available</p>'
 
     # Count issues across all houses
@@ -426,11 +441,13 @@ def create_experiment_summary_table(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with summary table
     """
+    logger.debug("Creating experiment summary table for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
     total = len(analyses)
     no_data = total - len(valid)
 
     if not valid:
+        logger.warning("No valid data for experiment summary table (%d houses had no data)", no_data)
         return f'<p>No valid data. {no_data} houses had no data.</p>'
 
     # Calculate aggregate statistics
@@ -601,9 +618,11 @@ def create_duration_distribution_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating duration distribution chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for duration distribution chart")
         return '<p>No data available</p>'
 
     # Get duration counts from matching data
@@ -675,9 +694,11 @@ def create_pattern_detection_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating pattern detection chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for pattern detection chart")
         return '<p>No data available</p>'
 
     # Count houses with patterns
@@ -740,9 +761,11 @@ def create_device_detection_chart(analyses: List[Dict[str, Any]]) -> str:
     Returns:
         HTML string with Plotly chart
     """
+    logger.debug("Creating device detection chart for %d analyses", len(analyses))
     valid = [a for a in analyses if a.get('status') != 'no_data']
 
     if not valid:
+        logger.warning("No valid analyses for device detection chart")
         return '<p>No data available</p>'
 
     # Count device detections

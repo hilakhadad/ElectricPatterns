@@ -39,7 +39,8 @@ def _safe_lookup(data_indexed: pd.DataFrame, phase: str, timestamp: pd.Timestamp
 def extend_off_event_tails(off_events: pd.DataFrame, data_indexed: pd.DataFrame, phase: str,
                             max_minutes: int = 10, min_residual: int = 100,
                             noise_tolerance: int = 30, min_gain: int = 100,
-                            min_residual_fraction: float = 0.05) -> pd.DataFrame:
+                            min_residual_fraction: float = 0.05,
+                            logger=None) -> pd.DataFrame:
     """
     Extend OFF events forward through monotonically-decaying residual power tails.
 
@@ -127,4 +128,8 @@ def extend_off_event_tails(off_events: pd.DataFrame, data_indexed: pd.DataFrame,
     else:
         results.loc[results['tail_extended'].isna(), 'tail_extended'] = False
 
+    if logger:
+        extended = int(results['tail_extended'].sum()) if 'tail_extended' in results.columns else 0
+        if extended:
+            logger.debug(f"Tail extension {phase}: {extended}/{len(off_events)} OFF events extended")
     return results

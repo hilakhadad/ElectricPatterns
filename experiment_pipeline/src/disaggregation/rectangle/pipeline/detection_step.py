@@ -280,7 +280,7 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
     if len(results_on) > 1:
         before_merge = len(results_on)
         results_on = merge_consecutive_on_events(
-            results_on, results_off, max_gap_minutes=2, data=data_indexed, phase=phase
+            results_on, results_off, max_gap_minutes=2, data=data_indexed, phase=phase, logger=logger
         )
         if len(results_on) < before_merge:
             logger.info(f"  Merged {before_merge - len(results_on)} consecutive ON events for {phase}")
@@ -289,7 +289,7 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
     if len(results_off) > 1:
         before_merge = len(results_off)
         results_off = merge_consecutive_off_events(
-            results_off, results_on, max_gap_minutes=2, data=data_indexed, phase=phase
+            results_off, results_on, max_gap_minutes=2, data=data_indexed, phase=phase, logger=logger
         )
         if len(results_off) < before_merge:
             logger.info(f"  Merged {before_merge - len(results_off)} consecutive OFF events for {phase}")
@@ -300,12 +300,12 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
         gradual_on = detect_gradual_events(
             data, diff_col, threshold, event_type='on',
             window_minutes=gradual_window, progressive_search=progressive_search,
-            partial_factor=1.0
+            partial_factor=1.0, logger=logger
         )
         gradual_off = detect_gradual_events(
             data, diff_col, threshold, event_type='off',
             window_minutes=gradual_window, progressive_search=progressive_search,
-            partial_factor=1.0
+            partial_factor=1.0, logger=logger
         )
 
         if len(gradual_on) > 0:
@@ -317,8 +317,8 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
 
         # Merge overlapping (pass indexed data for magnitude recalculation)
         before_on, before_off = len(results_on), len(results_off)
-        results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase)
-        results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase)
+        results_on = merge_overlapping_events(results_on, max_gap_minutes=0, data=data_indexed, phase=phase, logger=logger)
+        results_off = merge_overlapping_events(results_off, max_gap_minutes=0, data=data_indexed, phase=phase, logger=logger)
         if len(results_on) < before_on:
             logger.info(f"    Merged {before_on - len(results_on)} overlapping ON events")
         if len(results_off) < before_off:

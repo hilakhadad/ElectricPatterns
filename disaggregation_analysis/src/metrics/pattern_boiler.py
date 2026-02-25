@@ -4,12 +4,14 @@ Boiler pattern detection and validation.
 Extracted from patterns.py -- contains boiler-specific
 detection, filtering, and pattern validation.
 """
+import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 
+logger = logging.getLogger(__name__)
 
 
 def _filter_ac_from_boiler_candidates(
@@ -121,6 +123,8 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with boiler detection results
     """
+    logger.debug("detect_boiler_patterns: house_id=%s, run_number=%d, preloaded=%s",
+                 house_id, run_number, bool(preloaded))
     result = {
         'boiler': {
             'activations': [],
@@ -143,6 +147,8 @@ def detect_boiler_patterns(experiment_dir: Path, house_id: str,
         matches_df = _load_monthly_files(house_dir, "matches", f"matches_{house_id}_*.pkl")
 
     if matches_df is None or len(matches_df) == 0:
+        logger.warning("detect_boiler_patterns: No matches data found for house %s run %d",
+                       house_id, run_number)
         return result
 
     # Parse timestamps (skip if already datetime)

@@ -3,6 +3,7 @@ Single-house report section builders for disaggregation analysis.
 
 Extracted from html_report.py — contains per-house section generation functions.
 """
+import logging
 from typing import Dict, Any
 
 from visualization.charts import (
@@ -15,9 +16,12 @@ from visualization.charts import (
     create_device_detection_chart,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     """Generate summary section for single house."""
+    logger.info("Generating house summary for house %s", analysis.get('house_id', 'unknown'))
     scores = analysis.get('scores', {}) or {}
     iterations = analysis.get('iterations', {}) or {}
     first = analysis.get('first_iteration', {}) or {}
@@ -1410,6 +1414,7 @@ def _generate_flags_section(analysis: Dict[str, Any]) -> str:
 
 def _generate_house_charts(analysis: Dict[str, Any]) -> str:
     """Generate charts for single house."""
+    logger.info("Generating charts for house %s", analysis.get('house_id', 'unknown'))
     charts_html = []
 
     first = analysis.get('first_iteration', {}) or {}

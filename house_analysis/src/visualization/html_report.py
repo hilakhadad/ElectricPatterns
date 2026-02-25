@@ -8,10 +8,13 @@ This module is a facade -- actual implementations are split across:
   - html_report_single.py     -- per-house section builders and helpers
   - html_report_template.py   -- CSS and HTML boilerplate
 """
+import logging
 import os
 import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Add project root to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
@@ -76,6 +79,8 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     Returns:
         Path to the generated HTML file
     """
+    logger.info("generate_html_report: %d analyses, output=%s", len(analyses), output_path)
+
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
     wave_html = _generate_wave_section(analyses)
@@ -101,4 +106,5 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+    logger.info("generate_html_report: saved to %s", output_path)
     return output_path

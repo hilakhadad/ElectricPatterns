@@ -3,11 +3,14 @@ Aggregate report section builders for house analysis.
 
 Extracted from html_report.py — multi-house comparison functions.
 """
+import logging
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 from shared.html_utils import build_quality_dist_bar as _build_quality_dist_bar
 
 from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from visualization.charts import (
     create_quality_distribution_chart,
@@ -20,6 +23,7 @@ from visualization.charts import (
 
 def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate executive summary HTML."""
+    logger.info("_generate_summary_section: %d analyses", len(analyses))
     n_houses = len(analyses)
 
     # Calculate averages
@@ -395,6 +399,7 @@ def _build_filter_bar(tier_counts: Dict[str, int],
 
 def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
     """Generate all charts HTML."""
+    logger.info("_generate_charts_section: %d analyses", len(analyses))
     charts = [
         create_quality_distribution_chart(analyses),
         create_wave_comparison_chart(analyses),

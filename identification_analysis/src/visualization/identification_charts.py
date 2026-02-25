@@ -8,9 +8,12 @@ This module is a facade -- actual implementations are split across:
   - charts_spike.py       -- spike analysis charts
 """
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Color constants (consistent with classification_charts.py)
 GREEN = '#28a745'

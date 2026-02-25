@@ -199,7 +199,8 @@ def process_segmentation(
 
     # Create passthrough summaries for data months without matches files
     # (remaining = input, nothing was extracted)
-    for data_key, data_file_path in data_files.items():
+    passthrough_items = list(data_files.items())
+    for data_key, data_file_path in tqdm(passthrough_items, desc=f"Passthrough {house_id}", leave=False):
         parts = data_key.split('_')
         if len(parts) >= 3:
             try:

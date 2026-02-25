@@ -10,7 +10,8 @@ from typing import List
 
 def summarize_segmentation(
     data: pd.DataFrame,
-    phases: List[str] = ['w1', 'w2', 'w3']
+    phases: List[str] = ['w1', 'w2', 'w3'],
+    logger=None
 ) -> pd.DataFrame:
     """
     Summarize segmented data into duration categories.
@@ -52,5 +53,8 @@ def summarize_segmentation(
         summarized[f'short_duration_{phase}'] = short_sum
         summarized[f'medium_duration_{phase}'] = medium_sum
         summarized[f'long_duration_{phase}'] = long_sum
+
+    if logger:
+        logger.debug(f"Summarized {len(event_columns)} event columns into duration categories")
 
     return pd.DataFrame(summarized)

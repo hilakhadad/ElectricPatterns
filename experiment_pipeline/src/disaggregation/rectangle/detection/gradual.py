@@ -45,7 +45,8 @@ def detect_gradual_events(
     max_factor: float = 3.0,
     max_duration_minutes: int = 3,
     progressive_search: bool = False,
-    phase: str = None
+    phase: str = None,
+    logger=None
 ) -> pd.DataFrame:
     """
     Detect gradual ON/OFF events (multi-minute ramps).
@@ -160,6 +161,9 @@ def detect_gradual_events(
 
     result_df = pd.DataFrame(events).sort_values('start').reset_index(drop=True)
     result_df = result_df.drop_duplicates(subset=['start', 'end'], keep='first').reset_index(drop=True)
+
+    if logger:
+        logger.debug(f"Gradual {event_type}: {len(candidate_indices)} candidates -> {len(result_df)} events")
 
     # Recalculate magnitude using actual phase values (vectorized)
     if phase in df.columns and len(result_df) > 0:

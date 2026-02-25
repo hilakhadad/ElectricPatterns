@@ -3,6 +3,7 @@ Single house experiment report generation.
 
 Analyzes experiment results for a single house across all iterations.
 """
+import logging
 import os
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ from metrics.events import calculate_event_metrics
 from metrics.iterations import calculate_iteration_metrics
 from metrics.patterns import calculate_pattern_metrics, detect_ac_patterns, detect_boiler_patterns, analyze_device_usage_patterns
 from metrics.monthly import calculate_monthly_metrics
+
+logger = logging.getLogger(__name__)
 
 # Enable verbose logging for debugging
 _VERBOSE = False
@@ -153,6 +156,8 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
     Returns:
         Dictionary with all analysis results
     """
+    logger.info("Analyzing experiment for house %s at %s", house_id, experiment_dir)
+
     def log(msg):
         if verbose or _VERBOSE:
             print(f"  [House {house_id}] {msg}")
@@ -279,6 +284,8 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
 
     # Calculate overall scores (pass pre-computed damaged_info)
     analysis['scores'] = _calculate_experiment_scores(analysis, damaged_info=damaged_info)
+
+    logger.info("Completed analysis for house %s (status=%s)", house_id, analysis.get('status'))
 
     return analysis
 
@@ -578,8 +585,10 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
     Returns:
         Formatted text report
     """
-    lines = []
     house_id = analysis.get('house_id', 'unknown')
+    logger.info("Generating experiment report for house %s", house_id)
+
+    lines = []
 
     lines.append(f"=" * 60)
     lines.append(f"EXPERIMENT REPORT: House {house_id}")
@@ -665,5 +674,7 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
         lines.append(f"\n--- Issues ---")
         for flag in active_flags:
             lines.append(f"  - {flag.replace('_', ' ').title()}")
+
+    logger.info("Completed experiment report for house %s", house_id)
 
     return '\n'.join(lines)

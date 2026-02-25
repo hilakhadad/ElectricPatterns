@@ -35,6 +35,7 @@ import subprocess
 import csv
 from pathlib import Path
 from datetime import datetime
+from tqdm import tqdm
 
 # Fix encoding for Windows console
 if sys.platform == 'win32':
@@ -142,7 +143,7 @@ def main():
         print(f"  PHASE 1: HOUSE PRE-ANALYSIS ({len(house_ids)} houses)")
         print(f"{'='*60}")
 
-        for i, house_id in enumerate(house_ids, 1):
+        for house_id in tqdm(house_ids, desc="Pre-analysis", unit="house"):
             run_command(
                 [PYTHON, "scripts/run_analysis.py",
                  "--input-dir", str(DATA_DIR),
@@ -150,7 +151,7 @@ def main():
                  "--output-dir", str(reports_dir),
                  "--publish", "house"],
                 cwd=PROJECT_ROOT / "house_analysis",
-                label=f"House pre-analysis: house {house_id} [{i}/{len(house_ids)}]",
+                label=f"House pre-analysis: house {house_id}",
             )
 
         if len(house_ids) > 1:
@@ -168,9 +169,11 @@ def main():
     successful_houses = []
     failed_houses = []
 
-    for i, house_id in enumerate(house_ids, 1):
+    house_pbar = tqdm(house_ids, desc="Pipeline", unit="house")
+    for house_id in house_pbar:
+        house_pbar.set_postfix(house=house_id)
         print(f"\n{'='*60}")
-        print(f"  HOUSE {house_id} [{i}/{len(house_ids)}]")
+        print(f"  HOUSE {house_id}")
         print(f"{'='*60}")
 
         start_time = time.time()

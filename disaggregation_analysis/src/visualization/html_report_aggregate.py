@@ -3,6 +3,7 @@ Aggregate report section builders for disaggregation analysis.
 
 Extracted from html_report.py — contains multi-house comparison functions.
 """
+import logging
 import numpy as np
 from typing import List, Dict, Any
 
@@ -19,6 +20,8 @@ from visualization.charts import (
     create_duration_distribution_chart,
     create_device_detection_chart,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_house_data(analyses: List[Dict[str, Any]]) -> list:
@@ -105,6 +108,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     Returns:
         Path to the generated HTML file
     """
+    logger.info("Generating aggregate HTML report for %d analyses -> %s", len(analyses), output_path)
     # Extract per-house data for JavaScript filtering
     house_data = _extract_house_data(analyses)
 
@@ -128,6 +132,7 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
+    logger.info("Aggregate HTML report saved to %s", output_path)
     return output_path
 
 

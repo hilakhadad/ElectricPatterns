@@ -3,9 +3,12 @@ Temporal pattern metrics for household data.
 
 Analyzes day/night patterns, weekly patterns, and seasonal variations.
 """
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_temporal_patterns(data: pd.DataFrame, phase_cols: list = None) -> Dict[str, Any]:
@@ -19,6 +22,8 @@ def calculate_temporal_patterns(data: pd.DataFrame, phase_cols: list = None) -> 
     Returns:
         Dictionary with temporal pattern metrics
     """
+    logger.debug("calculate_temporal_patterns: %d rows", len(data))
+
     if 'timestamp' not in data.columns:
         return {}
 
@@ -106,6 +111,8 @@ def calculate_temporal_patterns(data: pd.DataFrame, phase_cols: list = None) -> 
                        for h in range(24)] for d in range(7)]
         }
 
+    logger.debug("calculate_temporal_patterns: peak_hour=%s, night_day_ratio=%.2f",
+                 metrics.get('total_peak_hour', 'N/A'), metrics.get('total_night_day_ratio', 0))
     return metrics
 
 
@@ -175,6 +182,8 @@ def calculate_temporal_patterns_by_period(data: pd.DataFrame, phase_cols: list =
     Returns:
         Dictionary with patterns per year and per month
     """
+    logger.debug("calculate_temporal_patterns_by_period: %d rows", len(data))
+
     if 'timestamp' not in data.columns:
         return {'by_year': {}}
 
@@ -281,4 +290,5 @@ def calculate_temporal_patterns_by_period(data: pd.DataFrame, phase_cols: list =
 
         result['by_year'][int(year)] = year_metrics
 
+    logger.debug("calculate_temporal_patterns_by_period: %d years found", len(result['by_year']))
     return result

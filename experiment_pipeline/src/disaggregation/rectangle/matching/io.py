@@ -2,10 +2,13 @@
 I/O functions for matching results.
 """
 import os
+import logging
 import pandas as pd
 from pathlib import Path
 from typing import List
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 def _save_by_month(df: pd.DataFrame, output_dir: str, folder_name: str, file_prefix: str,
@@ -63,17 +66,17 @@ def save_events(matches: List[dict], unmatched_on: List[dict], unmatched_off: Li
     # Save matches by month (use on_start for timestamp)
     if not matches_df.empty:
         months = _save_by_month(matches_df, output_directory, 'matches', f'matches_{house_id}', 'on_start')
-        print(f"Saved {len(matches_df)} matches to {output_directory}/matches/ ({months} monthly pkl files)")
+        logger.info(f"Saved {len(matches_df)} matches to {output_directory}/matches/ ({months} monthly pkl files)")
 
     # Save unmatched_on by month (use start for timestamp)
     if not unmatched_on_df.empty:
         months = _save_by_month(unmatched_on_df, output_directory, 'unmatched_on', f'unmatched_on_{house_id}', 'start')
-        print(f"Saved {len(unmatched_on_df)} unmatched ON to {output_directory}/unmatched_on/ ({months} monthly pkl files)")
+        logger.info(f"Saved {len(unmatched_on_df)} unmatched ON to {output_directory}/unmatched_on/ ({months} monthly pkl files)")
 
     # Save unmatched_off by month (use start for timestamp)
     if not unmatched_off_df.empty:
         months = _save_by_month(unmatched_off_df, output_directory, 'unmatched_off', f'unmatched_off_{house_id}', 'start')
-        print(f"Saved {len(unmatched_off_df)} unmatched OFF to {output_directory}/unmatched_off/ ({months} monthly pkl files)")
+        logger.info(f"Saved {len(unmatched_off_df)} unmatched OFF to {output_directory}/unmatched_off/ ({months} monthly pkl files)")
 
 
 def save_remainder_events(remainder_events: List[dict], output_directory: str, house_id: str) -> None:
@@ -96,4 +99,4 @@ def save_remainder_events(remainder_events: List[dict], output_directory: str, h
 
     df = pd.DataFrame(remainder_events)
     df.to_pickle(os.path.join(output_directory, f"remainder_{house_id}.pkl"))
-    print(f"Saved {len(remainder_events)} remainder events to {output_directory}/remainder_{house_id}.pkl")
+    logger.info(f"Saved {len(remainder_events)} remainder events to {output_directory}/remainder_{house_id}.pkl")

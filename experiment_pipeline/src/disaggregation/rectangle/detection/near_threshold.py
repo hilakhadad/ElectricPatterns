@@ -88,7 +88,8 @@ def detect_near_threshold_events(
     existing_off: pd.DataFrame,
     phase: str,
     min_factor: float = 0.85,
-    max_extend_minutes: int = 3
+    max_extend_minutes: int = 3,
+    logger=None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Detect near-threshold events by extending near-miss diffs with adjacent minutes.
@@ -157,4 +158,6 @@ def detect_near_threshold_events(
     on_df = pd.DataFrame(new_on_events) if new_on_events else empty.copy()
     off_df = pd.DataFrame(new_off_events) if new_off_events else empty.copy()
 
+    if logger and (len(new_on_events) > 0 or len(new_off_events) > 0):
+        logger.debug(f"Near-threshold {phase}: {len(new_on_events)} ON, {len(new_off_events)} OFF confirmed")
     return on_df, off_df
