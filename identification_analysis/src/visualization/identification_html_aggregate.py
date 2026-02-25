@@ -751,6 +751,10 @@ def _build_cross_house_section(
             </div>
         </div>'''
 
+    settings = cross_house_result.get('settings', {})
+    mag_tol_pct = int(settings.get('magnitude_tolerance', 0.15) * 100)
+    dur_tol_pct = int(settings.get('duration_tolerance', 0.20) * 100)
+
     return f'''
         <section>
             <h2>Cross-House Recurring Patterns</h2>
@@ -774,8 +778,8 @@ def _build_cross_house_section(
             </div>
             <p style="font-size:0.85em;color:#666;margin-bottom:12px;">
                 Recurring patterns discovered independently per-house are compared across all houses.
-                Patterns with similar power (&le;{int(cross_house_result.get('settings', {{}}).get('magnitude_tolerance', 0.15) * 100)}%)
-                and duration (&le;{int(cross_house_result.get('settings', {{}}).get('duration_tolerance', 0.20) * 100)}%)
+                Patterns with similar power (&le;{mag_tol_pct}%)
+                and duration (&le;{dur_tol_pct}%)
                 are grouped under a shared name (Device A, B, ...).
             </p>
             {pattern_cards}
