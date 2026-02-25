@@ -1027,8 +1027,14 @@ def _build_aggregate_html(
         cmd = h.get('classified_min_per_day', 0)
         spikes = h.get('spike_count', 0)
 
+        has_b = 1 if h['device_counts'].get('boiler', 0) > 0 else 0
+        has_c = 1 if h['device_counts'].get('central_ac', 0) > 0 else 0
+        has_r = 1 if h['device_counts'].get('regular_ac', 0) > 0 else 0
+
         table_rows += f'''
-        <tr data-tier="{tier}">
+        <tr data-tier="{tier}" data-days="{days}" data-classified="{h['classified_pct']:.1f}"
+            data-confidence="{h['avg_confidence']:.3f}" data-quality="{q_val:.3f}"
+            data-has-boiler="{has_b}" data-has-central="{has_c}" data-has-regular="{has_r}">
             <td style="{_td}" data-value="{hid}">{link}</td>
             <td style="{_td}text-align:center;" data-value="{days}">{days}</td>
             <td style="{_td}text-align:center;">{pq_html}</td>
@@ -1114,11 +1120,11 @@ def _build_aggregate_html(
             <!-- Row 1: Houses + Days -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
                 <div class="summary-card">
-                    <div class="summary-number">{n}</div>
+                    <div class="summary-number" id="id-value-houses">{n}</div>
                     <div class="summary-label">Houses Analyzed</div>
                 </div>
                 <div class="summary-card">
-                    <div class="summary-number">{total_days:,}</div>
+                    <div class="summary-number" id="id-value-days">{total_days:,}</div>
                     <div class="summary-label">Total Days of Data</div>
                 </div>
             </div>
@@ -1127,29 +1133,29 @@ def _build_aggregate_html(
             <!-- Row 3: Report-specific metrics -->
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;margin-bottom:20px;">
                 <div style="background:#d4edda;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
+                    <div id="id-value-classified" style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
                     <div style="font-size:0.85em;color:#666;">Avg Classified (by minutes)</div>
                 </div>
                 <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#667eea;">{avg_conf:.2f}</div>
+                    <div id="id-value-confidence" style="font-size:2em;font-weight:700;color:#667eea;">{avg_conf:.2f}</div>
                     <div style="font-size:0.85em;color:#666;">Avg Confidence</div>
                 </div>
                 <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#667eea;">{median_quality:.2f}</div>
+                    <div id="id-value-quality" style="font-size:2em;font-weight:700;color:#667eea;">{median_quality:.2f}</div>
                     <div style="font-size:0.85em;color:#666;">Median Quality</div>
                 </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
                 <div style="background:#f0f4ff;border:1px solid #c3d4ff;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#007bff;">{has_boiler}/{n}</div>
+                    <div id="id-value-boiler" style="font-size:1.5em;font-weight:700;color:#007bff;">{has_boiler}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Boiler</div>
                 </div>
                 <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#dc3545;">{has_central}/{n}</div>
+                    <div id="id-value-central" style="font-size:1.5em;font-weight:700;color:#dc3545;">{has_central}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Central AC</div>
                 </div>
                 <div style="background:#fff8f0;border:1px solid #feebc8;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#e67e22;">{has_regular}/{n}</div>
+                    <div id="id-value-regular" style="font-size:1.5em;font-weight:700;color:#e67e22;">{has_regular}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Regular AC</div>
                 </div>
             </div>
@@ -1242,16 +1248,46 @@ def _build_aggregate_html(
             if (cb.checked) checkedTiers.push(cb.getAttribute('data-filter-tier'));
         }});
         var rows = document.querySelectorAll('#agg-table tbody tr');
-        var shown = 0;
+        var shown = 0, sumDays = 0, sumClassified = 0, sumConf = 0;
+        var qualities = [];
+        var sumBoiler = 0, sumCentral = 0, sumRegular = 0;
+
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier') || 'unknown';
             if (checkedTiers.indexOf(tier) !== -1) {{
                 row.style.display = '';
                 shown++;
+                sumDays += parseInt(row.getAttribute('data-days')) || 0;
+                sumClassified += parseFloat(row.getAttribute('data-classified')) || 0;
+                sumConf += parseFloat(row.getAttribute('data-confidence')) || 0;
+                var q = parseFloat(row.getAttribute('data-quality'));
+                if (!isNaN(q) && q > 0) qualities.push(q);
+                sumBoiler += parseInt(row.getAttribute('data-has-boiler')) || 0;
+                sumCentral += parseInt(row.getAttribute('data-has-central')) || 0;
+                sumRegular += parseInt(row.getAttribute('data-has-regular')) || 0;
             }} else {{
                 row.style.display = 'none';
             }}
         }});
+
+        // Median helper
+        function median(arr) {{
+            if (arr.length === 0) return 0;
+            var s = arr.slice().sort(function(a,b){{ return a-b; }});
+            var mid = Math.floor(s.length / 2);
+            return s.length % 2 !== 0 ? s[mid] : (s[mid-1] + s[mid]) / 2;
+        }}
+
+        // Update summary cards
+        document.getElementById('id-value-houses').textContent = shown;
+        document.getElementById('id-value-days').textContent = sumDays.toLocaleString();
+        document.getElementById('id-value-classified').textContent = (shown > 0 ? (sumClassified / shown).toFixed(0) : '0') + '%';
+        document.getElementById('id-value-confidence').textContent = shown > 0 ? (sumConf / shown).toFixed(2) : '0.00';
+        document.getElementById('id-value-quality').textContent = qualities.length > 0 ? median(qualities).toFixed(2) : '0.00';
+        document.getElementById('id-value-boiler').textContent = sumBoiler + '/' + shown;
+        document.getElementById('id-value-central').textContent = sumCentral + '/' + shown;
+        document.getElementById('id-value-regular').textContent = sumRegular + '/' + shown;
+
         var status = document.getElementById('id-filter-status');
         if (status) status.textContent = 'Showing ' + shown + ' / ' + rows.length + ' houses';
     }}

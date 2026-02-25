@@ -721,7 +721,8 @@ def _build_aggregate_html(
         <tr data-tier="{tier}" data-continuity="{nan_cont}"
             data-segregated="{t.get('segregated_pct', 0):.1f}" data-background="{t.get('background_pct', 0):.1f}"
             data-aboveth="{t.get('above_th_pct', 0):.1f}" data-subth="{t.get('sub_threshold_pct', 0):.1f}"
-            data-nodata="{t.get('no_data_pct', 0):.1f}" data-efficiency="{eff:.1f}">
+            data-nodata="{t.get('no_data_pct', 0):.1f}" data-efficiency="{eff:.1f}"
+            data-days="{days}">
             <td style="padding: 10px 15px; border-bottom: 1px solid #eee;">
                 <a href="{link_prefix}{house_file}" style="color: #667eea; text-decoration: none;">{hid}</a>
             </td>
@@ -930,11 +931,11 @@ def _build_aggregate_html(
             <!-- Row 1: Houses + Days -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
                 <div class="summary-card">
-                    <div class="summary-number" style="color:#2d3748;">{n_houses}</div>
+                    <div class="summary-number" id="value-houses" style="color:#2d3748;">{n_houses}</div>
                     <div class="summary-label">Houses Analyzed</div>
                 </div>
                 <div class="summary-card">
-                    <div class="summary-number" style="color:#2d3748;">{total_days:,}</div>
+                    <div class="summary-number" id="value-days" style="color:#2d3748;">{total_days:,}</div>
                     <div class="summary-label">Total Days of Data</div>
                 </div>
             </div>
@@ -1090,7 +1091,7 @@ def _build_aggregate_html(
         var table = document.getElementById('houses-table');
         var rows = table.querySelectorAll('tbody tr');
         var visible = 0;
-        var sumExpl = 0, sumBg = 0, sumAbove = 0, sumSub = 0, sumNoData = 0, sumEff = 0;
+        var sumExpl = 0, sumBg = 0, sumAbove = 0, sumSub = 0, sumNoData = 0, sumEff = 0, sumDays = 0;
 
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier');
@@ -1104,12 +1105,15 @@ def _build_aggregate_html(
                 sumSub += parseFloat(row.getAttribute('data-subth')) || 0;
                 sumNoData += parseFloat(row.getAttribute('data-nodata')) || 0;
                 sumEff += parseFloat(row.getAttribute('data-efficiency')) || 0;
+                sumDays += parseInt(row.getAttribute('data-days')) || 0;
             }} else {{
                 row.classList.add('hidden');
             }}
         }});
 
         // Update summary cards
+        document.getElementById('value-houses').textContent = visible;
+        document.getElementById('value-days').textContent = sumDays.toLocaleString();
         document.getElementById('value-segregated').textContent = (visible > 0 ? (sumExpl / visible).toFixed(1) : '0.0') + '%';
         document.getElementById('value-background').textContent = (visible > 0 ? (sumBg / visible).toFixed(1) : '0.0') + '%';
         document.getElementById('value-aboveth').textContent = (visible > 0 ? (sumAbove / visible).toFixed(1) : '0.0') + '%';
