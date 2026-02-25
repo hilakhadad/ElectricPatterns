@@ -161,6 +161,11 @@ def main():
         help="Publish mode: output {NAME}_report.html + {NAME}_reports/house_{id}.html "
              "(requires --output-dir)"
     )
+    parser.add_argument(
+        "--aggregate-only", action="store_true",
+        dest="aggregate_only",
+        help="Skip per-house reports, generate only the aggregate report"
+    )
     args = parser.parse_args()
 
     if args.publish and not args.output_dir:
@@ -312,6 +317,10 @@ def main():
     failed = 0
     failed_houses = []
 
+    if args.aggregate_only:
+        print("Aggregate-only mode: skipping per-house reports", flush=True)
+        house_ids = []  # skip per-house loop
+
     houses_iter = house_ids
     if HAS_TQDM:
         houses_iter = tqdm(house_ids, desc="Per-house reports", unit="house")
@@ -360,8 +369,8 @@ def main():
 
     # ── Phase 2: Aggregate report ───────────────────────────────────
     # Use all_house_ids (old + new) so aggregate covers everything
-    agg_house_ids = all_house_ids if resume_mode else house_ids
-    if len(agg_house_ids) > 1 and (successful > 0 or resume_mode):
+    agg_house_ids = all_house_ids if (resume_mode or args.aggregate_only) else house_ids
+    if len(agg_house_ids) > 1 and (successful > 0 or resume_mode or args.aggregate_only):
         try:
             if args.publish:
                 agg_path = str(output_dir / f"{args.publish}_report.html")

@@ -186,6 +186,37 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
                     print(f"  {flag}: {pct:.1f}%")
 
 
+def run_aggregate_only(output_dir: Path, publish_name: str) -> None:
+    """Generate only the aggregate report from existing per-house JSONs."""
+    import json
+    from visualization import generate_html_report
+
+    per_house_dir = output_dir / f"{publish_name}_reports"
+    if not per_house_dir.exists():
+        print(f"ERROR: Per-house directory not found: {per_house_dir}")
+        print("Run per-house analysis first, then use --aggregate-only")
+        sys.exit(1)
+
+    json_files = sorted(per_house_dir.glob("analysis_*.json"))
+    if not json_files:
+        print(f"ERROR: No analysis_*.json files found in {per_house_dir}")
+        sys.exit(1)
+
+    print(f"Aggregate-only mode: loading {len(json_files)} existing analyses")
+    all_analyses = []
+    for jf in json_files:
+        with open(jf, 'r', encoding='utf-8') as f:
+            all_analyses.append(json.load(f))
+
+    agg_path = output_dir / f"{publish_name}_report.html"
+    print(f"Generating aggregate report...")
+    generate_html_report(
+        all_analyses, str(agg_path),
+        per_house_dir=f"{publish_name}_reports",
+    )
+    print(f"Aggregate report saved: {agg_path}")
+
+
 def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
                      publish_name: str) -> None:
     """Run analysis in publish mode: structured output for website.
@@ -260,6 +291,10 @@ def main():
     parser.add_argument('--publish', type=str, default=None, metavar='NAME',
                         help='Publish mode: {NAME}_report.html + {NAME}_reports/house_{id}.html '
                              '(requires --output-dir)')
+    parser.add_argument('--aggregate-only', action='store_true',
+                        dest='aggregate_only',
+                        help='Skip per-house analysis, generate only aggregate from existing JSONs '
+                             '(requires --publish)')
 
     args = parser.parse_args()
 
@@ -284,6 +319,13 @@ def main():
         return
 
     os.makedirs(output_dir, exist_ok=True)
+
+    if args.aggregate_only:
+        if not args.publish:
+            print("ERROR: --aggregate-only requires --publish")
+            sys.exit(1)
+        run_aggregate_only(output_dir, args.publish)
+        return
 
     if args.publish:
         # Publish mode: structured output for website
