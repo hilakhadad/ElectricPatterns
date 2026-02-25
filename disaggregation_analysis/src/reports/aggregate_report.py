@@ -82,7 +82,8 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
             print(f"Warning: No analysis_*.json files found in {per_house_dir}")
             return scores
 
-        for json_file in json_files:
+        files_iter = tqdm(json_files, desc="Loading pre-analysis", unit="file") if HAS_TQDM else json_files
+        for json_file in files_iter:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     analysis = json.load(f)

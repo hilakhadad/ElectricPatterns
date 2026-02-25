@@ -204,7 +204,7 @@ def run_aggregate_only(output_dir: Path, publish_name: str) -> None:
 
     print(f"Aggregate-only mode: loading {len(json_files)} existing analyses")
     all_analyses = []
-    for jf in json_files:
+    for jf in tqdm(json_files, desc="Loading analyses", unit="file"):
         with open(jf, 'r', encoding='utf-8') as f:
             all_analyses.append(json.load(f))
 

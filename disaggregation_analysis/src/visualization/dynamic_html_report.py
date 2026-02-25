@@ -298,6 +298,9 @@ def generate_dynamic_aggregate_report(
     """
     experiment_dir = Path(experiment_dir)
 
+    if show_progress:
+        print(f"[Step 1/3] Collecting per-house metrics ({len(house_ids)} houses)...", flush=True)
+
     all_metrics = []
     houses_iter = house_ids
     use_tqdm = show_progress and _HAS_TQDM
@@ -345,6 +348,9 @@ def generate_dynamic_aggregate_report(
 
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
 
+    if show_progress:
+        print(f"[Step 2/3] Building aggregate HTML ({len(all_metrics)} houses with data)...", flush=True)
+
     html = _build_aggregate_html(
         all_metrics=all_metrics,
         generated_at=generated_at,
@@ -355,6 +361,9 @@ def generate_dynamic_aggregate_report(
 
     if output_path is None:
         output_path = str(experiment_dir / "dynamic_report_aggregate.html")
+
+    if show_progress:
+        print(f"[Step 3/3] Writing report to {Path(output_path).name}...", flush=True)
 
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:

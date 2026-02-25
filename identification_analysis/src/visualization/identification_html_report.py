@@ -777,6 +777,9 @@ def generate_identification_aggregate_report(
     experiment_dir = Path(experiment_dir)
     precomputed_metrics = precomputed_metrics or {}
 
+    if show_progress:
+        print(f"[Step 1/4] Collecting per-house metrics ({len(house_ids)} houses)...", flush=True)
+
     all_quality = []
     all_confidence = []
     house_summaries = []
@@ -923,6 +926,8 @@ def generate_identification_aggregate_report(
               f"({metrics_time:.1f}s{cache_msg})", flush=True)
 
     # Population statistics
+    if show_progress:
+        print(f"[Step 2/4] Computing population statistics...", flush=True)
     t1 = _time.time()
     population_stats = {}
     if all_quality and all_confidence:
@@ -931,9 +936,11 @@ def generate_identification_aggregate_report(
         except Exception as e:
             logger.warning(f"Population statistics failed: {e}")
     if show_timing:
-        print(f"  Aggregate: population statistics ({_time.time() - t1:.1f}s)", flush=True)
+        print(f"  Population statistics: {_time.time() - t1:.1f}s", flush=True)
 
     # Build HTML
+    if show_progress:
+        print(f"[Step 3/4] Building aggregate HTML ({len(house_summaries)} houses)...", flush=True)
     t2 = _time.time()
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
     html = _build_aggregate_html(
@@ -948,12 +955,15 @@ def generate_identification_aggregate_report(
     if output_path is None:
         output_path = str(experiment_dir / "identification_report_aggregate.html")
 
+    if show_progress:
+        print(f"[Step 4/4] Writing report to {Path(output_path).name}...", flush=True)
+
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
     if show_timing:
-        print(f"  Aggregate: built HTML + saved ({_time.time() - t2:.1f}s)", flush=True)
+        print(f"  HTML build + save: {_time.time() - t2:.1f}s", flush=True)
 
     logger.info(f"Aggregate identification report saved to {output_path}")
     return output_path

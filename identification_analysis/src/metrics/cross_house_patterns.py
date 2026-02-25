@@ -18,6 +18,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+try:
+    from tqdm import tqdm as _tqdm
+    _HAS_TQDM = True
+except ImportError:
+    _HAS_TQDM = False
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -122,7 +128,8 @@ def _extract_pattern_signatures(
     sessions_dir = experiment_dir / 'device_sessions'
     signatures = []
 
-    for house_id in house_ids:
+    houses_iter = _tqdm(house_ids, desc="Extracting patterns", unit="house") if _HAS_TQDM else house_ids
+    for house_id in houses_iter:
         json_path = sessions_dir / f'device_sessions_{house_id}.json'
         if not json_path.exists():
             continue
@@ -449,7 +456,8 @@ def update_house_jsons(
     sessions_dir = experiment_dir / 'device_sessions'
     updated_count = 0
 
-    for house_id, pattern_map in house_updates.items():
+    updates_iter = _tqdm(house_updates.items(), desc="Updating JSONs", unit="house") if _HAS_TQDM else house_updates.items()
+    for house_id, pattern_map in updates_iter:
         json_path = sessions_dir / f'device_sessions_{house_id}.json'
         if not json_path.exists():
             continue
