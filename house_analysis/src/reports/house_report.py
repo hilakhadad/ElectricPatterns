@@ -66,6 +66,7 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     pct_gaps_over_2min = coverage.get('pct_gaps_over_2min', 0)
     avg_nan_pct = coverage.get('avg_nan_pct', 0)
     anomaly_count = coverage.get('anomaly_count', 0)
+    high_power_density = power_stats.get('high_power_density', 0)
     quality = calculate_data_quality_metrics(
         data, phase_cols,
         coverage_ratio=coverage_ratio,
@@ -74,6 +75,7 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
         pct_gaps_over_2min=pct_gaps_over_2min,
         avg_nan_pct=avg_nan_pct,
         anomaly_count=anomaly_count,
+        high_power_density=high_power_density,
     )
     results['data_quality'] = quality
 
@@ -137,6 +139,7 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['unbalanced_phases'] = power.get('phase_balance_ratio', 1) > 3
     flags['single_active_phase'] = power.get('active_phases', 3) == 1
     flags['very_high_power'] = power.get('total_max', 0) > 20000  # Over 20kW max
+    flags['high_power_density'] = power.get('high_power_density', 0) > 0.25
 
     # Phase imbalance flag
     imbalance = analysis.get('phase_imbalance', {})

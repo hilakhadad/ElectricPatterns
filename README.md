@@ -14,14 +14,16 @@ The pipeline has two core modules:
 The pipeline supports configurable detection parameters (thresholds, matching tolerances, session gaps) to adapt to different household characteristics.
 
 ```
-Module 1 (iterative):
-  Iteration 0 (highest threshold): Raw CSV -> Detection -> Matching -> Segmentation -> Remaining power
-  Iteration 1 (lower threshold):   Remaining -> Detection -> Matching -> Segmentation -> Remaining power
-  ...continues at progressively lower thresholds...
+Module 1 (iterative rectangle matching):
+  Iteration 0 (2000W): Raw CSV -> Detection -> Matching -> Segmentation -> Remaining power
+  Iteration 1 (1500W): Remaining -> Detection -> Matching -> Segmentation -> Remaining power
+  Iteration 2 (1100W): Remaining -> ...
+  Iteration 3 (800W):  Remaining -> ...
 
-  Optional recovery passes:
-    Guided recovery  -> re-detect missed events using M2 classification hints
-    Wave recovery    -> detect and extract AC cycling patterns from remaining signal
+  Post-iteration recovery passes (optional, enabled in exp013+):
+    Guided recovery  -> re-detect missed compressor cycles using matched session templates
+    Wave recovery    -> detect wave-shaped patterns (sharp rise -> gradual decay) from remaining
+    Hole repair      -> fix rectangle matches that extracted wave-shaped events as flat rectangles
 
 Module 2 (once):
   All matches -> Filter spikes -> Group sessions
@@ -33,7 +35,7 @@ Each iteration subtracts detected device power from the total, revealing smaller
 
 ### Device Types
 
-The classification module identifies five device categories:
+The classification module identifies six device categories:
 
 | Device | Description |
 |--------|-------------|
@@ -41,15 +43,16 @@ The classification module identifies five device categories:
 | **Three-phase device** | Synchronized high-power events across all 3 phases (likely EV charger) |
 | **Central AC** | Multi-phase air conditioning with synchronized compressor cycles |
 | **Regular AC** | Single-phase air conditioning with cycling compressor pattern |
+| **Recurring pattern** | DBSCAN-discovered clusters of sessions with similar magnitude + duration |
 | **Unknown** | Sessions that do not match any known device signature |
 
-After observing recurring patterns across houses, additional device categories were added. Three-phase device (likely EV charger) was identified from synchronized high-power patterns across all 3 phases. Future work includes clustering unknown sessions to discover more device types.
+Three-phase device (likely EV charger) was identified from synchronized high-power patterns across all 3 phases. Recurring patterns are discovered via DBSCAN clustering and matched across houses to assign global device names (Device A, B, C...).
 
 ## Project Modules
 
 | Module | Purpose | Entry Point |
 |--------|---------|-------------|
-| [experiment_pipeline](experiment_pipeline/) | Core pipeline (M1 + M2) | `scripts/test_single_house.py` |
+| [experiment_pipeline](experiment_pipeline/) | Core pipeline (M1 + M2) | `scripts/test_single_house.py`, `scripts/run_local_batch.py` |
 | [disaggregation_analysis](disaggregation_analysis/) | M1 post-run reports | `scripts/run_dynamic_report.py` |
 | [identification_analysis](identification_analysis/) | M2 post-run reports | `scripts/run_identification_report.py` |
 | [house_analysis](house_analysis/) | Pre-analysis (data quality) | `scripts/run_analysis.py` |
@@ -73,10 +76,17 @@ python -m harvesting_data.cli
 # 2. Pre-analyze data quality
 cd house_analysis/scripts && python run_analysis.py
 
-# 3. Run pipeline on a single house
+# 3. Run pipeline on a single house (default experiment: exp015_hole_repair)
 cd experiment_pipeline/scripts
 python test_single_house.py --house_id 305
-python test_array_of_houses.py --skip_visualization   # all houses
+python test_single_house.py --house_id 305 --experiment_name exp015_hole_repair
+
+# 3b. Run pipeline on multiple houses (local batch)
+python run_local_batch.py --houses 305,1234,2008
+python run_local_batch.py --shortest 10   # 10 smallest houses
+
+# 3c. HPC: month-level parallel processing (SLURM)
+bash scripts/sbatch_run_houses.sh          # Submit all houses
 
 # 4. Generate M1 disaggregation report
 cd disaggregation_analysis/scripts && python run_dynamic_report.py
@@ -102,14 +112,22 @@ role_based_segregation_dev/
 │   │   ├── core/              # Config, paths, data loading
 │   │   ├── disaggregation/    # M1: signal-level processing
 │   │   │   ├── rectangle/     #   Core detection, matching, segmentation, pipeline
+│   │   │   │   ├── detection/ #     Sharp, gradual, settling, near-threshold, tail extension
+│   │   │   │   ├── matching/  #     Stage 1-3, stack matcher, validator
+│   │   │   │   ├── segmentation/ #  Power extraction & evaluation
+│   │   │   │   └── pipeline/  #     Orchestration steps (detection, matching, segmentation, recovery)
 │   │   │   └── wave_recovery/ #   AC wave pattern recovery from remaining signal
+│   │   │       ├── detection/ #     Wave pattern detector
+│   │   │       ├── matching/  #     Cross-phase wave matcher
+│   │   │       ├── segmentation/ #  Wave segmentor & validator
+│   │   │       └── pipeline/  #     Wave recovery step, hole repair, I/O
 │   │   ├── identification/    # M2: session-level classification
-│   │   │   ├── classifiers/   #   Device-specific classifiers (boiler, AC, central AC, unknown)
+│   │   │   ├── classifiers/   #   Device-specific classifiers (boiler, AC, central AC, recurring pattern, unknown)
 │   │   │   ├── session_builder.py, spike_stats.py
 │   │   │   └── session_classifier.py, session_output.py
 │   │   ├── pipeline/          # Orchestration (runner.py, pipeline_setup.py, post_pipeline.py)
 │   │   └── visualization/     # Interactive plots
-│   ├── scripts/               # Entry points
+│   ├── scripts/               # Entry points (test_single_house.py, run_local_batch.py, run_single_month.py)
 │   └── tests/                 # Regression tests
 ├── disaggregation_analysis/   # M1 post-run HTML reports
 ├── identification_analysis/   # M2 post-run HTML reports
@@ -124,7 +142,7 @@ role_based_segregation_dev/
 ## Requirements
 
 - Python 3.9+
-- pandas, numpy, matplotlib, plotly, tqdm, tkcalendar, requests
+- pandas, numpy, matplotlib, plotly, tqdm, tkcalendar, requests, scipy
 
 ## Legacy
 

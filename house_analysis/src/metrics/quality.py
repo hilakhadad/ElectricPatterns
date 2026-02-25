@@ -108,7 +108,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
                                     max_gap_minutes: float = None,
                                     pct_gaps_over_2min: float = None,
                                     avg_nan_pct: float = None,
-                                    anomaly_count: int = None) -> Dict[str, Any]:
+                                    anomaly_count: int = None,
+                                    high_power_density: float = None) -> Dict[str, Any]:
     """
     Calculate data quality metrics for household data.
 
@@ -289,7 +290,8 @@ def calculate_data_quality_metrics(data: pd.DataFrame, phase_cols: list = None,
     metrics['base_quality_score'] = base_score
 
     # Apply anomaly penalties and compute final score
-    _apply_anomaly_penalties(metrics, coverage_ratio=coverage_ratio, anomaly_count=anomaly_count)
+    _apply_anomaly_penalties(metrics, coverage_ratio=coverage_ratio, anomaly_count=anomaly_count,
+                             high_power_density=high_power_density)
 
     # Compute quality flags and faulty phase label
     _compute_quality_tier(metrics)

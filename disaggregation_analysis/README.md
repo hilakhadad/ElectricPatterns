@@ -19,6 +19,9 @@ python scripts/run_dynamic_report.py --pre-analysis <house_analysis_output_path>
 
 # Resume (only process new houses)
 python scripts/run_dynamic_report.py --resume <analysis_dir>
+
+# Publish mode (for HPC batch, outputs to shared reports directory)
+python scripts/run_dynamic_report.py --experiment <path> --output-dir <reports_dir> --publish segregation
 ```
 
 ## Structure

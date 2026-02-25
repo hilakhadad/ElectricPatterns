@@ -155,7 +155,8 @@ def _build_anomaly_warning(coverage: Dict[str, Any]) -> str:
 
 def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
                           coverage: Dict[str, Any],
-                          wave: Dict[str, Any] = None) -> str:
+                          wave: Dict[str, Any] = None,
+                          power: Dict[str, Any] = None) -> str:
     """Build clickable findings tags section for the top of per-house report."""
 
     # Define all possible findings: (flag_key, label, severity, target_section_id)
@@ -199,6 +200,10 @@ def _build_findings_tags(flags: Dict[str, Any], quality: Dict[str, Any],
 
     if flags.get('has_negative_values'):
         findings.append(('warning', 'Negative Power Values', 'section-power-stats'))
+
+    if flags.get('high_power_density'):
+        hpd = (power or {}).get('high_power_density', 0)
+        findings.append(('warning', f'High Power Density ({hpd:.0%} above 800W)', 'section-power-stats'))
 
     if flags.get('unbalanced_phases'):
         ratio = quality.get('phase_balance_ratio', 0)
@@ -442,7 +447,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     wave_chart = create_wave_monthly_chart(analysis)
 
     # Build findings tags
-    findings_html = _build_findings_tags(flags, quality, coverage, wave_behavior)
+    findings_html = _build_findings_tags(flags, quality, coverage, wave_behavior, power)
 
     # Get years from temporal_by_period
     years_data = temporal_by_period.get('by_year', {})
@@ -864,6 +869,34 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
         html {{
             scroll-behavior: smooth;
         }}
+
+        /* Collapsible sections */
+        .collapsible-header {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            user-select: none;
+        }}
+        .collapsible-header:hover {{
+            opacity: 0.8;
+        }}
+        .collapse-arrow {{
+            display: inline-block;
+            transition: transform 0.2s ease;
+            font-size: 0.7em;
+            color: #7B9BC4;
+        }}
+        .collapse-arrow.open {{
+            transform: rotate(90deg);
+        }}
+        .collapsible-body {{
+            display: none;
+            margin-top: 12px;
+        }}
+        .collapsible-body.open {{
+            display: block;
+        }}
     </style>
 </head>
 <body>
@@ -898,7 +931,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
             <!-- Data Overview -->
             <div class="card" id="section-data-overview">
-                <h2>Data Overview</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-data-overview')"><span class="collapse-arrow" id="arrow-body-data-overview">&#9654;</span> Data Overview</h2>
+                <div class="collapsible-body" id="body-data-overview">
                 <div class="overview-grid">
                     <div class="overview-item">
                         <div class="overview-value">{coverage.get('days_span', 0)}</div>
@@ -920,12 +954,19 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-label">Sharp Entry Rate</div>
                         <div class="overview-desc">% of threshold crossings from single-minute jumps. Higher = better for algorithm</div>
                     </div>
+                    <div class="overview-item" style="{'background: #f8d7da;' if power.get('high_power_density', 0) > 0.40 else 'background: #fff3cd;' if power.get('high_power_density', 0) > 0.25 else ''}">
+                        <div class="overview-value" style="color: {'#dc3545' if power.get('high_power_density', 0) > 0.40 else '#e67e22' if power.get('high_power_density', 0) > 0.25 else '#28a745'};">{power.get('high_power_density', 0):.0%}</div>
+                        <div class="overview-label">High Power Density</div>
+                        <div class="overview-desc">Avg % of time per phase above 800W. High = hard for algorithm (overlapping devices or measurement issue)</div>
+                    </div>
+                </div>
                 </div>
             </div>
 
             <!-- Data Loss Breakdown: NaN gaps vs No-Data gaps -->
             <div class="card" id="section-data-loss">
-                <h2>Data Loss Breakdown</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-data-loss')"><span class="collapse-arrow" id="arrow-body-data-loss">&#9654;</span> Data Loss Breakdown</h2>
+                <div class="collapsible-body" id="body-data-loss">
                 <p style="color: #666; font-size: 0.85em; margin-bottom: 12px;">
                     Two types of data loss: <strong>No-Data gaps</strong> (entire rows missing &mdash; sensor offline)
                     vs <strong>NaN gaps</strong> (rows exist but values are missing &mdash; sensor reported empty readings).
@@ -956,6 +997,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     (No-Data {_format_small_pct(coverage.get('no_data_gap_pct', 0), coverage.get('no_data_pct_raw', 0), coverage.get('no_data_gap_minutes', 0) > 0)} + NaN {coverage.get('nan_gap_pct', 0):.1f}%)
                     &mdash; Continuity: <span class="badge {nan_cont_class}">{nan_cont_text}</span>
                 </div>
+                </div>
             </div>
 
             {_build_anomaly_warning(coverage)}
@@ -963,6 +1005,8 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
             <!-- Per-Phase NaN Details -->
             <div class="card">
+                <h2 class="collapsible-header" onclick="toggleSection('body-nan-details')"><span class="collapse-arrow" id="arrow-body-nan-details">&#9654;</span> Per-Phase NaN Details</h2>
+                <div class="collapsible-body" id="body-nan-details">
                 <div class="two-col-grid">
                     <div class="overview-item">
                         <div class="overview-label" style="font-size: 1em; font-weight: 600; margin-bottom: 8px;">NaN % per Phase</div>
@@ -983,11 +1027,13 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-desc">Longest consecutive NaN streak per phase</div>
                     </div>
                 </div>
+                </div>
             </div>
 
             <!-- Power Statistics -->
             <div class="card" id="section-power-stats">
-                <h2>Power Statistics</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-power-stats')"><span class="collapse-arrow" id="arrow-body-power-stats">&#9654;</span> Power Statistics</h2>
+                <div class="collapsible-body" id="body-power-stats">
                 <div class="overview-grid">
                     <div class="overview-item">
                         <div class="overview-value">{power.get('total_mean', 0):,.0f}W</div>
@@ -1025,22 +1071,72 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-desc">Average night power / average day power</div>
                     </div>
                 </div>
+                <!-- High Power Density breakdown per phase -->
+                <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="font-weight: 600; margin-bottom: 8px; font-size: 0.9em;">Time Above Pipeline Thresholds (per phase)</div>
+                    <table style="width:100%; border-collapse:collapse; font-size:0.85em;">
+                        <thead>
+                            <tr style="background:#f0f0f0; text-align:center;">
+                                <th style="padding:6px 10px; text-align:left;">Phase</th>
+                                <th style="padding:6px 10px;">&ge;800W</th>
+                                <th style="padding:6px 10px;">&ge;1100W</th>
+                                <th style="padding:6px 10px;">&ge;1500W</th>
+                                <th style="padding:6px 10px;">&ge;2000W</th>
+                                <th style="padding:6px 10px;">Energy &ge;2000W</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="text-align:center;">
+                                <td style="padding:6px 10px; text-align:left; font-weight:600;">w1</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w1_above_800_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w1_above_1100_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w1_above_1500_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w1_above_2000_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w1_above_2000_energy_pct', 0):.0%}</td>
+                            </tr>
+                            <tr style="text-align:center; background:#fafafa;">
+                                <td style="padding:6px 10px; text-align:left; font-weight:600;">w2</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w2_above_800_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w2_above_1100_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w2_above_1500_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w2_above_2000_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w2_above_2000_energy_pct', 0):.0%}</td>
+                            </tr>
+                            <tr style="text-align:center;">
+                                <td style="padding:6px 10px; text-align:left; font-weight:600;">w3</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w3_above_800_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w3_above_1100_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w3_above_1500_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w3_above_2000_pct', 0):.0%}</td>
+                                <td style="padding:6px 10px;">{power.get('phase_w3_above_2000_energy_pct', 0):.0%}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div style="font-size: 0.8em; color: #888; margin-top: 6px;">
+                        "Energy &ge;2000W" = what % of total phase energy comes from minutes at 2000W+.
+                        High values mean the algorithm's top iteration captures a large share of power but may struggle with overlapping devices.
+                    </div>
+                </div>
+                </div>
             </div>
 
             <!-- Wave Behavior Pre-Analysis -->
             <div class="card" id="section-wave-behavior">
-                <h2>Wave Behavior Pre-Analysis</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-wave-behavior')"><span class="collapse-arrow" id="arrow-body-wave-behavior">&#9654;</span> Wave Behavior Pre-Analysis</h2>
+                <div class="collapsible-body" id="body-wave-behavior">
                 <p style="color: #666; font-size: 0.88em; margin-bottom: 15px;">
                     Detects periodic cycling patterns (AC compressor) in raw power data.
                     Uses autocorrelation of minute-to-minute diffs at lags 3&ndash;30 min.
                     High wave score = regular ON/OFF cycling within 800&ndash;4000W windows.
                 </p>
                 {_build_wave_behavior_section(wave_behavior, wave_chart)}
+                </div>
             </div>
 
             <!-- Charts -->
             <div class="card" id="section-charts">
-                <h2>Power Patterns & Analysis</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-charts')"><span class="collapse-arrow" id="arrow-body-charts">&#9654;</span> Power Patterns & Analysis</h2>
+                <div class="collapsible-body" id="body-charts">
                 <div class="charts-grid">
                     <div class="chart-card chart-full-width">
                         {hourly_chart}
@@ -1079,11 +1175,14 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         {heatmap_chart}
                     </div>
                 </div>
+                </div>
             </div>
 
             <div class="card" id="section-flags">
-                <h2>Issues & Flags</h2>
+                <h2 class="collapsible-header" onclick="toggleSection('body-flags')"><span class="collapse-arrow" id="arrow-body-flags">&#9654;</span> Issues & Flags</h2>
+                <div class="collapsible-body" id="body-flags">
                 <p class="flags">{flags_html}</p>
+                </div>
             </div>
         </div>
 
@@ -1099,31 +1198,20 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
     <script>
         function showTab(tabId) {{
-            // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {{
                 tab.classList.remove('active');
                 tab.style.display = 'none';
             }});
-
-            // Deactivate all buttons
             document.querySelectorAll('.tab-btn').forEach(btn => {{
                 btn.classList.remove('active');
             }});
-
-            // Show selected tab
             const selectedTab = document.getElementById('tab-' + tabId);
             if (selectedTab) {{
                 selectedTab.classList.add('active');
                 selectedTab.style.display = 'block';
             }}
-
-            // Activate button
             event.target.classList.add('active');
-
-            // Trigger Plotly resize for charts
-            setTimeout(() => {{
-                window.dispatchEvent(new Event('resize'));
-            }}, 100);
+            setTimeout(() => {{ window.dispatchEvent(new Event('resize')); }}, 100);
         }}
 
         function toggleMonths(year) {{
@@ -1136,11 +1224,52 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                 container.style.display = 'none';
                 btn.textContent = 'Show Monthly Details';
             }}
-            // Trigger resize for mini charts
-            setTimeout(() => {{
-                window.dispatchEvent(new Event('resize'));
-            }}, 100);
+            setTimeout(() => {{ window.dispatchEvent(new Event('resize')); }}, 100);
         }}
+
+        function toggleSection(bodyId) {{
+            const body = document.getElementById(bodyId);
+            const arrow = document.getElementById('arrow-' + bodyId);
+            if (body.classList.contains('open')) {{
+                body.classList.remove('open');
+                if (arrow) arrow.classList.remove('open');
+            }} else {{
+                body.classList.add('open');
+                if (arrow) arrow.classList.add('open');
+                setTimeout(() => {{ window.dispatchEvent(new Event('resize')); }}, 100);
+            }}
+        }}
+
+        function expandSection(bodyId) {{
+            const body = document.getElementById(bodyId);
+            const arrow = document.getElementById('arrow-' + bodyId);
+            if (body && !body.classList.contains('open')) {{
+                body.classList.add('open');
+                if (arrow) arrow.classList.add('open');
+                setTimeout(() => {{ window.dispatchEvent(new Event('resize')); }}, 100);
+            }}
+        }}
+
+        // Finding tags: expand target section then scroll
+        document.addEventListener('DOMContentLoaded', function() {{
+            document.querySelectorAll('.finding-tag').forEach(tag => {{
+                tag.addEventListener('click', function(e) {{
+                    e.preventDefault();
+                    const targetId = this.getAttribute('href').substring(1);
+                    const targetEl = document.getElementById(targetId);
+                    if (targetEl) {{
+                        // Find the collapsible body inside or near this card
+                        const body = targetEl.querySelector('.collapsible-body');
+                        if (body) {{
+                            expandSection(body.id);
+                        }}
+                        setTimeout(() => {{
+                            targetEl.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                        }}, 50);
+                    }}
+                }});
+            }});
+        }});
     </script>
 </body>
 </html>

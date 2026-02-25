@@ -51,6 +51,31 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
         metrics[f'{prefix}_share_1000_2000'] = ((phase_data >= 1000) & (phase_data < 2000)).sum() / total
         metrics[f'{prefix}_share_2000_plus'] = (phase_data >= 2000).sum() / total
 
+    # High-power density: % of time above each pipeline threshold
+    PIPELINE_THRESHOLDS = [800, 1100, 1500, 2000]
+    phase_above_800 = []
+    for col in phase_cols:
+        if col not in data.columns:
+            continue
+        phase_data = data[col].dropna()
+        if len(phase_data) == 0:
+            continue
+        prefix = f'phase_{col}'
+        total = len(phase_data)
+        for th in PIPELINE_THRESHOLDS:
+            above_pct = (phase_data >= th).sum() / total
+            metrics[f'{prefix}_above_{th}_pct'] = above_pct
+        phase_above_800.append(metrics[f'{prefix}_above_800_pct'])
+        # Energy concentration: what % of total energy comes from minutes >= 2000W
+        total_energy = phase_data.sum()
+        if total_energy > 0:
+            metrics[f'{prefix}_above_2000_energy_pct'] = phase_data[phase_data >= 2000].sum() / total_energy
+        else:
+            metrics[f'{prefix}_above_2000_energy_pct'] = 0.0
+
+    # Aggregate: average across phases of above_800_pct
+    metrics['high_power_density'] = np.mean(phase_above_800) if phase_above_800 else 0.0
+
     # Total power (sum of phases)
     sum_cols = [c for c in phase_cols if c in data.columns]
     if sum_cols:

@@ -69,9 +69,9 @@ THREE_PHASE_MIN_OVERLAP_RATIO = 0.50  # at least 50% of shorter event must actua
 # ============================================================================
 # Recurring pattern discovery (DBSCAN clustering on unknown sessions)
 # ============================================================================
-RECURRING_PATTERN_EPS = 0.5              # DBSCAN neighbourhood radius (normalised feature space)
+RECURRING_PATTERN_EPS = 0.35             # DBSCAN neighbourhood radius (normalised feature space)
 RECURRING_PATTERN_MIN_SAMPLES = 3        # minimum sessions to form a core point
-RECURRING_PATTERN_MAX_INTERNAL_CV = 0.25 # max magnitude/duration CV within a cluster to accept it
+RECURRING_PATTERN_MAX_INTERNAL_CV = 0.20 # max magnitude/duration CV within a cluster to accept it
 RECURRING_PATTERN_MIN_SESSIONS = 3       # minimum cluster size to keep as a pattern
 
 # ============================================================================

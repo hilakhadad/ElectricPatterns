@@ -329,7 +329,8 @@ def _score_data_integrity(data: pd.DataFrame, phase_cols: list,
 
 def _apply_anomaly_penalties(metrics: dict,
                              coverage_ratio: Optional[float] = None,
-                             anomaly_count: Optional[int] = None) -> float:
+                             anomaly_count: Optional[int] = None,
+                             high_power_density: Optional[float] = None) -> float:
     """
     Apply anomaly penalties to the base quality score.
 
@@ -378,6 +379,19 @@ def _apply_anomaly_penalties(metrics: dict,
         anomaly_penalties.append({
             'reason': f'extreme_outliers ({n_anomalies} readings >20kW)',
             'deduction': 5,
+        })
+
+    # High power density — most of the time above pipeline thresholds
+    hpd = high_power_density if high_power_density is not None else 0
+    if hpd > 0.40:
+        anomaly_penalties.append({
+            'reason': f'high_power_density ({hpd:.0%} of time above 800W)',
+            'deduction': 8,
+        })
+    elif hpd > 0.25:
+        anomaly_penalties.append({
+            'reason': f'high_power_density ({hpd:.0%} of time above 800W)',
+            'deduction': 4,
         })
 
     # Fragmented data

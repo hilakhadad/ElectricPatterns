@@ -900,6 +900,14 @@ def _build_aggregate_html(
             color: #7D7D92;
             font-size: 0.9em;
         }}
+        .compact-btn {{
+            position:fixed; bottom:20px; right:20px; z-index:9999;
+            padding:10px 22px; border-radius:25px; border:none;
+            background:#667eea; color:white; font-size:14px; font-weight:600;
+            cursor:pointer; box-shadow:0 3px 12px rgba(0,0,0,0.25); transition:all 0.2s;
+        }}
+        .compact-btn:hover {{ background:#5a67d8; transform:scale(1.05); }}
+        body.compact-mode .hide-compact {{ display:none !important; }}
         @media (max-width: 768px) {{
             .container {{ padding: 10px; }}
             header {{ padding: 20px; }}
@@ -915,7 +923,7 @@ def _build_aggregate_html(
             <div class="subtitle">Generated: {generated_at} | {n_houses} houses analyzed</div>
         </header>
 
-        {about_html}
+        <div class="hide-compact">{about_html}</div>
 
         <section>
             <h2>Summary</h2>
@@ -969,7 +977,7 @@ def _build_aggregate_html(
             </div>
         </section>
 
-        <section>
+        <section class="hide-compact">
             <h2>Efficiency Distribution</h2>
             <div id="{chart_id}" style="width:100%;height:350px;"></div>
             <script>
@@ -1001,7 +1009,7 @@ def _build_aggregate_html(
             </table>
         </section>
 
-        {glossary_html}
+        <div class="hide-compact">{glossary_html}</div>
 
         <footer>
             ElectricPatterns &mdash; Module 1: Disaggregation Aggregate Report
@@ -1123,6 +1131,19 @@ def _build_aggregate_html(
         document.querySelectorAll('.filter-bar input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
         updateFilter();
     }}
+
+    // Compact mode toggle
+    (function() {{
+        var btn = document.createElement('button');
+        btn.className = 'compact-btn';
+        btn.textContent = '\u25A0 Compact';
+        btn.onclick = function() {{
+            document.body.classList.toggle('compact-mode');
+            var on = document.body.classList.contains('compact-mode');
+            btn.textContent = on ? '\u25A1 Full View' : '\u25A0 Compact';
+        }};
+        document.body.appendChild(btn);
+    }})();
     </script>
 </body>
 </html>"""

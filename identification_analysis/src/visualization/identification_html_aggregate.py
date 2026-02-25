@@ -26,6 +26,9 @@ try:
 except ImportError:
     _HAS_TQDM = False
 
+# Cross-house patterns: show only top N in aggregate report
+CROSS_HOUSE_DISPLAY_LIMIT = 5
+
 from metrics.classification_quality import calculate_classification_quality
 from metrics.confidence_scoring import calculate_confidence_scores
 from metrics.population_statistics import compute_population_statistics
@@ -283,7 +286,7 @@ def _build_aggregate_html(
 
     # Population stats section
     pop_html = _build_population_section(population_stats) if population_stats else ''
-    cross_house_html = _build_cross_house_section(cross_house_result) if cross_house_result else ''
+    cross_house_html = _build_cross_house_section(cross_house_result, display_limit=CROSS_HOUSE_DISPLAY_LIMIT) if cross_house_result else ''
 
     # Per-house table rows
     _td = 'padding:8px 10px;border-bottom:1px solid #eee;'
@@ -393,6 +396,14 @@ def _build_aggregate_html(
         }}
         .filter-bar label {{ font-weight: 600; color: #3D3D50; margin-right: 5px; }}
         footer {{ text-align: center; padding: 20px; color: #7D7D92; font-size: 0.9em; }}
+        .compact-btn {{
+            position:fixed; bottom:20px; right:20px; z-index:9999;
+            padding:10px 22px; border-radius:25px; border:none;
+            background:#667eea; color:white; font-size:14px; font-weight:600;
+            cursor:pointer; box-shadow:0 3px 12px rgba(0,0,0,0.25); transition:all 0.2s;
+        }}
+        .compact-btn:hover {{ background:#5a67d8; transform:scale(1.05); }}
+        body.compact-mode .hide-compact {{ display:none !important; }}
     </style>
 </head>
 <body>
@@ -402,18 +413,18 @@ def _build_aggregate_html(
             <div style="opacity:0.92;">Generated: {generated_at}</div>
         </header>
 
-        {about_html}
+        <div class="hide-compact">{about_html}</div>
 
         <section>
             <h2>Summary</h2>
             <!-- Row 1: Houses + Days -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:18px;">
                 <div class="summary-card">
-                    <div class="summary-number">{n}</div>
+                    <div class="summary-number" id="dyn-houses">{n}</div>
                     <div class="summary-label">Houses Analyzed</div>
                 </div>
                 <div class="summary-card">
-                    <div class="summary-number">{total_days:,}</div>
+                    <div class="summary-number" id="dyn-days">{total_days:,}</div>
                     <div class="summary-label">Total Days of Data</div>
                 </div>
             </div>
@@ -422,37 +433,37 @@ def _build_aggregate_html(
             <!-- Row 3: Report-specific metrics -->
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px;margin-bottom:20px;">
                 <div style="background:#d4edda;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
+                    <div id="dyn-classified" style="font-size:2em;font-weight:700;color:#28a745;">{avg_classified:.0f}%</div>
                     <div style="font-size:0.85em;color:#666;">Avg Classified (by minutes)</div>
                 </div>
                 <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#7B9BC4;">{avg_conf * 100:.0f}/100</div>
+                    <div id="dyn-confidence" style="font-size:2em;font-weight:700;color:#7B9BC4;">{avg_conf * 100:.0f}/100</div>
                     <div style="font-size:0.85em;color:#7D7D92;">Avg Confidence</div>
                 </div>
                 <div style="background:#f0f4ff;border-radius:8px;padding:16px;text-align:center;">
-                    <div style="font-size:2em;font-weight:700;color:#7B9BC4;">{median_quality * 100:.0f}/100</div>
+                    <div id="dyn-quality" style="font-size:2em;font-weight:700;color:#7B9BC4;">{median_quality * 100:.0f}/100</div>
                     <div style="font-size:0.85em;color:#7D7D92;">Median Quality</div>
                 </div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
                 <div style="background:#f0f4ff;border:1px solid #c3d4ff;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#007bff;">{has_boiler}/{n}</div>
+                    <div id="dyn-boiler" style="font-size:1.5em;font-weight:700;color:#007bff;">{has_boiler}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Boiler</div>
                 </div>
                 <div style="background:#fff5f5;border:1px solid #fed7d7;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#dc3545;">{has_central}/{n}</div>
+                    <div id="dyn-central" style="font-size:1.5em;font-weight:700;color:#dc3545;">{has_central}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Central AC</div>
                 </div>
                 <div style="background:#fff8f0;border:1px solid #feebc8;border-radius:8px;padding:12px;text-align:center;">
-                    <div style="font-size:1.5em;font-weight:700;color:#e67e22;">{has_regular}/{n}</div>
+                    <div id="dyn-regular" style="font-size:1.5em;font-weight:700;color:#e67e22;">{has_regular}/{n}</div>
                     <div style="font-size:0.82em;color:#666;">Houses with Regular AC</div>
                 </div>
             </div>
         </section>
 
-        {pop_html}
+        <div class="hide-compact">{pop_html}</div>
 
-        {cross_house_html}
+        <div class="hide-compact">{cross_house_html}</div>
 
         <section>
             <h2>Per-House Results</h2>
@@ -495,7 +506,7 @@ def _build_aggregate_html(
             </div>
         </section>
 
-        {glossary_html}
+        <div class="hide-compact">{glossary_html}</div>
 
         <footer>
             ElectricPatterns &mdash; Module 2: Device Identification Aggregate Report
@@ -551,15 +562,74 @@ def _build_aggregate_html(
         }});
         var status = document.getElementById('id-filter-status');
         if (status) status.textContent = 'Showing ' + shown + ' / ' + rows.length + ' houses';
+        updateIdentSummary();
     }}
+
+    function updateIdentSummary() {{
+        var rows = document.querySelectorAll('#agg-table tbody tr');
+        var vis = [];
+        rows.forEach(function(r) {{ if (r.style.display !== 'none') vis.push(r); }});
+        var n = vis.length;
+        var totalDays = 0, sumCls = 0, sumConf = 0;
+        var qVals = [];
+        var nBoiler = 0, nCentral = 0, nRegular = 0;
+        vis.forEach(function(row) {{
+            totalDays += parseFloat(row.cells[1].getAttribute('data-value') || 0);
+            sumCls += parseFloat(row.cells[6].getAttribute('data-value') || 0);
+            sumConf += parseFloat(row.cells[7].getAttribute('data-value') || 0);
+            var qv = parseFloat(row.cells[8].getAttribute('data-value') || 0);
+            if (qv > 0) qVals.push(qv);
+            var dev = row.cells[9].textContent;
+            if (dev.indexOf('boiler') !== -1) nBoiler++;
+            if (dev.indexOf('central') !== -1) nCentral++;
+            if (dev.indexOf('regular') !== -1) nRegular++;
+        }});
+        var avgCls = n > 0 ? sumCls / n : 0;
+        var avgConf = n > 0 ? sumConf / n : 0;
+        qVals.sort(function(a,b){{return a-b;}});
+        var medQ = qVals.length > 0 ? qVals[Math.floor(qVals.length/2)] : 0;
+        function u(id, val) {{ var el = document.getElementById(id); if (el) el.textContent = val; }}
+        u('dyn-houses', n);
+        u('dyn-days', totalDays.toLocaleString());
+        u('dyn-classified', avgCls.toFixed(0) + '%');
+        u('dyn-confidence', (avgConf * 100).toFixed(0) + '/100');
+        u('dyn-quality', (medQ * 100).toFixed(0) + '/100');
+        u('dyn-boiler', nBoiler + '/' + n);
+        u('dyn-central', nCentral + '/' + n);
+        u('dyn-regular', nRegular + '/' + n);
+    }}
+
     updateIdFilter();
+
+    // Compact mode toggle
+    (function() {{
+        var btn = document.createElement('button');
+        btn.className = 'compact-btn';
+        btn.textContent = '\u25A0 Compact';
+        btn.onclick = function() {{
+            document.body.classList.toggle('compact-mode');
+            var on = document.body.classList.contains('compact-mode');
+            btn.textContent = on ? '\u25A1 Full View' : '\u25A0 Compact';
+        }};
+        document.body.appendChild(btn);
+    }})();
     </script>
 </body>
 </html>"""
 
 
-def _build_cross_house_section(cross_house_result: Optional[Dict[str, Any]]) -> str:
-    """Build HTML section for cross-house recurring pattern matches."""
+def _build_cross_house_section(
+    cross_house_result: Optional[Dict[str, Any]],
+    display_limit: Optional[int] = None,
+) -> str:
+    """Build HTML section for cross-house recurring pattern matches.
+
+    Parameters
+    ----------
+    display_limit : int or None
+        If set, only show the top N patterns (by total session count).
+        Remaining patterns are summarised in a short note.
+    """
     if not cross_house_result:
         return ''
 
@@ -574,9 +644,22 @@ def _build_cross_house_section(cross_house_result: Optional[Dict[str, Any]]) -> 
     if n_sigs == 0:
         return ''
 
+    # Sort by total session count across houses (most-used first)
+    sorted_patterns = sorted(
+        global_patterns,
+        key=lambda gp: sum(h.get('n_sessions', 0) for h in gp.get('houses', [])),
+        reverse=True,
+    )
+    if display_limit is not None and len(sorted_patterns) > display_limit:
+        display_patterns = sorted_patterns[:display_limit]
+        n_omitted = len(sorted_patterns) - display_limit
+    else:
+        display_patterns = sorted_patterns
+        n_omitted = 0
+
     # Build pattern cards
     pattern_cards = ''
-    for gp in global_patterns:
+    for gp in display_patterns:
         name = gp['global_name']
         desc = gp['descriptive_name']
         n_h = gp.get('n_houses', len(gp.get('houses', [])))
@@ -617,6 +700,15 @@ def _build_cross_house_section(cross_house_result: Optional[Dict[str, Any]]) -> 
                 <tbody>{house_rows}
                 </tbody>
             </table>
+        </div>'''
+
+    # Note about omitted patterns
+    if n_omitted > 0:
+        pattern_cards += f'''
+        <div style="padding:10px 16px;background:#f0f9ff;border:1px solid #bae6fd;
+                    border-radius:8px;margin-top:4px;margin-bottom:12px;font-size:0.85em;color:#0369a1;">
+            {n_omitted} additional cross-house pattern{'s' if n_omitted != 1 else ''}
+            not shown here. These can be found in the per-house reports.
         </div>'''
 
     # Unmatched summary (collapsed)
@@ -679,8 +771,9 @@ def _build_cross_house_section(cross_house_result: Optional[Dict[str, Any]]) -> 
             </div>
             <p style="font-size:0.85em;color:#666;margin-bottom:12px;">
                 Recurring patterns discovered independently per-house are compared across all houses.
-                Patterns with similar power (&le;20%) and duration (&le;30%) are grouped under a shared name
-                (Device A, B, ...).
+                Patterns with similar power (&le;{int(cross_house_result.get('settings', {{}}).get('magnitude_tolerance', 0.15) * 100)}%)
+                and duration (&le;{int(cross_house_result.get('settings', {{}}).get('duration_tolerance', 0.20) * 100)}%)
+                are grouped under a shared name (Device A, B, ...).
             </p>
             {pattern_cards}
             {unmatched_html}

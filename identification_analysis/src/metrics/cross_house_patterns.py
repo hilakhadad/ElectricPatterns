@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Constants
 # ============================================================================
-CROSS_HOUSE_MAGNITUDE_TOLERANCE = 0.20   # 20% relative magnitude difference
-CROSS_HOUSE_DURATION_TOLERANCE = 0.30    # 30% relative duration difference
+CROSS_HOUSE_MAGNITUDE_TOLERANCE = 0.15   # 15% relative magnitude difference
+CROSS_HOUSE_DURATION_TOLERANCE = 0.20    # 20% relative duration difference
 CROSS_HOUSE_MIN_HOUSES = 2              # minimum distinct houses to form global pattern
 CROSS_HOUSE_MIN_CYCLES = 2             # sessions must have >1 cycle (multi-cycle device)
 CROSS_HOUSE_MIN_SESSION_DURATION = 10.0 # sessions must average >10 min duration
