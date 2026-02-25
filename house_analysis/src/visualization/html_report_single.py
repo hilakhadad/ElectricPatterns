@@ -28,6 +28,7 @@ from visualization.charts import (
     create_year_heatmap,
     create_wave_monthly_chart,
     create_wave_comparison_chart,
+    create_phase_imbalance_chart,
 )
 
 
@@ -433,6 +434,9 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     active_flags = [k.replace('_', ' ').title() for k, v in flags.items() if v]
     flags_html = ', '.join(active_flags) if active_flags else 'None'
 
+    # Phase imbalance
+    phase_imbalance = analysis.get('phase_imbalance', {})
+
     # Wave behavior
     wave_behavior = analysis.get('wave_behavior', {})
     wave_chart = create_wave_monthly_chart(analysis)
@@ -451,6 +455,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     weekly_chart = create_weekly_pattern_chart(analysis)
     heatmap_chart = create_power_heatmap_chart(analysis)
     histogram_chart = create_power_histogram(analysis)
+    imbalance_chart = create_phase_imbalance_chart(analysis)
     score_breakdown_chart = create_score_breakdown_chart(analysis)
     quality_flags_chart = create_quality_flags_chart(analysis)
 
@@ -1009,6 +1014,11 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                         <div class="overview-label">Phase Balance</div>
                         <div class="overview-desc">Ratio of max to min phase average. Ideal = 1.0</div>
                     </div>
+                    <div class="overview-item" style="{'background: #f8d7da;' if phase_imbalance.get('imbalance_mean', 0) > 0.5 else 'background: #fff3cd;' if phase_imbalance.get('imbalance_mean', 0) > 0.2 else ''}">
+                        <div class="overview-value" style="color: {'#dc3545' if phase_imbalance.get('imbalance_mean', 0) > 0.5 else '#e67e22' if phase_imbalance.get('imbalance_mean', 0) > 0.2 else '#28a745'};">{phase_imbalance.get('imbalance_mean', 0):.3f}</div>
+                        <div class="overview-label">Phase Imbalance</div>
+                        <div class="overview-desc">Per-minute std/mean across phases. 0 = balanced, &gt;0.5 = imbalanced</div>
+                    </div>
                     <div class="overview-item">
                         <div class="overview-value">{temporal.get('total_night_day_ratio', 0):.2f}</div>
                         <div class="overview-label">Night/Day Ratio</div>
@@ -1040,6 +1050,9 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     </div>
                     <div class="chart-card">
                         {histogram_chart}
+                    </div>
+                    <div class="chart-card chart-full-width">
+                        {imbalance_chart}
                     </div>
                     <div class="chart-card">
                         {weekly_chart}

@@ -1295,6 +1295,141 @@ def create_wave_comparison_chart(analyses: List[Dict[str, Any]]) -> str:
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
+def create_phase_imbalance_chart(analysis: Dict[str, Any]) -> str:
+    """
+    Create per-house phase imbalance indicator with distribution breakdown.
+
+    Shows mean imbalance score as a gauge and % time at each level.
+
+    Args:
+        analysis: Single house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    imbalance = analysis.get('phase_imbalance', {})
+    imb_mean = imbalance.get('imbalance_mean', 0)
+    imb_median = imbalance.get('imbalance_median', 0)
+    imb_p95 = imbalance.get('imbalance_p95', 0)
+    high_pct = imbalance.get('high_imbalance_pct', 0)
+    label = imbalance.get('imbalance_label', 'balanced')
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{"type": "indicator"}, {"type": "bar"}]],
+        column_widths=[0.4, 0.6],
+    )
+
+    # Gauge
+    fig.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=imb_mean,
+        number=dict(valueformat=".3f"),
+        gauge=dict(
+            axis=dict(range=[0, 1.2], tickvals=[0, 0.2, 0.5, 1.0]),
+            bar=dict(color="#667eea"),
+            steps=[
+                dict(range=[0, 0.2], color="#d4edda"),
+                dict(range=[0.2, 0.5], color="#fff3cd"),
+                dict(range=[0.5, 1.2], color="#f8d7da"),
+            ],
+            threshold=dict(line=dict(color="red", width=2), thickness=0.75, value=0.5),
+        ),
+        title=dict(text="Mean Imbalance"),
+    ), row=1, col=1)
+
+    # Summary bars
+    categories = ['Mean', 'Median', 'P95', 'High %']
+    values = [imb_mean, imb_median, imb_p95, high_pct / 100]
+    colors = ['#667eea', '#3498db', '#e67e22', '#e74c3c']
+
+    fig.add_trace(go.Bar(
+        x=categories,
+        y=values,
+        marker_color=colors,
+        text=[f'{imb_mean:.3f}', f'{imb_median:.3f}', f'{imb_p95:.3f}', f'{high_pct:.1f}%'],
+        textposition='outside',
+        hovertemplate='%{x}: %{text}<extra></extra>',
+        showlegend=False,
+    ), row=1, col=2)
+
+    fig.update_layout(
+        title=f'Phase Imbalance — {label.title()}',
+        height=300,
+        margin=dict(t=60, b=40),
+    )
+    fig.update_yaxes(title_text="Score", row=1, col=2)
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def create_imbalance_comparison_chart(analyses: List[Dict[str, Any]]) -> str:
+    """
+    Create horizontal bar chart comparing phase imbalance across houses.
+
+    Args:
+        analyses: List of house analysis results
+
+    Returns:
+        HTML string with embedded chart
+    """
+    data = []
+    for a in analyses:
+        imbalance = a.get('phase_imbalance', {})
+        data.append({
+            'house_id': str(a.get('house_id', 'unknown')),
+            'imbalance_mean': imbalance.get('imbalance_mean', 0),
+            'imbalance_label': imbalance.get('imbalance_label', 'balanced'),
+            'high_pct': imbalance.get('high_imbalance_pct', 0),
+        })
+
+    if not data:
+        return "<p>No imbalance data available</p>"
+
+    df = pd.DataFrame(data).sort_values('imbalance_mean', ascending=True)
+
+    colors = []
+    for v in df['imbalance_mean']:
+        if v < 0.2:
+            colors.append('#28a745')
+        elif v < 0.5:
+            colors.append('#ffc107')
+        else:
+            colors.append('#dc3545')
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        y=df['house_id'],
+        x=df['imbalance_mean'],
+        orientation='h',
+        marker_color=colors,
+        text=df['imbalance_mean'].round(3).astype(str),
+        textposition='outside',
+        hovertemplate=(
+            'House %{y}<br>'
+            'Mean Imbalance: %{x:.3f}<br>'
+            'High Imbalance: %{customdata:.1f}% of time<extra></extra>'
+        ),
+        customdata=df['high_pct'],
+    ))
+
+    fig.add_vline(x=0.2, line_dash="dash", line_color="green", opacity=0.5,
+                  annotation_text="Balanced")
+    fig.add_vline(x=0.5, line_dash="dash", line_color="red", opacity=0.5,
+                  annotation_text="Imbalanced")
+
+    fig.update_layout(
+        title="Phase Imbalance by House",
+        xaxis_title="Mean Imbalance Score (std/mean)",
+        yaxis_title="House ID",
+        height=max(400, len(df) * 25),
+        xaxis_range=[0, max(df['imbalance_mean'].max() * 1.3, 0.6)],
+    )
+
+    return fig.to_html(full_html=False, include_plotlyjs=False)
+
+
 def create_year_heatmap(heatmap_data: Dict[str, Any], year: int) -> str:
     """
     Create power heatmap for a specific year.

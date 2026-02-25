@@ -71,6 +71,80 @@ def calculate_power_statistics(data: pd.DataFrame, phase_cols: list = None) -> D
     return metrics
 
 
+def calculate_phase_imbalance(data: pd.DataFrame, phase_cols: list = None) -> Dict[str, Any]:
+    """
+    Calculate per-minute phase imbalance score.
+
+    Imbalance = std(w1, w2, w3) / mean(w1, w2, w3) per minute.
+    Score of 0 = perfectly balanced, higher = more imbalanced.
+
+    Args:
+        data: DataFrame with phase power columns
+        phase_cols: List of phase column names
+
+    Returns:
+        Dictionary with imbalance statistics
+    """
+    if phase_cols is None:
+        if 'w1' in data.columns:
+            phase_cols = ['w1', 'w2', 'w3']
+        elif '1' in data.columns:
+            phase_cols = ['1', '2', '3']
+        else:
+            phase_cols = [c for c in data.columns if c not in ['timestamp', 'sum']]
+
+    sum_cols = [c for c in phase_cols if c in data.columns]
+    if len(sum_cols) < 2:
+        return {
+            'imbalance_mean': 0.0,
+            'imbalance_median': 0.0,
+            'imbalance_p95': 0.0,
+            'imbalance_max': 0.0,
+            'high_imbalance_pct': 0.0,
+            'imbalance_label': 'balanced',
+        }
+
+    phase_data = data[sum_cols].dropna(how='all')
+    if len(phase_data) == 0:
+        return {
+            'imbalance_mean': 0.0,
+            'imbalance_median': 0.0,
+            'imbalance_p95': 0.0,
+            'imbalance_max': 0.0,
+            'high_imbalance_pct': 0.0,
+            'imbalance_label': 'balanced',
+        }
+
+    row_means = phase_data.mean(axis=1)
+    row_stds = phase_data.std(axis=1, ddof=0)
+
+    # Avoid division by zero: where mean is 0, imbalance is 0
+    imbalance = row_stds / row_means.replace(0, np.nan)
+    imbalance = imbalance.fillna(0.0)
+
+    imb_mean = float(imbalance.mean())
+    imb_median = float(imbalance.median())
+    imb_p95 = float(imbalance.quantile(0.95))
+    imb_max = float(imbalance.max())
+    high_pct = float((imbalance > 0.5).sum() / len(imbalance) * 100)
+
+    if imb_mean < 0.2:
+        label = 'balanced'
+    elif imb_mean < 0.5:
+        label = 'moderate'
+    else:
+        label = 'imbalanced'
+
+    return {
+        'imbalance_mean': imb_mean,
+        'imbalance_median': imb_median,
+        'imbalance_p95': imb_p95,
+        'imbalance_max': imb_max,
+        'high_imbalance_pct': high_pct,
+        'imbalance_label': label,
+    }
+
+
 def calculate_power_ranges(data: pd.DataFrame, phase_cols: list = None,
                            ranges: List[tuple] = None) -> Dict[str, Any]:
     """

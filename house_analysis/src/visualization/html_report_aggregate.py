@@ -14,6 +14,7 @@ from visualization.charts import (
     create_phase_balance_chart,
     create_issues_heatmap,
     create_wave_comparison_chart,
+    create_imbalance_comparison_chart,
 )
 
 
@@ -137,6 +138,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'low_variability': 'Low Variability',
         'low_data_volume': 'Low Data Volume',
         'low_data_integrity': 'Low Data Integrity',
+        'high_phase_imbalance': 'High Phase Imbalance',
     }
 
     tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0,
@@ -214,6 +216,17 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         no_data_pct = coverage.get('no_data_pct', 0)
         days_span = coverage.get('days_span', 0)
 
+        # Phase imbalance
+        imbalance = a.get('phase_imbalance', {})
+        imb_mean = imbalance.get('imbalance_mean', 0)
+        imb_label = imbalance.get('imbalance_label', 'balanced')
+        if imb_mean > 0.5:
+            imb_color = '#dc3545'
+        elif imb_mean > 0.2:
+            imb_color = '#e67e22'
+        else:
+            imb_color = '#28a745'
+
         # Wave behavior
         wave = a.get('wave_behavior', {})
         wave_cls = wave.get('wave_classification', 'no_waves')
@@ -242,6 +255,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             <td>{wave_score:.2f} {wave_badge}</td>
             <td>{power.get('total_mean', 0):.0f}</td>
             <td>{power.get('phase_balance_ratio', 0):.2f}</td>
+            <td style="color: {imb_color}; font-weight: {'bold' if imb_mean > 0.5 else 'normal'};">{imb_mean:.3f}</td>
             <td>{temporal.get('total_night_day_ratio', 0):.2f}</td>
             <td class="issues-cell" title="{issues_text}">{issues_html}</td>
         </tr>
@@ -264,6 +278,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         <strong>Coverage</strong> = minutes with data / total minutes in time span |
         <strong>No Data</strong> = % of time span with no reading (gaps + disconnections) |
         <strong>Phase Balance</strong> = max(phases)/min(phases), ideal=1 |
+        <strong>Imbalance</strong> = per-minute std/mean across phases, 0=balanced |
         <strong>Night/Day</strong> = avg night power / avg day power
     </div>
     <div class="table-wrapper">
@@ -278,7 +293,8 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
                 <th onclick="sortTable(5)">Wave<br><small>(score)</small></th>
                 <th onclick="sortTable(6)">Avg Power<br><small>(Watts)</small></th>
                 <th onclick="sortTable(7)">Phase Balance<br><small>(max/min)</small></th>
-                <th onclick="sortTable(8)">Night/Day<br><small>(power ratio)</small></th>
+                <th onclick="sortTable(8)">Imbalance<br><small>(std/mean)</small></th>
+                <th onclick="sortTable(9)">Night/Day<br><small>(power ratio)</small></th>
                 <th>Issues</th>
             </tr>
         </thead>
@@ -383,6 +399,7 @@ def _generate_charts_section(analyses: List[Dict[str, Any]]) -> str:
         create_quality_distribution_chart(analyses),
         create_wave_comparison_chart(analyses),
         create_phase_balance_chart(analyses),
+        create_imbalance_comparison_chart(analyses),
         create_issues_heatmap(analyses),
     ]
 

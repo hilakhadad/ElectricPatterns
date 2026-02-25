@@ -13,6 +13,7 @@ from datetime import datetime
 from metrics import (
     calculate_coverage_metrics,
     calculate_power_statistics,
+    calculate_phase_imbalance,
     calculate_temporal_patterns,
     calculate_data_quality_metrics,
     calculate_wave_behavior_metrics
@@ -45,6 +46,10 @@ def analyze_single_house(data: pd.DataFrame, house_id: str,
     # Power statistics
     power_stats = calculate_power_statistics(data, phase_cols)
     results['power_statistics'] = power_stats
+
+    # Phase imbalance
+    phase_imbalance = calculate_phase_imbalance(data, phase_cols)
+    results['phase_imbalance'] = phase_imbalance
 
     # Temporal patterns
     temporal = calculate_temporal_patterns(data, phase_cols)
@@ -132,6 +137,10 @@ def _generate_flags(analysis: Dict[str, Any]) -> Dict[str, bool]:
     flags['unbalanced_phases'] = power.get('phase_balance_ratio', 1) > 3
     flags['single_active_phase'] = power.get('active_phases', 3) == 1
     flags['very_high_power'] = power.get('total_max', 0) > 20000  # Over 20kW max
+
+    # Phase imbalance flag
+    imbalance = analysis.get('phase_imbalance', {})
+    flags['high_phase_imbalance'] = imbalance.get('imbalance_mean', 0) > 0.5
 
     # Flat segments flags (potential metering issues)
     # Raised threshold from 30% to 70% - with 10W tolerance, 30% is too sensitive
