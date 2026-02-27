@@ -71,6 +71,7 @@ LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
 DEPEND_ON="${2:-}"  # Optional: SLURM job ID to wait for before starting
+MONTHS_PARALLEL=8   # Max concurrent months per slow house (reduces 20h→~6h vs full 24 parallel ~4h)
 
 # Build dependency string for first-tier (pre-analysis) jobs
 if [ -n "$DEPEND_ON" ]; then
@@ -376,7 +377,7 @@ EOF
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 ##SBATCH --time=04:00:00
-#SBATCH --array=0-$((N_MONTHS - 1))
+#SBATCH --array=0-$((N_MONTHS - 1))%${MONTHS_PARALLEL}
 #SBATCH --dependency=afterok:${PRE_JOB_ID}
 
 echo "========================================"
