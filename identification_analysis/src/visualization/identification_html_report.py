@@ -541,7 +541,7 @@ def _build_house_html(
     summary: Dict[str, Any],
 ) -> str:
     """Build complete HTML document for a single house identification report."""
-    th_str = ' \u2192 '.join(f'{t}W' for t in threshold_schedule) if threshold_schedule else 'N/A'
+    th_str = ' -> '.join(f'{t}W' for t in threshold_schedule) if threshold_schedule else 'N/A'
     total_sessions = summary.get('total_sessions', 0)
     by_type = summary.get('by_device_type', {})
 

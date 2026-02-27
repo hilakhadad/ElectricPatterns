@@ -472,7 +472,9 @@ def generate_identification_report(
             data_days = (ts.max() - ts.min()).days
         except Exception:
             pass
-    experiment_name = experiment_dir.name if experiment_dir.name.startswith('exp') else None
+    import re as _re
+    _m = _re.match(r'^(.+?)_\d{8}_\d{6}$', experiment_dir.name)
+    experiment_name = _m.group(1) if _m else (experiment_dir.name if experiment_dir.name.startswith('exp') else '')
 
     # Compute segregation effectiveness from summarized power (M1 upstream metric)
     segregation_pct = None
@@ -514,6 +516,7 @@ def generate_identification_report(
         activations_detail_html=activations_detail_html,
         summary=summary,
         segregation_pct=segregation_pct,
+        experiment_name=experiment_name or '',
     )
 
     # Save
@@ -549,9 +552,10 @@ def _build_house_html(
     activations_detail_html: str,
     summary: Dict[str, Any],
     segregation_pct: Optional[float] = None,
+    experiment_name: str = '',
 ) -> str:
     """Build complete HTML document for a single house identification report."""
-    th_str = ' \u2192 '.join(f'{t}W' for t in threshold_schedule) if threshold_schedule else 'N/A'
+    th_str = ' -> '.join(f'{t}W' for t in threshold_schedule) if threshold_schedule else 'N/A'
     total_sessions = summary.get('total_sessions', 0)
     by_type = summary.get('by_device_type', {})
 
@@ -595,7 +599,7 @@ def _build_house_html(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Identification Report - House {house_id}</title>
+    <title>Identification Report{' (' + experiment_name + ')' if experiment_name else ''} - House {house_id}</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -645,8 +649,8 @@ def _build_house_html(
 <body>
     <div class="container">
         <header>
-            <h1>Device Identification Report</h1>
-            <div class="subtitle">House {house_id} &mdash; Module 2 Analysis</div>
+            <h1>Identification Report - House {house_id}</h1>
+            <div class="subtitle">{'<strong>' + experiment_name + '</strong> | ' if experiment_name else ''}Module 2 Analysis</div>
             <div class="info-bar">
                 <div class="info-item"><strong>Generated:</strong> {generated_at}</div>
                 <div class="info-item"><strong>Thresholds:</strong> {th_str}</div>

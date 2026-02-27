@@ -176,7 +176,7 @@ def apply_normalization(
     if method == 'combined':
         # Apply in sequence: MA detrending → phase balancing → MAD cleaning
         if logger:
-            logger.info("  Applying combined normalization: MA detrend → phase balance → MAD clean")
+            logger.info("  Applying combined normalization: MA detrend -> phase balance -> MAD clean")
         result = detrend_moving_average(data, **params.get('ma_detrend', {}))
         result = balance_phases(result, **params.get('phase_balance', {}))
         result = mad_outlier_cleaning(result, **params.get('mad_clean', {}))

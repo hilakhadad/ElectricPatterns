@@ -81,7 +81,7 @@ def impute_nan_gaps(data: pd.DataFrame, phase_cols=None,
 
         if logger:
             logger.info(
-                f"[NaN Imputation] {col}: {total_nan} NaN total → "
+                f"[NaN Imputation] {col}: {total_nan} NaN total -> "
                 f"ffill={filled_ffill}, remaining={remaining_nan}"
             )
 

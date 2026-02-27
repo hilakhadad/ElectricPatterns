@@ -450,6 +450,6 @@ def _extract_cycle_from_remaining(
 
     duration = (off_end - on_start).total_seconds() / 60
     run_logger.info(
-        f"  Extracted cycle: {on_start} → {off_end} "
+        f"  Extracted cycle: {on_start} -> {off_end} "
         f"({duration:.0f}min, {magnitude:.0f}W)"
     )

@@ -86,7 +86,7 @@ def build_session_json(
     with open(session_path, 'w', encoding='utf-8') as f:
         json.dump(session_output, f, indent=2, default=_json_serializer)
 
-    logger.info(f"Session JSON saved: {len(sessions_list)} sessions → {session_path}")
+    logger.info(f"Session JSON saved: {len(sessions_list)} sessions -> {session_path}")
 
     # --- Save backward-compatible flat JSON ---
     _save_backward_compatible_json(
@@ -248,7 +248,7 @@ def _save_backward_compatible_json(
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output, f, indent=2, default=_json_serializer)
 
-    logger.info(f"Backward-compatible JSON saved: {matched_count} activations → {output_path}")
+    logger.info(f"Backward-compatible JSON saved: {matched_count} activations -> {output_path}")
 
 
 # ============================================================================

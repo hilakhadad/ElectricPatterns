@@ -230,12 +230,18 @@ def generate_identification_aggregate_report(
     # Build HTML
     t2 = _time.time()
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    # Extract experiment name (strip timestamp suffix)
+    import re as _re
+    _m = _re.match(r'^(.+?)_\d{8}_\d{6}$', experiment_dir.name)
+    _experiment_name = _m.group(1) if _m else experiment_dir.name
+
     html = _build_aggregate_html(
         generated_at=generated_at,
         house_summaries=house_summaries,
         population_stats=population_stats,
         experiment_dir=str(experiment_dir),
         cross_house_result=cross_house_result,
+        experiment_name=_experiment_name,
     )
 
     # Save
@@ -259,6 +265,7 @@ def _build_aggregate_html(
     population_stats: Dict[str, Any],
     experiment_dir: str,
     cross_house_result: Optional[Dict[str, Any]] = None,
+    experiment_name: str = '',
 ) -> str:
     """Build complete aggregate HTML document."""
     n = len(house_summaries)
@@ -365,7 +372,7 @@ def _build_aggregate_html(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Identification - Aggregate Report</title>
+    <title>Identification - Aggregate Report{' (' + experiment_name + ')' if experiment_name else ''}</title>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -411,8 +418,8 @@ def _build_aggregate_html(
 <body>
     <div class="container">
         <header>
-            <h1>Device Identification &mdash; Aggregate Report</h1>
-            <div style="opacity:0.92;">Generated: {generated_at}</div>
+            <h1>Identification &mdash; Aggregate Report</h1>
+            <div style="opacity:0.92;">{'<strong>' + experiment_name + '</strong> | ' if experiment_name else ''}Generated: {generated_at}</div>
         </header>
 
         {about_html}
@@ -835,7 +842,7 @@ def _build_empty_aggregate_html(generated_at: str, experiment_dir: str) -> str:
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Device Identification - Aggregate Report</title>
+    <title>Identification - Aggregate Report{' (' + experiment_name + ')' if experiment_name else ''}</title>
 </head>
 <body style="font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px;">
     <h1>Device Identification - Aggregate Report</h1>
