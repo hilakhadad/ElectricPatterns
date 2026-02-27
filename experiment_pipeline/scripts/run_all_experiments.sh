@@ -1,76 +1,639 @@
 #!/bin/bash
 # =============================================================================
-# Run multiple experiments SEQUENTIALLY on SLURM.
+# Run multiple experiments with PER-HOUSE INTERLEAVING.
 #
-# Each experiment waits for the previous one to fully complete (including
-# reports and cleanup) before starting. This prevents disk quota issues
-# from running experiments in parallel.
+# Instead of running all houses for exp016, then all for exp017, etc.,
+# each house chains through all experiments independently:
+#   house_1: exp016 → exp017 → exp018 → exp019
+#   house_2: exp016 → exp017 → exp018 → exp019
+#   ...all running in parallel across the cluster
 #
-# The aggressive cleanup (cleanup_after_reports) runs after each house's
-# reports are generated, keeping only JSONs/CSVs/HTMLs and deleting
-# heavy pkl files. This reduces each experiment from ~35G to ~4G.
+# This is ~2x faster than experiment-level chaining because fast houses
+# don't idle while waiting for slow houses to finish the current experiment.
+#
+# Fast houses:  1 SLURM job per experiment (pre-analysis + M1 + M2 + reports + cleanup)
+# Slow houses:  2 SLURM jobs per experiment (month array + post with M2/reports/cleanup)
+#
+# Aggregates run per-experiment after ALL houses finish that experiment.
+# Cross-experiment comparison runs once at the very end.
 #
 # Usage:
-#     bash scripts/run_all_experiments.sh
+#     bash scripts/run_all_experiments.sh                      # run all 4
+#     bash scripts/run_all_experiments.sh exp017_phase_balance exp018_mad_clean  # specific ones
 #
-# To customize which experiments to run, edit the EXPERIMENTS array below.
 # =============================================================================
 
 # ---- Experiments to run (in order) ----
-EXPERIMENTS=(
-    "exp016_ma_detrend"
-    "exp017_phase_balance"
-    "exp018_mad_clean"
-    "exp019_combined_norm"
-)
+if [ $# -gt 0 ]; then
+    EXPERIMENTS=("$@")
+else
+    EXPERIMENTS=(
+        "exp016_ma_detrend"
+        "exp017_phase_balance"
+        "exp018_mad_clean"
+        "exp019_combined_norm"
+    )
+fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LAST_JOB=""
+# ---- Configuration ----
+PROJECT_ROOT="/home/hilakese/ElectricPatterns_new"
+DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
+LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
+MONTHS_PARALLEL=8
+
+COMPLETED_HOUSES_FILE="${PROJECT_ROOT}/experiment_pipeline/completed_houses.txt"
+ALL_EXPERIMENTS_DIR="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments"
+
+# ---- Normalization map ----
+declare -A NORM_MAP
+NORM_MAP["exp016_ma_detrend"]="ma_detrend"
+NORM_MAP["exp017_phase_balance"]="phase_balance"
+NORM_MAP["exp018_mad_clean"]="mad_clean"
+NORM_MAP["exp019_combined_norm"]="combined"
+
+# ---- Shared timestamp ----
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+mkdir -p "$LOG_DIR"
 
 echo "============================================================"
-echo "Sequential experiment runner"
+echo "Interleaved multi-experiment runner"
 echo "Experiments: ${EXPERIMENTS[*]}"
-echo "Date: $(date)"
+echo "Timestamp:   ${TIMESTAMP}"
+echo "Date:        $(date)"
 echo "============================================================"
 echo ""
 
-for i in "${!EXPERIMENTS[@]}"; do
-    exp="${EXPERIMENTS[$i]}"
-    n=$((i + 1))
-    total=${#EXPERIMENTS[@]}
+# =================================================================
+# Phase 0: Create experiment directories + metadata for ALL experiments
+# =================================================================
+declare -A EXP_OUTPUTS
+declare -A EXP_REPORTS
 
-    echo "[$n/$total] Submitting: $exp"
+for exp in "${EXPERIMENTS[@]}"; do
+    exp_output="${ALL_EXPERIMENTS_DIR}/${exp}_${TIMESTAMP}"
+    reports_dir="${exp_output}/reports"
+    mkdir -p "$exp_output" "$reports_dir"
 
-    # Write output to temp file AND show it in real-time via tee
-    TMPOUT=$(mktemp /tmp/exp_submit_XXXXXX.log)
+    EXP_OUTPUTS[$exp]="$exp_output"
+    EXP_REPORTS[$exp]="$reports_dir"
 
-    if [ -n "$LAST_JOB" ]; then
-        echo "  Chaining after job $LAST_JOB"
-        bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" "$LAST_JOB" 2>&1 | tee "$TMPOUT"
-    else
-        bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" 2>&1 | tee "$TMPOUT"
-    fi
+    # Initialize timing CSV
+    echo "house_id,n_months,start_time,end_time,elapsed_seconds,elapsed_human,status" > "${exp_output}/house_timing.csv"
 
-    # Extract the last job ID for chaining
-    LAST_JOB=$(grep "^LAST_JOB_ID=" "$TMPOUT" | tail -1 | cut -d= -f2)
-    rm -f "$TMPOUT"
+    # Save experiment metadata (once, from login node)
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from core.config import get_experiment, save_experiment_metadata
+exp = get_experiment('${exp}')
+save_experiment_metadata(exp, '${exp_output}')
+print('  Metadata: ${exp_output}')
+"
+    echo "  Created: ${exp_output}"
+done
+cd "${PROJECT_ROOT}"
 
-    if [ -z "$LAST_JOB" ]; then
-        echo "ERROR: Could not extract LAST_JOB_ID from $exp output. Stopping."
-        exit 1
-    fi
-
+# =================================================================
+# Load completed houses
+# =================================================================
+declare -A COMPLETED
+if [ -f "$COMPLETED_HOUSES_FILE" ]; then
+    while IFS= read -r hid; do
+        [[ -z "$hid" || "$hid" =~ ^[[:space:]]*# ]] && continue
+        hid=$(echo "$hid" | xargs)
+        COMPLETED["$hid"]=1
+    done < "$COMPLETED_HOUSES_FILE"
     echo ""
-    echo "  -> $exp final job: $LAST_JOB"
-    echo ""
+    echo "Loaded ${#COMPLETED[@]} fast houses from completed_houses.txt"
+else
+    echo "ERROR: completed_houses.txt not found at $COMPLETED_HOUSES_FILE"
+    exit 1
+fi
+
+# Helper: count unique months for a house
+count_unique_months() {
+    local house_dir="$1" house_id="$2"
+    local -A seen_months
+    local count=0
+    for f in "$house_dir"/${house_id}_[0-9][0-9]_[0-9][0-9][0-9][0-9].pkl \
+             "$house_dir"/${house_id}_[0-9][0-9]_[0-9][0-9][0-9][0-9].csv; do
+        [ -f "$f" ] || continue
+        local month_str
+        month_str=$(basename "$f" | sed "s/^${house_id}_//" | sed 's/\..*//')
+        if [[ -z "${seen_months[$month_str]}" ]]; then
+            seen_months["$month_str"]=1
+            count=$((count + 1))
+        fi
+    done
+    echo "$count"
+}
+
+# Temp files to track job IDs per experiment (for aggregate dependencies)
+for exp in "${EXPERIMENTS[@]}"; do
+    : > "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
 done
 
-echo "============================================================"
-echo "All ${#EXPERIMENTS[@]} experiments submitted!"
-echo "Last job in chain: $LAST_JOB"
 echo ""
-echo "Monitor progress:"
-echo "  squeue -u \$USER                    # running/pending jobs"
-echo "  squeue -u \$USER | wc -l            # count jobs"
-echo "  sacct --starttime today -X --format=JobName,State,Elapsed | tail -20"
+echo "============================================================"
+echo "Submitting per-house chains..."
+echo "============================================================"
+
+HOUSE_COUNT=0
+FAST_COUNT=0
+SLOW_COUNT=0
+
+# =================================================================
+# Phase 1: Per-house chains — each house runs all experiments sequentially
+# =================================================================
+for house_dir in "$DATA_DIR"/*/; do
+    house_id=$(basename "$house_dir")
+    [[ "$house_id" =~ ^[0-9]+$ ]] || continue
+
+    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
+    [ "$N_MONTHS" -eq 0 ] && continue
+
+    HOUSE_COUNT=$((HOUSE_COUNT + 1))
+    PREV_JOB=""  # Last job for this house — chains across experiments
+
+    is_fast=""
+    [[ -n "${COMPLETED[$house_id]}" ]] && is_fast="1"
+
+    for exp_idx in "${!EXPERIMENTS[@]}"; do
+        exp="${EXPERIMENTS[$exp_idx]}"
+        exp_num="${exp:3:3}"   # "016", "017", etc.
+        exp_output="${EXP_OUTPUTS[$exp]}"
+        reports_dir="${EXP_REPORTS[$exp]}"
+        norm_method="${NORM_MAP[$exp]:-none}"
+
+        # Inter-experiment dependency: wait for previous experiment to finish
+        if [ -n "$PREV_JOB" ]; then
+            CHAIN_DEP="#SBATCH --dependency=afterany:${PREV_JOB}"
+        else
+            CHAIN_DEP=""
+        fi
+
+        if [ -n "$is_fast" ]; then
+            # ==========================================================
+            # FAST HOUSE: single job per experiment
+            # Pre-analysis + M1 + M2 + reports + cleanup
+            # ==========================================================
+            PIPE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_f${exp_num}_${house_id}_XXXXXX.sh")
+
+            cat > "$PIPE_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=f${exp_num}_${house_id}
+#SBATCH --output=${LOG_DIR}/f${exp_num}_${house_id}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/f${exp_num}_${house_id}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --gres=gpu:0
+${CHAIN_DEP}
+
+echo "========================================"
+echo "House ${house_id} / ${exp} — FAST"
+echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "Node: \$SLURM_JOB_NODELIST"
+echo "Start: \$(date)"
+echo "========================================"
+
+module load anaconda
+source activate nilm_new
+
+# --- Pre-analysis ---
+cd "${PROJECT_ROOT}/house_analysis"
+python scripts/run_analysis.py \
+    --houses ${house_id} \
+    --input-dir ${DATA_DIR} \
+    --output-dir ${reports_dir} \
+    --publish house \
+    --normalize ${norm_method}
+
+# --- Pipeline (M1 + M2) ---
+cd "${PROJECT_ROOT}/experiment_pipeline"
+
+START_EPOCH=\$(date +%s)
+START_TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+
+python -u scripts/test_single_house.py \
+    --house_id ${house_id} \
+    --experiment_name ${exp} \
+    --output_path ${exp_output} \
+    --skip_visualization \
+    --minimal_output
+
+EXIT_CODE=\$?
+
+END_EPOCH=\$(date +%s)
+END_TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+ELAPSED=\$((END_EPOCH - START_EPOCH))
+HOURS=\$((ELAPSED / 3600))
+MINS=\$(( (ELAPSED % 3600) / 60 ))
+SECS=\$((ELAPSED % 60))
+ELAPSED_HUMAN="\${HOURS}h \${MINS}m \${SECS}s"
+
+if [ \$EXIT_CODE -eq 0 ]; then
+    STATUS="OK"
+else
+    STATUS="FAIL(exit=\${EXIT_CODE})"
+fi
+
+echo "${house_id},${N_MONTHS},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${exp_output}/house_timing.csv
+
+echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
+
+# --- Reports + cleanup (only on success) ---
+if [ \$EXIT_CODE -eq 0 ]; then
+    echo "Generating reports..."
+
+    cd "${PROJECT_ROOT}/disaggregation_analysis"
+    python scripts/run_dynamic_report.py \
+        --experiment ${exp_output} \
+        --houses ${house_id} \
+        --output-dir ${reports_dir} \
+        --publish segregation \
+        2>&1
+    echo "  Segregation report: exit \$?"
+
+    cd "${PROJECT_ROOT}/identification_analysis"
+    python scripts/run_identification_report.py \
+        --experiment ${exp_output} \
+        --houses ${house_id} \
+        --output-dir ${reports_dir} \
+        --publish identification \
+        2>&1
+    echo "  Identification report: exit \$?"
+
+    echo "Cleaning up pkl files..."
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from identification.cleanup import cleanup_after_reports
+from pathlib import Path
+r = cleanup_after_reports(Path('${exp_output}'), '${house_id}')
+print(f'  Cleanup: {r[\"dirs_deleted\"]} directories removed')
+"
+fi
+
+echo "End: \$(date)"
+EOF
+
+            PIPE_JOB=$(sbatch "$PIPE_SCRIPT" | awk '{print $4}')
+            rm -f "$PIPE_SCRIPT"
+
+            echo "${PIPE_JOB}" >> "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
+            PREV_JOB=$PIPE_JOB
+
+        else
+            # ==========================================================
+            # SLOW HOUSE: month-level parallel + post job
+            # Array: M1 per month
+            # Post:  pre-analysis + M2 + reports + cleanup
+            # ==========================================================
+
+            # --- Array job (M1 per month) ---
+            ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_m${exp_num}_${house_id}_XXXXXX.sh")
+
+            cat > "$ARRAY_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=m${exp_num}_${house_id}
+#SBATCH --output=${LOG_DIR}/m${exp_num}_${house_id}_${TIMESTAMP}_%A_%a.out
+#SBATCH --error=${LOG_DIR}/m${exp_num}_${house_id}_${TIMESTAMP}_%A_%a.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --gres=gpu:0
+#SBATCH --array=0-$((N_MONTHS - 1))%${MONTHS_PARALLEL}
+${CHAIN_DEP}
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/experiment_pipeline"
+python -u scripts/run_single_month.py \
+    --house_id ${house_id} \
+    --month_index \$SLURM_ARRAY_TASK_ID \
+    --experiment_name ${exp} \
+    --output_path ${exp_output} \
+    --input_path ${DATA_DIR}
+EOF
+
+            ARRAY_JOB=$(sbatch "$ARRAY_SCRIPT" | awk '{print $4}')
+            rm -f "$ARRAY_SCRIPT"
+
+            # --- Post job (pre-analysis + M2 + reports + cleanup) ---
+            POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_p${exp_num}_${house_id}_XXXXXX.sh")
+
+            cat > "$POST_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=p${exp_num}_${house_id}
+#SBATCH --output=${LOG_DIR}/p${exp_num}_${house_id}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/p${exp_num}_${house_id}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --gres=gpu:0
+#SBATCH --dependency=afterok:${ARRAY_JOB}
+
+echo "========================================"
+echo "House ${house_id} / ${exp} — SLOW (post)"
+echo "SLURM_JOBID: \$SLURM_JOBID"
+echo "Depends on array: ${ARRAY_JOB}"
+echo "Start: \$(date)"
+echo "========================================"
+
+module load anaconda
+source activate nilm_new
+
+# --- Pre-analysis ---
+cd "${PROJECT_ROOT}/house_analysis"
+python scripts/run_analysis.py \
+    --houses ${house_id} \
+    --input-dir ${DATA_DIR} \
+    --output-dir ${reports_dir} \
+    --publish house \
+    --normalize ${norm_method}
+
+# --- M2 Identification ---
+cd "${PROJECT_ROOT}/experiment_pipeline"
+
+START_EPOCH=\$(date +%s)
+START_TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+
+python -u scripts/run_identification.py \
+    --experiment_dir ${exp_output} \
+    --house_id ${house_id}
+
+EXIT_CODE=\$?
+
+END_EPOCH=\$(date +%s)
+END_TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+ELAPSED=\$((END_EPOCH - START_EPOCH))
+HOURS=\$((ELAPSED / 3600))
+MINS=\$(( (ELAPSED % 3600) / 60 ))
+SECS=\$((ELAPSED % 60))
+ELAPSED_HUMAN="\${HOURS}h \${MINS}m \${SECS}s"
+
+if [ \$EXIT_CODE -eq 0 ]; then
+    STATUS="OK-MONTHLY"
+else
+    STATUS="FAIL-MONTHLY(exit=\${EXIT_CODE})"
+fi
+
+echo "${house_id},${N_MONTHS},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${exp_output}/house_timing.csv
+
+echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
+
+# --- Reports + cleanup (only on success) ---
+if [ \$EXIT_CODE -eq 0 ]; then
+    echo "Generating reports..."
+
+    cd "${PROJECT_ROOT}/disaggregation_analysis"
+    python scripts/run_dynamic_report.py \
+        --experiment ${exp_output} \
+        --houses ${house_id} \
+        --output-dir ${reports_dir} \
+        --publish segregation \
+        2>&1
+    echo "  Segregation report: exit \$?"
+
+    cd "${PROJECT_ROOT}/identification_analysis"
+    python scripts/run_identification_report.py \
+        --experiment ${exp_output} \
+        --houses ${house_id} \
+        --output-dir ${reports_dir} \
+        --publish identification \
+        2>&1
+    echo "  Identification report: exit \$?"
+
+    echo "Cleaning up pkl files..."
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from identification.cleanup import cleanup_after_reports
+from pathlib import Path
+r = cleanup_after_reports(Path('${exp_output}'), '${house_id}')
+print(f'  Cleanup: {r[\"dirs_deleted\"]} directories removed')
+"
+fi
+
+echo "End: \$(date)"
+EOF
+
+            POST_JOB=$(sbatch "$POST_SCRIPT" | awk '{print $4}')
+            rm -f "$POST_SCRIPT"
+
+            echo "${POST_JOB}" >> "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
+            PREV_JOB=$POST_JOB
+        fi
+    done
+
+    # Print house summary
+    if [ -n "$is_fast" ]; then
+        echo "  House ${house_id} (${N_MONTHS}m) [FAST] — ${#EXPERIMENTS[@]} experiments chained"
+        FAST_COUNT=$((FAST_COUNT + 1))
+    else
+        echo "  House ${house_id} (${N_MONTHS}m) [SLOW] — ${#EXPERIMENTS[@]} experiments chained (monthly parallel)"
+        SLOW_COUNT=$((SLOW_COUNT + 1))
+    fi
+done
+
+echo ""
+echo "============================================================"
+echo "Submitted ${HOUSE_COUNT} houses (fast=${FAST_COUNT}, slow=${SLOW_COUNT})"
+echo "Each house chains ${#EXPERIMENTS[@]} experiments"
+echo ""
+
+# =================================================================
+# Phase 2: Aggregate reports — per experiment
+#
+# For each experiment, submit aggregate jobs that depend on ALL
+# houses finishing that experiment.
+# =================================================================
+echo "Submitting aggregate reports..."
+echo "============================================================"
+
+ALL_IDENT_JOBS=()
+
+for exp in "${EXPERIMENTS[@]}"; do
+    exp_num="${exp:3:3}"
+    exp_output="${EXP_OUTPUTS[$exp]}"
+    reports_dir="${EXP_REPORTS[$exp]}"
+
+    FINAL_DEPS=$(cat "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt" | tr '\n' ':' | sed 's/:$//')
+
+    if [ -z "$FINAL_DEPS" ]; then
+        echo "  WARNING: No jobs for ${exp}, skipping aggregates"
+        continue
+    fi
+
+    # --- Aggregate house pre-analysis ---
+    AGG_HOUSE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ah_${exp_num}_XXXXXX.sh")
+    cat > "$AGG_HOUSE_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=ah_${exp_num}
+#SBATCH --output=${LOG_DIR}/ah_${exp_num}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/ah_${exp_num}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=100G
+#SBATCH --gres=gpu:0
+#SBATCH --dependency=afterany:${FINAL_DEPS}
+
+echo "AGGREGATE: House pre-analysis — ${exp}"
+echo "Start: \$(date)"
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/house_analysis"
+python scripts/run_analysis.py \
+    --output-dir ${reports_dir} \
+    --publish house \
+    --aggregate-only \
+    2>&1
+echo "Exit: \$? — End: \$(date)"
+EOF
+    AGG_HOUSE_JOB=$(sbatch "$AGG_HOUSE_SCRIPT" | awk '{print $4}')
+    rm -f "$AGG_HOUSE_SCRIPT"
+
+    # --- Aggregate segregation ---
+    AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_as_${exp_num}_XXXXXX.sh")
+    cat > "$AGG_SEG_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=as_${exp_num}
+#SBATCH --output=${LOG_DIR}/as_${exp_num}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/as_${exp_num}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=100G
+#SBATCH --gres=gpu:0
+#SBATCH --dependency=afterany:${FINAL_DEPS}:${AGG_HOUSE_JOB}
+
+echo "AGGREGATE: Segregation — ${exp}"
+echo "Start: \$(date)"
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/disaggregation_analysis"
+python scripts/run_dynamic_report.py \
+    --experiment ${exp_output} \
+    --output-dir ${reports_dir} \
+    --publish segregation \
+    --aggregate-only \
+    2>&1
+echo "Exit: \$? — End: \$(date)"
+EOF
+    AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" | awk '{print $4}')
+    rm -f "$AGG_SEG_SCRIPT"
+
+    # --- Identification ALL houses ---
+    IDENT_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_id_${exp_num}_XXXXXX.sh")
+    cat > "$IDENT_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=id_${exp_num}
+#SBATCH --output=${LOG_DIR}/id_${exp_num}_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/id_${exp_num}_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=100G
+#SBATCH --gres=gpu:0
+#SBATCH --dependency=afterany:${AGG_SEG_JOB}
+
+echo "IDENTIFICATION: All houses — ${exp}"
+echo "Start: \$(date)"
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/identification_analysis"
+python scripts/run_identification_report.py \
+    --experiment ${exp_output} \
+    --output-dir ${reports_dir} \
+    --publish identification \
+    --aggregate-only \
+    2>&1
+echo "Exit: \$? — End: \$(date)"
+EOF
+    IDENT_JOB=$(sbatch "$IDENT_SCRIPT" | awk '{print $4}')
+    rm -f "$IDENT_SCRIPT"
+
+    ALL_IDENT_JOBS+=($IDENT_JOB)
+    echo "  ${exp}: agg_house=${AGG_HOUSE_JOB}, agg_seg=${AGG_SEG_JOB}, ident=${IDENT_JOB}"
+
+    # Cleanup temp file
+    rm -f "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
+done
+
+# =================================================================
+# Phase 3: Cross-experiment comparison (after ALL experiments done)
+# =================================================================
+if [ ${#ALL_IDENT_JOBS[@]} -gt 0 ]; then
+    IDENT_DEPS=$(IFS=:; echo "${ALL_IDENT_JOBS[*]}")
+    LAST_EXP="${EXPERIMENTS[-1]}"
+    LAST_REPORTS="${EXP_REPORTS[$LAST_EXP]}"
+
+    COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
+    cat > "$COMPARE_SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=compare_all
+#SBATCH --output=${LOG_DIR}/compare_all_${TIMESTAMP}_%j.out
+#SBATCH --error=${LOG_DIR}/compare_all_${TIMESTAMP}_%j.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --gres=gpu:0
+#SBATCH --dependency=afterany:${IDENT_DEPS}
+
+echo "CROSS-EXPERIMENT COMPARISON"
+echo "Start: \$(date)"
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/experiment_pipeline"
+python scripts/compare_experiments.py \
+    --scan \
+    --scan-dir ${ALL_EXPERIMENTS_DIR} \
+    --output-dir ${LAST_REPORTS}/comparison \
+    2>&1
+echo "Exit: \$? — End: \$(date)"
+EOF
+    COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" | awk '{print $4}')
+    rm -f "$COMPARE_SCRIPT"
+    echo ""
+    echo "  Cross-experiment comparison: ${COMPARE_JOB} (after all experiments)"
+fi
+
+echo ""
+echo "============================================================"
+echo "All submitted!"
+echo ""
+echo "  Houses:      ${HOUSE_COUNT} (fast=${FAST_COUNT}, slow=${SLOW_COUNT})"
+echo "  Experiments: ${#EXPERIMENTS[@]}"
+echo "  Strategy:    per-house interleaving"
+echo ""
+echo "  Each house runs all ${#EXPERIMENTS[@]} experiments in sequence."
+echo "  Houses run in parallel across the cluster."
+echo ""
+for exp in "${EXPERIMENTS[@]}"; do
+    echo "  ${exp}:"
+    echo "    Output:  ${EXP_OUTPUTS[$exp]}"
+    echo "    Reports: ${EXP_REPORTS[$exp]}"
+done
+echo ""
+echo "Monitor:"
+echo "  squeue -u \$USER                          # all jobs"
+echo "  squeue -u \$USER | grep f016              # fast houses exp016"
+echo "  squeue -u \$USER | grep m017              # slow houses exp017 months"
+echo "  squeue -u \$USER | grep -E 'ah_|as_|id_'  # aggregate jobs"
 echo "============================================================"
