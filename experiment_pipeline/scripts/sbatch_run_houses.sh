@@ -51,7 +51,12 @@
 # Or manually list fast house IDs, one per line.
 #
 # Usage:
-#     bash scripts/sbatch_run_houses.sh
+#     bash scripts/sbatch_run_houses.sh [experiment_name]
+#
+# Examples:
+#     bash scripts/sbatch_run_houses.sh                    # default: exp015_hole_repair
+#     bash scripts/sbatch_run_houses.sh exp016_ma_detrend  # with MA detrending
+#     bash scripts/sbatch_run_houses.sh exp018_mad_clean   # with MAD cleaning
 # =============================================================================
 
 # ---- Configuration ----
@@ -59,7 +64,17 @@ PROJECT_ROOT="/home/hilakese/ElectricPatterns_new"
 DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
-EXPERIMENT_NAME="exp018_mad_clean"
+EXPERIMENT_NAME="${1:-exp015_hole_repair}"
+
+# ---- Map experiment to normalization method ----
+# Used for pre-analysis reports (--normalize flag)
+declare -A NORM_MAP
+NORM_MAP["exp016_ma_detrend"]="ma_detrend"
+NORM_MAP["exp017_phase_balance"]="phase_balance"
+NORM_MAP["exp018_mad_clean"]="mad_clean"
+NORM_MAP["exp019_combined_norm"]="combined"
+# All other experiments: no normalization (default 'none')
+NORM_METHOD="${NORM_MAP[$EXPERIMENT_NAME]:-none}"
 
 # ---- TS set ONCE — used for ALL output paths ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -120,6 +135,7 @@ echo "============================================================"
 echo "Submitting pipeline jobs (with automatic report generation)"
 echo "============================================================"
 echo "Experiment:  $EXPERIMENT_NAME"
+echo "Normalize:   $NORM_METHOD"
 echo "Timestamp:   $TIMESTAMP"
 echo "Data dir:    $DATA_DIR"
 echo "Output dir:  $EXPERIMENT_OUTPUT"
@@ -203,9 +219,10 @@ python scripts/run_analysis.py \
     --houses ${house_id} \
     --input-dir ${DATA_DIR} \
     --output-dir ${REPORTS_DIR} \
-    --publish house
+    --publish house \
+    --normalize ${NORM_METHOD}
 
-echo "Pre-analysis done for house ${house_id}: \$(date)"
+echo "Pre-analysis done for house ${house_id} (norm=${NORM_METHOD}): \$(date)"
 EOF
 
     PRE_JOB_ID=$(sbatch "$PRE_SCRIPT" | awk '{print $4}')
