@@ -8,6 +8,7 @@ from core.normalization import (
     balance_phases,
     mad_outlier_cleaning,
     apply_normalization,
+    compute_threshold_scaling,
 )
 
 
@@ -433,3 +434,194 @@ class TestExperimentConfigs:
         assert exp019.use_wave_recovery == exp015.use_wave_recovery
         assert exp019.use_guided_recovery == exp015.use_guided_recovery
         assert exp019.threshold_schedule == exp015.threshold_schedule
+
+
+# ============================================================================
+# Per-Timestamp Original Diff Tests
+# ============================================================================
+
+class TestOrigDiffPreservation:
+    """Tests for orig_diff columns saved by preprocess_normalize."""
+
+    def test_ma_detrend_saves_orig_diff(self, sample_data):
+        """MA detrending should save original diffs alongside normalized data."""
+        original_diffs = {p: sample_data[p].diff() for p in ['w1', 'w2', 'w3']}
+        result = detrend_moving_average(sample_data)
+        # Simulate what preprocess_normalize does
+        for phase in ['w1', 'w2', 'w3']:
+            result[f'{phase}_orig_diff'] = sample_data[phase].diff()
+        for phase in ['w1', 'w2', 'w3']:
+            pd.testing.assert_series_equal(
+                result[f'{phase}_orig_diff'], original_diffs[phase],
+                check_names=False
+            )
+
+    def test_orig_diff_used_for_detection(self, sample_data):
+        """Detection should use orig_diff for threshold when available."""
+        from disaggregation.rectangle.detection.sharp import detect_sharp_events
+        n = 200
+        timestamps = pd.date_range('2021-07-01', periods=n, freq='1min')
+        w1 = np.full(n, 1000.0)
+        w1[50] = 3000.0  # +2000W spike in original
+        w1[51] = 1000.0  # back to normal
+
+        # Normalized data: event attenuated to 1800W (below 2000 threshold)
+        w1_norm = np.full(n, 1000.0)
+        w1_norm[50] = 2800.0  # attenuated
+        w1_norm[51] = 1000.0
+
+        data = pd.DataFrame({
+            'timestamp': timestamps,
+            'w1': w1_norm,  # normalized values
+            'w1_orig_diff': pd.Series(w1).diff(),  # original diffs
+        })
+
+        on_events, off_events = detect_sharp_events(data, 'w1', threshold=2000)
+        # Should detect because orig_diff has 2000W jump
+        assert len(on_events) >= 1, "Event should be detected via orig_diff despite attenuated normalized diff"
+
+    def test_no_orig_diff_falls_back(self, sample_data):
+        """Without orig_diff columns, detection should use regular diff."""
+        from disaggregation.rectangle.detection.sharp import detect_sharp_events
+        n = 200
+        timestamps = pd.date_range('2021-07-01', periods=n, freq='1min')
+        w1 = np.full(n, 1000.0)
+        w1[50] = 2800.0  # 1800W jump (below 2000 threshold)
+        w1[51] = 1000.0
+
+        data = pd.DataFrame({'timestamp': timestamps, 'w1': w1})
+        # No orig_diff column — should use normalized diff
+        on_events, off_events = detect_sharp_events(data, 'w1', threshold=2000)
+        assert len(on_events) == 0, "Should NOT detect because diff=1800 < threshold=2000"
+
+    def test_gradual_uses_orig_diff_for_threshold(self):
+        """Gradual detection should use orig_diff for threshold comparison."""
+        from disaggregation.rectangle.detection.gradual import detect_gradual_events
+        n = 200
+        timestamps = pd.date_range('2021-07-01', periods=n, freq='1min')
+
+        # Normalized diffs: two steps summing to 1400W (below 1500 threshold)
+        norm_diffs = np.zeros(n)
+        norm_diffs[50] = 700
+        norm_diffs[51] = 700  # sum = 1400 < 1500
+
+        # Original diffs: two steps summing to 1600W (above 1500 threshold)
+        orig_diffs = np.zeros(n)
+        orig_diffs[50] = 800
+        orig_diffs[51] = 800  # sum = 1600 > 1500
+
+        w1 = np.cumsum(norm_diffs) + 1000
+        data = pd.DataFrame({
+            'timestamp': timestamps,
+            'w1': w1,
+            'w1_diff': norm_diffs,
+            'w1_orig_diff': orig_diffs,
+        })
+
+        events = detect_gradual_events(
+            data, 'w1_diff', threshold=1500, event_type='on',
+            progressive_search=True, partial_factor=1.0, max_factor=3.0,
+            orig_diff_col='w1_orig_diff',
+        )
+        assert len(events) >= 1, "Gradual event should be detected via orig_diff"
+
+
+# ============================================================================
+# Threshold Scaling Tests (utility function, kept for reporting)
+# ============================================================================
+
+class TestComputeThresholdScaling:
+    """Tests for compute_threshold_scaling() — utility for measuring attenuation."""
+
+    @pytest.fixture
+    def paired_data_dirs(self, tmp_path):
+        """Create original and normalized data dirs with matching pkl files."""
+        orig_dir = tmp_path / "original" / "221"
+        norm_dir = tmp_path / "normalized" / "221"
+        orig_dir.mkdir(parents=True)
+        norm_dir.mkdir(parents=True)
+        return orig_dir, norm_dir, tmp_path
+
+    def _make_signal_with_events(self, n=720, events=None):
+        """Create a power signal with specified events (list of (index, magnitude) tuples)."""
+        timestamps = pd.date_range('2021-07-01', periods=n, freq='1min')
+        w1 = np.full(n, 1000.0)
+        if events:
+            for idx, magnitude in events:
+                if idx < n:
+                    w1[idx:] += magnitude
+        return pd.DataFrame({
+            'timestamp': timestamps,
+            'w1': w1,
+            'w2': np.full(n, 500.0),
+            'w3': np.full(n, 800.0),
+        })
+
+    def test_identity_returns_one(self, paired_data_dirs):
+        """Identical original and normalized data should give scale=1.0."""
+        orig_dir, norm_dir, tmp_path = paired_data_dirs
+        data = self._make_signal_with_events(events=[(100, 2000), (200, -2000), (400, 1500)])
+        data.to_pickle(orig_dir / "221_07_2021.pkl")
+        data.to_pickle(norm_dir / "221_07_2021.pkl")
+        scale = compute_threshold_scaling(
+            str(tmp_path / "original"), "221", str(tmp_path / "normalized")
+        )
+        assert scale == 1.0
+
+    def test_attenuated_diffs_returns_less_than_one(self, paired_data_dirs):
+        """If normalization attenuates diffs by ~10%, scale should be ~0.9."""
+        orig_dir, norm_dir, tmp_path = paired_data_dirs
+        orig_data = self._make_signal_with_events(
+            events=[(100, 2000), (200, -2000), (400, 1500), (500, -1500)]
+        )
+        norm_data = self._make_signal_with_events(
+            events=[(100, 1800), (200, -1800), (400, 1350), (500, -1350)]
+        )
+        orig_data.to_pickle(orig_dir / "221_07_2021.pkl")
+        norm_data.to_pickle(norm_dir / "221_07_2021.pkl")
+        scale = compute_threshold_scaling(
+            str(tmp_path / "original"), "221", str(tmp_path / "normalized")
+        )
+        assert 0.85 <= scale <= 0.95, f"Expected ~0.9, got {scale}"
+
+    def test_no_large_diffs_returns_one(self, paired_data_dirs):
+        """Quiet house (no diffs >= 500W) should return 1.0."""
+        orig_dir, norm_dir, tmp_path = paired_data_dirs
+        n = 360
+        rng = np.random.RandomState(42)
+        data = pd.DataFrame({
+            'timestamp': pd.date_range('2021-07-01', periods=n, freq='1min'),
+            'w1': 1000 + rng.normal(0, 10, n),
+            'w2': 500 + rng.normal(0, 10, n),
+            'w3': 800 + rng.normal(0, 10, n),
+        })
+        data.to_pickle(orig_dir / "221_07_2021.pkl")
+        data.to_pickle(norm_dir / "221_07_2021.pkl")
+        scale = compute_threshold_scaling(
+            str(tmp_path / "original"), "221", str(tmp_path / "normalized")
+        )
+        assert scale == 1.0
+
+    def test_clamp_range(self, paired_data_dirs):
+        """Scale should always be in [0.5, 1.0], even with extreme attenuation."""
+        orig_dir, norm_dir, tmp_path = paired_data_dirs
+        orig_data = self._make_signal_with_events(events=[(100, 3000), (200, -3000)])
+        norm_data = self._make_signal_with_events(events=[(100, 300), (200, -300)])
+        orig_data.to_pickle(orig_dir / "221_07_2021.pkl")
+        norm_data.to_pickle(norm_dir / "221_07_2021.pkl")
+        scale = compute_threshold_scaling(
+            str(tmp_path / "original"), "221", str(tmp_path / "normalized")
+        )
+        assert 0.5 <= scale <= 1.0
+
+    def test_amplified_diffs_clamped_to_one(self, paired_data_dirs):
+        """If normalization amplifies diffs, scale should be clamped to 1.0."""
+        orig_dir, norm_dir, tmp_path = paired_data_dirs
+        orig_data = self._make_signal_with_events(events=[(100, 1500), (200, -1500)])
+        norm_data = self._make_signal_with_events(events=[(100, 2000), (200, -2000)])
+        orig_data.to_pickle(orig_dir / "221_07_2021.pkl")
+        norm_data.to_pickle(norm_dir / "221_07_2021.pkl")
+        scale = compute_threshold_scaling(
+            str(tmp_path / "original"), "221", str(tmp_path / "normalized")
+        )
+        assert scale == 1.0

@@ -25,6 +25,16 @@ DEFAULT_INPUT_DIR = PROJECT_ROOT / "INPUT" / "HouseholdData"
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "OUTPUT"
 
 
+def _apply_normalization(data, method: str, params=None):
+    """Apply normalization preprocessing to power data.
+
+    Imports from experiment_pipeline.src.core.normalization.
+    """
+    sys.path.insert(0, str(PROJECT_ROOT / "experiment_pipeline" / "src"))
+    from core.normalization import apply_normalization
+    return apply_normalization(data, method, params=params)
+
+
 def list_available_houses(input_dir: Path) -> list:
     """List all available houses (looks for subfolders containing pkl files)."""
     houses = []
@@ -63,7 +73,9 @@ def load_house_data_from_folder(house_folder: Path):
 
 
 def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
-                               quiet: bool = False) -> dict:
+                               quiet: bool = False,
+                               normalize_method: str = None,
+                               normalize_params: dict = None) -> dict:
     """Run analysis on a single house."""
     from reports import analyze_single_house, generate_house_report
     from visualization import generate_single_house_html_report
@@ -86,6 +98,11 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
         tqdm.write(f"Error: No data files found in {house_folder}")
         return None
     log(f"  Loaded {len(data)} rows")
+
+    # Apply normalization if requested
+    if normalize_method:
+        data = _apply_normalization(data, normalize_method, normalize_params)
+        log(f"  Applied normalization: {normalize_method}")
 
     # Run analysis
     analysis = analyze_single_house(data, house_id)
@@ -120,7 +137,9 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
     return analysis
 
 
-def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
+def run_all_houses_analysis(input_dir: Path, output_dir: Path,
+                            normalize_method: str = None,
+                            normalize_params: dict = None) -> None:
     """Run analysis on all houses and generate aggregate report."""
     from reports import (
         analyze_single_house, generate_house_report, load_house_data,
@@ -147,7 +166,9 @@ def run_all_houses_analysis(input_dir: Path, output_dir: Path) -> None:
 
     for house_id in tqdm(houses, desc="Analyzing houses", unit="house", mininterval=30):
         try:
-            analysis = run_single_house_analysis(house_id, input_dir, run_output_dir, quiet=False)
+            analysis = run_single_house_analysis(
+                    house_id, input_dir, run_output_dir, quiet=False,
+                    normalize_method=normalize_method, normalize_params=normalize_params)
             if analysis:
                 all_analyses.append(analysis)
         except Exception as e:
@@ -219,7 +240,9 @@ def run_aggregate_only(output_dir: Path, publish_name: str) -> None:
 
 
 def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
-                     publish_name: str) -> None:
+                     publish_name: str,
+                     normalize_method: str = None,
+                     normalize_params: dict = None) -> None:
     """Run analysis in publish mode: structured output for website.
 
     Output structure:
@@ -252,6 +275,9 @@ def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
             if data is None or len(data) == 0:
                 tqdm.write(f"  House {house_id}: no data, skipping")
                 continue
+
+            if normalize_method:
+                data = _apply_normalization(data, normalize_method, normalize_params)
 
             analysis = analyze_single_house(data, house_id)
 
@@ -302,6 +328,12 @@ def main():
                         dest='aggregate_only',
                         help='Skip per-house analysis, generate only aggregate from existing JSONs '
                              '(requires --publish)')
+    parser.add_argument('--normalize', type=str, default=None,
+                        choices=['ma_detrend', 'phase_balance', 'mad_clean', 'combined'],
+                        help='Apply normalization before analysis')
+    parser.add_argument('--norm-params', type=str, default=None,
+                        help='JSON string with normalization parameters '
+                             '(e.g. \'{"ma_detrend": {"window_minutes": 60}}\')')
 
     args = parser.parse_args()
 
@@ -334,6 +366,16 @@ def main():
         run_aggregate_only(output_dir, args.publish)
         return
 
+    # Parse normalization params
+    normalize_method = args.normalize
+    normalize_params = None
+    if args.norm_params:
+        import json
+        normalize_params = json.loads(args.norm_params)
+
+    if normalize_method:
+        print(f"Normalization: {normalize_method}")
+
     if args.publish:
         # Publish mode: structured output for website
         if args.houses:
@@ -342,11 +384,16 @@ def main():
             house_ids = [args.house]
         else:
             house_ids = list_available_houses(input_dir)
-        run_publish_mode(house_ids, input_dir, output_dir, args.publish)
+        run_publish_mode(house_ids, input_dir, output_dir, args.publish,
+                         normalize_method=normalize_method, normalize_params=normalize_params)
     elif args.house:
-        run_single_house_analysis(args.house, input_dir, output_dir)
+        run_single_house_analysis(args.house, input_dir, output_dir,
+                                   normalize_method=normalize_method,
+                                   normalize_params=normalize_params)
     else:
-        run_all_houses_analysis(input_dir, output_dir)
+        run_all_houses_analysis(input_dir, output_dir,
+                                normalize_method=normalize_method,
+                                normalize_params=normalize_params)
 
 
 if __name__ == "__main__":

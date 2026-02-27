@@ -128,6 +128,9 @@ def run_pipeline(
             logger=logger,
         )
         logger.info(f"Normalization complete ({time.time() - t0_norm:.1f}s)")
+        # Normalized data includes {phase}_orig_diff columns for per-timestamp
+        # threshold detection accuracy. Detection uses original diffs for threshold
+        # comparison and normalized values for magnitude — no threshold scaling needed.
 
         # Override input paths so all pipeline steps use normalized data
         input_path = preprocessed_base

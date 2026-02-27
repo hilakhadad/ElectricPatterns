@@ -248,6 +248,13 @@ def preprocess_normalize(
         # Apply normalization
         normalized = apply_normalization(data, method, params, logger=None)
 
+        # Save original diffs for per-timestamp threshold detection.
+        # Detection will use these to compare against thresholds (exact, not approximated),
+        # while using the normalized signal for magnitude recording and segmentation.
+        for phase in PHASES:
+            if phase in data.columns:
+                normalized[f'{phase}_orig_diff'] = data[phase].diff()
+
         # Count changes for logging (MAD cleaning)
         if method in ('mad_clean', 'combined'):
             for phase in PHASES:
@@ -266,3 +273,106 @@ def preprocess_normalize(
     # Return parent directory (preprocessed/) so find_house_data_path finds {house_id}/ subfolder
     preprocessed_base = str(Path(output_path) / "preprocessed")
     return preprocessed_base
+
+
+def compute_threshold_scaling(
+    original_input_path: str,
+    house_id: str,
+    preprocessed_path: str,
+    min_diff_watts: int = 500,
+    logger: Optional[logging.Logger] = None,
+) -> float:
+    """Compute how much normalization attenuated event-sized diffs.
+
+    Compares abs(diff()) between original and normalized signals for each
+    phase, focusing on diffs >= min_diff_watts (i.e., real events).
+
+    Returns a scaling factor in [0.5, 1.0] to multiply thresholds by.
+    If normalization didn't change diffs significantly, returns 1.0.
+
+    Args:
+        original_input_path: Base directory with original (raw) house data.
+        house_id: House identifier.
+        preprocessed_path: Base directory with normalized house data.
+        min_diff_watts: Minimum abs(diff) to consider as an event (default 500W).
+        logger: Optional logger.
+
+    Returns:
+        Scaling factor (0.5 <= scale <= 1.0).
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    # Find original and normalized data paths
+    orig_path = find_house_data_path(original_input_path, house_id)
+    norm_path = find_house_data_path(preprocessed_path, house_id)
+
+    orig_path = Path(orig_path)
+    norm_path = Path(norm_path)
+
+    # Get monthly files
+    if orig_path.is_dir():
+        orig_files = sorted(orig_path.glob("*.pkl"))
+    else:
+        orig_files = [orig_path]
+
+    if norm_path.is_dir():
+        norm_files = sorted(norm_path.glob("*.pkl"))
+    else:
+        norm_files = [norm_path]
+
+    # Build lookup by filename for matching
+    norm_lookup = {f.name: f for f in norm_files}
+
+    all_ratios = []
+
+    for orig_file in orig_files:
+        norm_file = norm_lookup.get(orig_file.name)
+        if norm_file is None:
+            continue
+
+        orig_data = load_power_data(orig_file)
+        norm_data = load_power_data(norm_file)
+
+        if orig_data.empty or norm_data.empty:
+            continue
+
+        for phase in PHASES:
+            if phase not in orig_data.columns or phase not in norm_data.columns:
+                continue
+
+            orig_diff = orig_data[phase].diff().abs()
+            norm_diff = norm_data[phase].diff().abs()
+
+            # Filter to event-sized diffs in the original signal
+            mask = orig_diff >= min_diff_watts
+            if not mask.any():
+                continue
+
+            orig_vals = orig_diff[mask].values
+            norm_vals = norm_diff[mask].values
+
+            # Compute per-timestamp ratios (avoid division by zero)
+            valid = orig_vals > 0
+            if valid.any():
+                ratios = norm_vals[valid] / orig_vals[valid]
+                all_ratios.extend(ratios.tolist())
+
+    if not all_ratios:
+        logger.info(f"  No diffs >= {min_diff_watts}W found, no threshold adaptation")
+        return 1.0
+
+    scale = float(np.median(all_ratios))
+
+    # Clamp to [0.5, 1.0]
+    if scale < 0.5:
+        logger.warning(f"  Threshold scale {scale:.3f} is very low (< 0.5), clamping to 0.5")
+        scale = 0.5
+    elif scale > 1.0:
+        scale = 1.0
+
+    if scale < 0.7:
+        logger.warning(f"  Normalization significantly attenuated diffs (scale={scale:.3f})")
+
+    logger.info(f"  Threshold scaling: {scale:.3f} (from {len(all_ratios)} event-sized diffs)")
+    return scale

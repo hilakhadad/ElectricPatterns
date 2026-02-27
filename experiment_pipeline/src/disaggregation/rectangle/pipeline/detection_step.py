@@ -239,9 +239,15 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
 
     data[diff_col] = data[phase].diff()
 
+    # Use original (pre-normalization) diffs for threshold comparison if available.
+    # This ensures detection thresholds are exact regardless of normalization effects.
+    # In iterations 1+ (remaining power), orig_diff won't exist → falls back to normalized diff.
+    orig_diff_col = f'{phase}_orig_diff'
+    detection_diff = data[orig_diff_col] if orig_diff_col in data.columns else data[diff_col]
+
     off_threshold = int(threshold * off_threshold_factor)
-    data[on_col] = np.where(data[diff_col] >= threshold, data[diff_col], 0)
-    data[off_col] = np.where(data[diff_col] <= -off_threshold, data[diff_col], 0)
+    data[on_col] = np.where(detection_diff >= threshold, data[diff_col], 0)
+    data[off_col] = np.where(detection_diff <= -off_threshold, data[diff_col], 0)
 
     # Update indexed version with new columns
     data_indexed[diff_col] = data.set_index('timestamp')[diff_col]
@@ -297,15 +303,17 @@ def _detect_phase_events(data, data_indexed, phase, threshold, params, logger):
     # Add gradual detection
     if use_gradual:
         logger.info(f"  Detecting gradual events for {phase}...")
+        # Pass orig_diff_col for threshold comparison (if normalization saved it)
+        gradual_orig_diff = orig_diff_col if orig_diff_col in data.columns else None
         gradual_on = detect_gradual_events(
             data, diff_col, threshold, event_type='on',
             window_minutes=gradual_window, progressive_search=progressive_search,
-            partial_factor=1.0, logger=logger
+            partial_factor=1.0, logger=logger, orig_diff_col=gradual_orig_diff
         )
         gradual_off = detect_gradual_events(
             data, diff_col, threshold, event_type='off',
             window_minutes=gradual_window, progressive_search=progressive_search,
-            partial_factor=1.0, logger=logger
+            partial_factor=1.0, logger=logger, orig_diff_col=gradual_orig_diff
         )
 
         if len(gradual_on) > 0:

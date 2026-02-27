@@ -63,6 +63,10 @@ def detect_sharp_events(
     if diff_col not in df.columns:
         df[diff_col] = df[phase].diff()
 
+    # Use original (pre-normalization) diffs for threshold comparison if available.
+    orig_diff_col = f'{phase}_orig_diff'
+    detection_diff = df[orig_diff_col] if orig_diff_col in df.columns else df[diff_col]
+
     # OFF threshold is configurable (default 80% of ON threshold)
     off_threshold = int(threshold * off_threshold_factor)
 
@@ -70,8 +74,9 @@ def detect_sharp_events(
     on_col = f"{phase}_{threshold}_on"
     off_col = f"{phase}_{threshold}_off"
 
-    df[on_col] = np.where(df[diff_col] >= threshold, df[diff_col], 0)
-    df[off_col] = np.where(df[diff_col] <= -off_threshold, df[diff_col], 0)
+    # Threshold comparison uses original diffs; magnitude uses normalized diffs
+    df[on_col] = np.where(detection_diff >= threshold, df[diff_col], 0)
+    df[off_col] = np.where(detection_diff <= -off_threshold, df[diff_col], 0)
 
     # Group consecutive non-zero values
     is_on = f'{on_col}_group'

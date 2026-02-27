@@ -46,7 +46,8 @@ def detect_gradual_events(
     max_duration_minutes: int = 3,
     progressive_search: bool = False,
     phase: str = None,
-    logger=None
+    logger=None,
+    orig_diff_col: str = None,
 ) -> pd.DataFrame:
     """
     Detect gradual ON/OFF events (multi-minute ramps).
@@ -87,6 +88,9 @@ def detect_gradual_events(
     cols_to_keep = ['timestamp', diff_col]
     if phase in data.columns:
         cols_to_keep.append(phase)
+    # Include original diff column if available (for threshold comparison)
+    if orig_diff_col and orig_diff_col in data.columns:
+        cols_to_keep.append(orig_diff_col)
     df = data[cols_to_keep].copy().sort_values('timestamp').reset_index(drop=True)
     df = df.dropna(subset=[diff_col])
 
@@ -99,15 +103,18 @@ def detect_gradual_events(
     timestamps = df['timestamp'].values
     diffs = df[diff_col].values
 
+    # Use original diffs for threshold comparison if available (per-timestamp accuracy)
+    detection_diffs = df[orig_diff_col].values if (orig_diff_col and orig_diff_col in df.columns) else diffs
+
     # Pre-filter to "significant" changes (>= 25% of threshold)
     # Lower than before (was 50%) to catch ramps where individual steps are small
     # e.g., 400W + 1000W = 1400W — the 400W step needs to be a candidate
     min_significant = threshold * 0.25
 
     if event_type == 'on':
-        candidate_mask = (diffs >= min_significant)
+        candidate_mask = (detection_diffs >= min_significant)
     else:
-        candidate_mask = (diffs <= -min_significant)
+        candidate_mask = (detection_diffs <= -min_significant)
 
     candidate_indices = np.where(candidate_mask)[0]
 
@@ -148,7 +155,8 @@ def detect_gradual_events(
                     before_mins, after_mins,
                     event_type, threshold,
                     partial_threshold, max_threshold,
-                    max_duration_minutes
+                    max_duration_minutes,
+                    detection_diffs=detection_diffs,
                 )
 
                 if event is not None:
@@ -198,14 +206,22 @@ def _try_window(
     threshold: int,
     partial_threshold: float,
     max_threshold: float,
-    max_duration_minutes: int
+    max_duration_minutes: int,
+    detection_diffs: np.ndarray = None,
 ) -> dict:
     """
     Try to find a valid gradual event in a specific time window.
 
+    Args:
+        detection_diffs: Original (pre-normalization) diffs for threshold comparison.
+                         If None, uses diffs (normalized) for both detection and magnitude.
+
     Returns:
         dict with 'event' and 'used_indices' if found, None otherwise
     """
+    if detection_diffs is None:
+        detection_diffs = diffs
+
     start_time = timestamps[i] - np.timedelta64(before_mins, 'm')
     end_time = timestamps[i] + np.timedelta64(after_mins, 'm')
 
@@ -224,16 +240,20 @@ def _try_window(
         return None
 
     adjacent_indices = np.array(adjacent_indices)
+
+    # Use original diffs for threshold comparison, normalized diffs for magnitude
+    window_detection_diffs = detection_diffs[adjacent_indices]
     window_diffs = diffs[adjacent_indices]
+    detection_sum = window_detection_diffs.sum()
     window_sum = window_diffs.sum()
 
-    # Check direction consistency
-    if not _check_direction_consistency(window_diffs, event_type):
+    # Check direction consistency (using original diffs for accuracy)
+    if not _check_direction_consistency(window_detection_diffs, event_type):
         return None
 
-    # Check duration constraint
+    # Check duration constraint (using original diffs)
     min_significant_for_duration = threshold * 0.05
-    significant_mask = np.abs(diffs[adjacent_indices]) >= min_significant_for_duration
+    significant_mask = np.abs(detection_diffs[adjacent_indices]) >= min_significant_for_duration
     significant_indices = adjacent_indices[significant_mask]
 
     if len(significant_indices) == 0:
@@ -250,11 +270,12 @@ def _try_window(
         return None
 
     # Check if magnitude is in valid range (80%-130% of threshold)
-    abs_sum = abs(window_sum)
+    # Use original diffs for threshold comparison
+    abs_sum = abs(detection_sum)
     if not (partial_threshold <= abs_sum <= max_threshold):
         return None
 
-    # Valid event found!
+    # Valid event found! Record normalized magnitude for downstream matching
     return {
         'event': {
             'start': timestamps[significant_indices[0]],
