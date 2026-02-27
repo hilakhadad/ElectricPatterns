@@ -1,15 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# Run multiple experiments with PER-HOUSE INTERLEAVING.
+# Run multiple experiments with FULL PARALLELISM.
 #
-# Instead of running all houses for exp016, then all for exp017, etc.,
-# each house chains through all experiments independently:
-#   house_1: exp016 → exp017 → exp018 → exp019
-#   house_2: exp016 → exp017 → exp018 → exp019
+# All experiments for each house run simultaneously (no inter-experiment
+# dependency). Since experiments use the same INPUT but different OUTPUT
+# directories, they are completely independent.
+#
+#   house_1: exp016 ┐
+#            exp017 ├── all in parallel
+#            exp018 ├──
+#            exp019 ┘
+#   house_2: (same)
 #   ...all running in parallel across the cluster
 #
-# This is ~2x faster than experiment-level chaining because fast houses
-# don't idle while waiting for slow houses to finish the current experiment.
+# This maximizes cluster utilization — with 4 experiments × 171 houses,
+# up to 684 jobs can run simultaneously (limited only by available CPUs).
 #
 # Fast houses:  1 SLURM job per experiment (pre-analysis + M1 + M2 + reports + cleanup)
 # Slow houses:  2 SLURM jobs per experiment (month array + post with M2/reports/cleanup)
@@ -57,7 +62,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 mkdir -p "$LOG_DIR"
 
 echo "============================================================"
-echo "Interleaved multi-experiment runner"
+echo "FULL PARALLEL multi-experiment runner"
 echo "Experiments: ${EXPERIMENTS[*]}"
 echo "Timestamp:   ${TIMESTAMP}"
 echo "Date:        $(date)"
@@ -144,7 +149,7 @@ FAST_COUNT=0
 SLOW_COUNT=0
 
 # =================================================================
-# Phase 1: Per-house chains — each house runs all experiments sequentially
+# Phase 1: Per-house parallel — each house runs all experiments simultaneously
 # =================================================================
 for house_dir in "$DATA_DIR"/*/; do
     house_id=$(basename "$house_dir")
@@ -154,7 +159,6 @@ for house_dir in "$DATA_DIR"/*/; do
     [ "$N_MONTHS" -eq 0 ] && continue
 
     HOUSE_COUNT=$((HOUSE_COUNT + 1))
-    PREV_JOB=""  # Last job for this house — chains across experiments
 
     is_fast=""
     [[ -n "${COMPLETED[$house_id]}" ]] && is_fast="1"
@@ -165,13 +169,6 @@ for house_dir in "$DATA_DIR"/*/; do
         exp_output="${EXP_OUTPUTS[$exp]}"
         reports_dir="${EXP_REPORTS[$exp]}"
         norm_method="${NORM_MAP[$exp]:-none}"
-
-        # Inter-experiment dependency: wait for previous experiment to finish
-        if [ -n "$PREV_JOB" ]; then
-            CHAIN_DEP="#SBATCH --dependency=afterany:${PREV_JOB}"
-        else
-            CHAIN_DEP=""
-        fi
 
         if [ -n "$is_fast" ]; then
             # ==========================================================
@@ -190,7 +187,6 @@ for house_dir in "$DATA_DIR"/*/; do
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
-${CHAIN_DEP}
 
 echo "========================================"
 echo "House ${house_id} / ${exp} — FAST"
@@ -284,7 +280,6 @@ EOF
             rm -f "$PIPE_SCRIPT"
 
             echo "${PIPE_JOB}" >> "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
-            PREV_JOB=$PIPE_JOB
 
         else
             # ==========================================================
@@ -307,7 +302,6 @@ EOF
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 #SBATCH --array=0-$((N_MONTHS - 1))%${MONTHS_PARALLEL}
-${CHAIN_DEP}
 
 module load anaconda
 source activate nilm_new
@@ -428,16 +422,15 @@ EOF
             rm -f "$POST_SCRIPT"
 
             echo "${POST_JOB}" >> "/tmp/final_jobs_${exp}_${TIMESTAMP}.txt"
-            PREV_JOB=$POST_JOB
         fi
     done
 
     # Print house summary
     if [ -n "$is_fast" ]; then
-        echo "  House ${house_id} (${N_MONTHS}m) [FAST] — ${#EXPERIMENTS[@]} experiments chained"
+        echo "  House ${house_id} (${N_MONTHS}m) [FAST] — ${#EXPERIMENTS[@]} experiments in parallel"
         FAST_COUNT=$((FAST_COUNT + 1))
     else
-        echo "  House ${house_id} (${N_MONTHS}m) [SLOW] — ${#EXPERIMENTS[@]} experiments chained (monthly parallel)"
+        echo "  House ${house_id} (${N_MONTHS}m) [SLOW] — ${#EXPERIMENTS[@]} experiments in parallel (monthly parallel)"
         SLOW_COUNT=$((SLOW_COUNT + 1))
     fi
 done
@@ -445,7 +438,7 @@ done
 echo ""
 echo "============================================================"
 echo "Submitted ${HOUSE_COUNT} houses (fast=${FAST_COUNT}, slow=${SLOW_COUNT})"
-echo "Each house chains ${#EXPERIMENTS[@]} experiments"
+echo "Each house runs ${#EXPERIMENTS[@]} experiments IN PARALLEL"
 echo ""
 
 # =================================================================
@@ -620,10 +613,10 @@ echo "All submitted!"
 echo ""
 echo "  Houses:      ${HOUSE_COUNT} (fast=${FAST_COUNT}, slow=${SLOW_COUNT})"
 echo "  Experiments: ${#EXPERIMENTS[@]}"
-echo "  Strategy:    per-house interleaving"
+echo "  Strategy:    FULL PARALLEL (all experiments simultaneously per house)"
 echo ""
-echo "  Each house runs all ${#EXPERIMENTS[@]} experiments in sequence."
-echo "  Houses run in parallel across the cluster."
+echo "  All ${#EXPERIMENTS[@]} experiments run simultaneously for each house."
+echo "  Total jobs: up to ${HOUSE_COUNT} x ${#EXPERIMENTS[@]} running at once."
 echo ""
 for exp in "${EXPERIMENTS[@]}"; do
     echo "  ${exp}:"
