@@ -41,18 +41,19 @@ for i in "${!EXPERIMENTS[@]}"; do
 
     echo "[$n/$total] Submitting: $exp"
 
+    # Write output to temp file AND show it in real-time via tee
+    TMPOUT=$(mktemp /tmp/exp_submit_XXXXXX.log)
+
     if [ -n "$LAST_JOB" ]; then
         echo "  Chaining after job $LAST_JOB"
-        OUTPUT=$(bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" "$LAST_JOB" 2>&1)
+        bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" "$LAST_JOB" 2>&1 | tee "$TMPOUT"
     else
-        OUTPUT=$(bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" 2>&1)
+        bash "$SCRIPT_DIR/sbatch_run_houses.sh" "$exp" 2>&1 | tee "$TMPOUT"
     fi
 
-    # Print full output
-    echo "$OUTPUT"
-
     # Extract the last job ID for chaining
-    LAST_JOB=$(echo "$OUTPUT" | grep "^LAST_JOB_ID=" | tail -1 | cut -d= -f2)
+    LAST_JOB=$(grep "^LAST_JOB_ID=" "$TMPOUT" | tail -1 | cut -d= -f2)
+    rm -f "$TMPOUT"
 
     if [ -z "$LAST_JOB" ]; then
         echo "ERROR: Could not extract LAST_JOB_ID from $exp output. Stopping."
@@ -68,6 +69,8 @@ echo "============================================================"
 echo "All ${#EXPERIMENTS[@]} experiments submitted!"
 echo "Last job in chain: $LAST_JOB"
 echo ""
-echo "Monitor:  squeue -u \$USER"
-echo "          sacct -j <job_id> --format=JobID,State,Elapsed,MaxRSS"
+echo "Monitor progress:"
+echo "  squeue -u \$USER                    # running/pending jobs"
+echo "  squeue -u \$USER | wc -l            # count jobs"
+echo "  sacct --starttime today -X --format=JobName,State,Elapsed | tail -20"
 echo "============================================================"
