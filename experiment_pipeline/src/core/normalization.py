@@ -153,7 +153,7 @@ def apply_normalization(
 
     Args:
         data: DataFrame with timestamp, w1, w2, w3 columns.
-        method: One of 'ma_detrend', 'phase_balance', 'mad_clean', 'combined'.
+        method: One of 'none', 'ma_detrend', 'phase_balance', 'mad_clean', 'combined'.
         params: Method-specific parameters. For 'combined', can contain
                 sub-dicts keyed by method name.
         logger: Optional logger for status messages.
@@ -170,6 +170,9 @@ def apply_normalization(
         'mad_clean': mad_outlier_cleaning,
     }
 
+    if method == 'none':
+        return data.copy()
+
     if method == 'combined':
         # Apply in sequence: MA detrending → phase balancing → MAD cleaning
         if logger:
@@ -181,7 +184,7 @@ def apply_normalization(
 
     if method not in methods:
         raise ValueError(f"Unknown normalization method: '{method}'. "
-                         f"Available: {list(methods.keys()) + ['combined']}")
+                         f"Available: ['none'] + {list(methods.keys()) + ['combined']}")
 
     if logger:
         logger.info(f"  Applying normalization: {method}")

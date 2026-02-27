@@ -74,7 +74,7 @@ def load_house_data_from_folder(house_folder: Path):
 
 def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
                                quiet: bool = False,
-                               normalize_method: str = None,
+                               normalize_method: str = 'none',
                                normalize_params: dict = None) -> dict:
     """Run analysis on a single house."""
     from reports import analyze_single_house, generate_house_report
@@ -99,9 +99,9 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
         return None
     log(f"  Loaded {len(data)} rows")
 
-    # Apply normalization if requested
-    if normalize_method:
-        data = _apply_normalization(data, normalize_method, normalize_params)
+    # Apply normalization (default 'none' = passthrough)
+    data = _apply_normalization(data, normalize_method, normalize_params)
+    if normalize_method != 'none':
         log(f"  Applied normalization: {normalize_method}")
 
     # Run analysis
@@ -138,7 +138,7 @@ def run_single_house_analysis(house_id: str, input_dir: Path, output_dir: Path,
 
 
 def run_all_houses_analysis(input_dir: Path, output_dir: Path,
-                            normalize_method: str = None,
+                            normalize_method: str = 'none',
                             normalize_params: dict = None) -> None:
     """Run analysis on all houses and generate aggregate report."""
     from reports import (
@@ -241,7 +241,7 @@ def run_aggregate_only(output_dir: Path, publish_name: str) -> None:
 
 def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
                      publish_name: str,
-                     normalize_method: str = None,
+                     normalize_method: str = 'none',
                      normalize_params: dict = None) -> None:
     """Run analysis in publish mode: structured output for website.
 
@@ -276,8 +276,7 @@ def run_publish_mode(house_ids: list, input_dir: Path, output_dir: Path,
                 tqdm.write(f"  House {house_id}: no data, skipping")
                 continue
 
-            if normalize_method:
-                data = _apply_normalization(data, normalize_method, normalize_params)
+            data = _apply_normalization(data, normalize_method, normalize_params)
 
             analysis = analyze_single_house(data, house_id)
 
@@ -328,9 +327,9 @@ def main():
                         dest='aggregate_only',
                         help='Skip per-house analysis, generate only aggregate from existing JSONs '
                              '(requires --publish)')
-    parser.add_argument('--normalize', type=str, default=None,
-                        choices=['ma_detrend', 'phase_balance', 'mad_clean', 'combined'],
-                        help='Apply normalization before analysis')
+    parser.add_argument('--normalize', type=str, default='none',
+                        choices=['none', 'ma_detrend', 'phase_balance', 'mad_clean', 'combined'],
+                        help='Normalization method (default: none = raw data)')
     parser.add_argument('--norm-params', type=str, default=None,
                         help='JSON string with normalization parameters '
                              '(e.g. \'{"ma_detrend": {"window_minutes": 60}}\')')
@@ -373,7 +372,7 @@ def main():
         import json
         normalize_params = json.loads(args.norm_params)
 
-    if normalize_method:
+    if normalize_method != 'none':
         print(f"Normalization: {normalize_method}")
 
     if args.publish:
