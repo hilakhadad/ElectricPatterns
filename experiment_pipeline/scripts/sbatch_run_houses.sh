@@ -51,12 +51,17 @@
 # Or manually list fast house IDs, one per line.
 #
 # Usage:
-#     bash scripts/sbatch_run_houses.sh [experiment_name]
+#     bash scripts/sbatch_run_houses.sh [experiment_name] [depend_on_job_id]
 #
 # Examples:
 #     bash scripts/sbatch_run_houses.sh                    # default: exp015_hole_repair
 #     bash scripts/sbatch_run_houses.sh exp016_ma_detrend  # with MA detrending
 #     bash scripts/sbatch_run_houses.sh exp018_mad_clean   # with MAD cleaning
+#     bash scripts/sbatch_run_houses.sh exp017 12345678    # chain after job 12345678
+#
+# When chaining experiments, pass the previous experiment's final job ID
+# as the second argument. All first-tier jobs will wait for it to finish.
+# The script prints LAST_JOB_ID=<id> on its last line for chaining.
 # =============================================================================
 
 # ---- Configuration ----
@@ -65,6 +70,15 @@ DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
+DEPEND_ON="${2:-}"  # Optional: SLURM job ID to wait for before starting
+
+# Build dependency string for first-tier (pre-analysis) jobs
+if [ -n "$DEPEND_ON" ]; then
+    PRE_DEPENDENCY="#SBATCH --dependency=afterany:${DEPEND_ON}"
+    echo "Chaining: all jobs will wait for job ${DEPEND_ON} to finish"
+else
+    PRE_DEPENDENCY=""
+fi
 
 # ---- Map experiment to normalization method ----
 # Used for pre-analysis reports (--normalize flag)
@@ -203,6 +217,7 @@ for house_dir in "$DATA_DIR"/*/; do
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 ##SBATCH --time=00:30:00
+${PRE_DEPENDENCY}
 
 echo "========================================"
 echo "House ${house_id} — PRE-ANALYSIS"
@@ -267,7 +282,7 @@ cd "${PROJECT_ROOT}/experiment_pipeline"
 START_EPOCH=\$(date +%s)
 START_TIME=\$(date '+%Y-%m-%d %H:%M:%S')
 
-python -u scripts/test_single_house.py --house_id ${house_id} --experiment_name ${EXPERIMENT_NAME} --output_path ${EXPERIMENT_OUTPUT} --skip_visualization
+python -u scripts/test_single_house.py --house_id ${house_id} --experiment_name ${EXPERIMENT_NAME} --output_path ${EXPERIMENT_OUTPUT} --skip_visualization --minimal_output
 
 EXIT_CODE=\$?
 
@@ -318,6 +333,17 @@ if [ \$EXIT_CODE -eq 0 ]; then
     REPORT_END=\$(date +%s)
     REPORT_ELAPSED=\$((REPORT_END - REPORT_START))
     echo "  Reports generated in \${REPORT_ELAPSED}s"
+
+    # --- Step 3: Aggressive cleanup (reports already generated) ---
+    echo "Cleaning up pkl files for house ${house_id}..."
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from identification.cleanup import cleanup_after_reports
+from pathlib import Path
+r = cleanup_after_reports(Path('${EXPERIMENT_OUTPUT}'), '${house_id}')
+print(f'  Cleanup: {r[\"dirs_deleted\"]} directories removed')
+"
 fi
 
 echo "End: \$(date)"
@@ -465,6 +491,17 @@ if [ \$EXIT_CODE -eq 0 ]; then
     REPORT_END=\$(date +%s)
     REPORT_ELAPSED=\$((REPORT_END - REPORT_START))
     echo "  Reports generated in \${REPORT_ELAPSED}s"
+
+    # --- Aggressive cleanup (reports already generated) ---
+    echo "Cleaning up pkl files for house ${house_id}..."
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from identification.cleanup import cleanup_after_reports
+from pathlib import Path
+r = cleanup_after_reports(Path('${EXPERIMENT_OUTPUT}'), '${house_id}')
+print(f'  Cleanup: {r[\"dirs_deleted\"]} directories removed')
+"
 fi
 
 echo "End: \$(date)"
@@ -682,6 +719,17 @@ EOF
     echo "Cross-experiment comparison:    ${COMPARE_JOB} (afterany ident_all — runs VERY LAST)"
 fi
 
+# Determine the final job in the chain (for chaining experiments)
+if [ -n "${COMPARE_JOB:-}" ]; then
+    FINAL_JOB=$COMPARE_JOB
+elif [ -n "${IDENT_ALL_JOB:-}" ]; then
+    FINAL_JOB=$IDENT_ALL_JOB
+elif [ ${#ALL_FINAL_JOBS[@]} -gt 0 ]; then
+    FINAL_JOB=${ALL_FINAL_JOBS[-1]}
+else
+    FINAL_JOB=""
+fi
+
 echo ""
 echo "============================================================"
 echo "Output:      ${EXPERIMENT_OUTPUT}"
@@ -692,3 +740,4 @@ echo ""
 echo "Monitor:  squeue -u \$USER"
 echo "Timing:   cat ${TIMING_FILE}  (after jobs complete)"
 echo "============================================================"
+echo "LAST_JOB_ID=${FINAL_JOB}"

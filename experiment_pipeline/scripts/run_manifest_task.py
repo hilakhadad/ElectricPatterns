@@ -96,7 +96,8 @@ def main():
         f'--house_id {house_id} '
         f'--experiment_name {config_name} '
         f'--output_path {experiment_output} '
-        f'--skip_visualization'
+        f'--skip_visualization '
+        f'--minimal_output'
     )
     pipe_exit = os.system(pipe_cmd) >> 8  # Get actual exit code
 
@@ -140,6 +141,17 @@ def main():
         )
 
         print(f"  Reports generated in {time.time() - report_start:.0f}s")
+
+        # ---- Step 4: Aggressive cleanup (pkl files no longer needed) ----
+        print(f"\n--- Cleanup ---")
+        try:
+            os.chdir(str(PROJECT_DIR))
+            sys.path.insert(0, str(SRC_DIR))
+            from identification.cleanup import cleanup_after_reports
+            r = cleanup_after_reports(Path(experiment_output), house_id)
+            print(f"  Cleanup: {r['dirs_deleted']} directories removed")
+        except Exception as e:
+            print(f"  Cleanup warning: {e}")
 
     total = time.time() - pre_start
     print(f"\nTotal task time: {total:.0f}s")
