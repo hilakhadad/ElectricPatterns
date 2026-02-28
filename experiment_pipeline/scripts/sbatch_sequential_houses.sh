@@ -1,21 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# Run all houses with sliding-window job submission.
+# Run all houses with sliding-window job submission. Supports multiple experiments.
 #
-# Manages up to CONCURRENT_HOUSES (default 4) houses simultaneously,
-# filling job slots up to the QOS limit. As jobs finish, new ones fill in.
-#
-# Per house: submit months → when all months done → submit post (M2+reports)
-# Multiple houses overlap: house B's months run while house A's post runs.
-#
-# Avoids QOSMaxSubmitJobPerUserLimit by checking squeue before each submission.
+# Manages up to CONCURRENT_HOUSES houses simultaneously per experiment,
+# filling job slots up to the QOS limit. Experiments run one after another.
 #
 # Usage:
-#     bash scripts/sbatch_sequential_houses.sh [experiment] [max_jobs] [concurrent_houses]
+#     bash scripts/sbatch_sequential_houses.sh "exp1 exp2 exp3" [max_jobs] [concurrent_houses]
 #
 # Examples:
-#     bash scripts/sbatch_sequential_houses.sh                              # defaults
-#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair 100 4     # explicit
+#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair 300 10
+#     bash scripts/sbatch_sequential_houses.sh "exp016_ma_detrend exp017_phase_balance exp018_mad_clean exp019_combined_norm" 300 10
 # =============================================================================
 
 # ---- Configuration ----
@@ -23,34 +18,17 @@ PROJECT_ROOT="/home/hilakese/ElectricPatterns_new"
 DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
-EXPERIMENT_NAME="${1:-exp015_hole_repair}"
+EXPERIMENT_NAMES="${1:-exp015_hole_repair}"
 MAX_JOBS_OVERRIDE="${2:-}"
 CONCURRENT_HOUSES="${3:-4}"
 POLL_INTERVAL=20
 SAFETY_MARGIN=5
 
-# ---- TS set ONCE ----
+# ---- Shared TS ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-EXPERIMENT_OUTPUT="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments/${EXPERIMENT_NAME}_${TIMESTAMP}"
-REPORTS_DIR="${EXPERIMENT_OUTPUT}/reports"
 ALL_EXPERIMENTS_DIR="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments"
 
-mkdir -p "$LOG_DIR" "$EXPERIMENT_OUTPUT" "$REPORTS_DIR"
-
-# Initialize timing CSV
-TIMING_FILE="${EXPERIMENT_OUTPUT}/house_timing.csv"
-echo "house_id,n_months,start_time,end_time,elapsed_seconds,elapsed_human,status" > "$TIMING_FILE"
-
-# Pre-create experiment metadata
-cd "${PROJECT_ROOT}/experiment_pipeline"
-python -c "
-import sys; sys.path.insert(0, 'src')
-from core.config import get_experiment, save_experiment_metadata
-exp = get_experiment('${EXPERIMENT_NAME}')
-save_experiment_metadata(exp, '${EXPERIMENT_OUTPUT}')
-print('Experiment metadata saved to ${EXPERIMENT_OUTPUT}')
-"
-cd "${PROJECT_ROOT}"
+mkdir -p "$LOG_DIR"
 
 # ---- Auto-detect QOS limit ----
 detect_max_submit() {
@@ -108,7 +86,6 @@ count_my_jobs() {
     squeue -u "$USER" -h 2>/dev/null | wc -l
 }
 
-# Count running month jobs for a specific house
 count_house_month_jobs() {
     local house_id="$1"
     squeue -u "$USER" -h -o "%j" 2>/dev/null | grep -c "^mon_${house_id}_" || true
@@ -124,7 +101,7 @@ wait_for_job() {
     done
 }
 
-# Submit a single month job; prints job ID
+# Submit a single month job (uses global EXPERIMENT_NAME, EXPERIMENT_OUTPUT, TIMESTAMP)
 submit_month() {
     local house_id="$1"
     local month_idx="$2"
@@ -144,7 +121,7 @@ submit_month() {
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 
-echo "House ${house_id} — month ${month_idx} / $((n_months - 1))"
+echo "House ${house_id} — month ${month_idx} / $((n_months - 1)) [${EXPERIMENT_NAME}]"
 echo "Start: \$(date)"
 
 module load anaconda
@@ -168,7 +145,7 @@ EOF
     echo "$job_id"
 }
 
-# Submit post job (M2 + reports + cleanup); prints job ID
+# Submit post job (uses global EXPERIMENT_NAME, EXPERIMENT_OUTPUT, REPORTS_DIR, TIMING_FILE, TIMESTAMP)
 submit_post() {
     local house_id="$1"
     local n_months="$2"
@@ -188,7 +165,7 @@ submit_post() {
 #SBATCH --gres=gpu:0
 
 echo "========================================"
-echo "House ${house_id} — M2 + REPORTS"
+echo "House ${house_id} — M2 + REPORTS [${EXPERIMENT_NAME}]"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -260,175 +237,24 @@ EOF
     echo "$job_id"
 }
 
-# ===========================================================================
-echo "============================================================"
-echo "SLIDING WINDOW — ${CONCURRENT_HOUSES} houses, fill to limit"
-echo "============================================================"
-echo "Experiment:       $EXPERIMENT_NAME"
-echo "Timestamp:        $TIMESTAMP"
-echo "Output dir:       $EXPERIMENT_OUTPUT"
-echo "QOS job limit:    $MAX_JOBS"
-echo "Effective limit:  $EFFECTIVE_LIMIT (after ${SAFETY_MARGIN} reserved)"
-echo "Concurrent houses: $CONCURRENT_HOUSES"
-echo "Poll interval:    ${POLL_INTERVAL}s"
-echo ""
+# Submit aggregate jobs for a single experiment (uses globals)
+submit_aggregates() {
+    echo "Submitting aggregate jobs for ${EXPERIMENT_NAME}..."
 
-# Collect all house IDs
-ALL_HOUSE_IDS=()
-for house_dir in "$DATA_DIR"/*/; do
-    house_id=$(basename "$house_dir")
-    [[ "$house_id" =~ ^[0-9]+$ ]] || continue
-    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
-    [ "$N_MONTHS" -eq 0 ] && continue
-    ALL_HOUSE_IDS+=("$house_id")
-done
-
-TOTAL_HOUSES=${#ALL_HOUSE_IDS[@]}
-echo "Found ${TOTAL_HOUSES} houses to process"
-echo ""
-
-# ---- Per-house state (associative arrays) ----
-declare -A H_TOTAL       # total months
-declare -A H_NEXT        # next month index to submit
-declare -A H_POST        # post job ID ("" = not submitted, "done" = finished)
-
-# Queue of houses not yet started
-QUEUE_IDX=0              # index into ALL_HOUSE_IDS
-ACTIVE_HOUSES=()         # house IDs currently being processed
-COMPLETED_COUNT=0
-FAILED_HOUSES=()
-
-# ---- Main loop ----
-while [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; do
-
-    # --- 1. Fill active house pool ---
-    while [ ${#ACTIVE_HOUSES[@]} -lt "$CONCURRENT_HOUSES" ] && [ "$QUEUE_IDX" -lt "$TOTAL_HOUSES" ]; do
-        hid="${ALL_HOUSE_IDS[$QUEUE_IDX]}"
-        house_dir="${DATA_DIR}/${hid}"
-        QUEUE_IDX=$((QUEUE_IDX + 1))
-
-        H_TOTAL[$hid]=$(count_unique_months "$house_dir" "$hid")
-        H_NEXT[$hid]=0
-        H_POST[$hid]=""
-
-        ACTIVE_HOUSES+=("$hid")
-        echo "[$(date '+%H:%M:%S')] Started house ${hid} (${H_TOTAL[$hid]} months) — [${COMPLETED_COUNT}/${TOTAL_HOUSES} done, ${#ACTIVE_HOUSES[@]} active]"
-    done
-
-    # --- 2. Submit months — fill available slots across active houses ---
-    CURRENT_JOBS=$(count_my_jobs)
-    AVAILABLE=$((EFFECTIVE_LIMIT - CURRENT_JOBS))
-
-    if [ "$AVAILABLE" -gt 0 ]; then
-        SUBMITTED_TOTAL=0
-
-        for hid in "${ACTIVE_HOUSES[@]}"; do
-            [ "$AVAILABLE" -le 0 ] && break
-            # Skip houses that finished submitting all months
-            [ "${H_NEXT[$hid]}" -ge "${H_TOTAL[$hid]}" ] && continue
-
-            SUBMITTED_HOUSE=0
-            while [ "$AVAILABLE" -gt 0 ] && [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ]; do
-                JOB_ID=$(submit_month "$hid" "${H_NEXT[$hid]}" "${H_TOTAL[$hid]}")
-
-                if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
-                    echo "  ERROR submitting month ${H_NEXT[$hid]} for house ${hid}: ${JOB_ID}"
-                    # Mark as all submitted to skip further attempts
-                    H_NEXT[$hid]=${H_TOTAL[$hid]}
-                    FAILED_HOUSES+=("$hid")
-                    break
-                fi
-
-                H_NEXT[$hid]=$((${H_NEXT[$hid]} + 1))
-                AVAILABLE=$((AVAILABLE - 1))
-                SUBMITTED_HOUSE=$((SUBMITTED_HOUSE + 1))
-                SUBMITTED_TOTAL=$((SUBMITTED_TOTAL + 1))
-            done
-
-            if [ "$SUBMITTED_HOUSE" -gt 0 ]; then
-                echo "  House ${hid}: submitted ${SUBMITTED_HOUSE} months (${H_NEXT[$hid]}/${H_TOTAL[$hid]})"
-            fi
-        done
-    fi
-
-    # --- 3. Check for houses with all months done → submit post job ---
-    for hid in "${ACTIVE_HOUSES[@]}"; do
-        # Skip if months not all submitted yet
-        [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ] && continue
-        # Skip if post already submitted
-        [ -n "${H_POST[$hid]}" ] && continue
-
-        # Check if any month jobs still running for this house
-        RUNNING=$(count_house_month_jobs "$hid")
-        if [ "$RUNNING" -eq 0 ]; then
-            POST_ID=$(submit_post "$hid" "${H_TOTAL[$hid]}")
-            if [[ "$POST_ID" =~ ^[0-9]+$ ]]; then
-                H_POST[$hid]="$POST_ID"
-                echo "[$(date '+%H:%M:%S')] House ${hid}: all months done, post job ${POST_ID}"
-            else
-                echo "  ERROR submitting post for house ${hid}: ${POST_ID}"
-                H_POST[$hid]="done"
-                FAILED_HOUSES+=("$hid")
-            fi
-        fi
-    done
-
-    # --- 4. Check for completed houses (post job finished) ---
-    NEW_ACTIVE=()
-    for hid in "${ACTIVE_HOUSES[@]}"; do
-        if [ "${H_POST[$hid]}" = "done" ]; then
-            # Already marked done (error case)
-            COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
-            echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
-            continue
-        fi
-
-        if [[ "${H_POST[$hid]}" =~ ^[0-9]+$ ]]; then
-            status=$(squeue -j "${H_POST[$hid]}" -h -o "%T" 2>/dev/null)
-            if [ -z "$status" ]; then
-                COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
-                echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
-                continue
-            fi
-        fi
-
-        NEW_ACTIVE+=("$hid")
-    done
-    ACTIVE_HOUSES=("${NEW_ACTIVE[@]}")
-
-    # --- 5. Sleep before next poll ---
-    if [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; then
-        sleep "$POLL_INTERVAL"
-    fi
-done
-
-echo ""
-echo "============================================================"
-echo "All ${TOTAL_HOUSES} houses processed"
-if [ ${#FAILED_HOUSES[@]} -gt 0 ]; then
-    echo "FAILED houses: ${FAILED_HOUSES[*]}"
-fi
-echo "============================================================"
-echo ""
-
-# =============================================================
-# Aggregates — after ALL houses
-# =============================================================
-echo "Submitting aggregate jobs..."
-
-AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
-cat > "$AGG_SEG_SCRIPT" << EOF
+    local AGG_SEG_SCRIPT
+    AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
+    cat > "$AGG_SEG_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=agg_seg
-#SBATCH --output=${LOG_DIR}/agg_seg_${TIMESTAMP}_%j.out
-#SBATCH --error=${LOG_DIR}/agg_seg_${TIMESTAMP}_%j.err
+#SBATCH --job-name=agg_seg_${EXP_SHORT}
+#SBATCH --output=${LOG_DIR}/agg_seg_${TIMESTAMP}_${EXP_SHORT}_%j.out
+#SBATCH --error=${LOG_DIR}/agg_seg_${TIMESTAMP}_${EXP_SHORT}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=100G
 #SBATCH --gres=gpu:0
 
-echo "AGGREGATE: Segregation — \$(date)"
+echo "AGGREGATE: Segregation [${EXPERIMENT_NAME}] — \$(date)"
 module load anaconda
 source activate nilm_new
 
@@ -441,16 +267,18 @@ python scripts/run_dynamic_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
-rm -f "$AGG_SEG_SCRIPT"
-echo "Aggregate segregation:       ${AGG_SEG_JOB}"
+    local AGG_SEG_JOB
+    AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
+    rm -f "$AGG_SEG_SCRIPT"
+    echo "  Aggregate segregation:       ${AGG_SEG_JOB}"
 
-IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
-cat > "$IDENT_ALL_SCRIPT" << EOF
+    local IDENT_ALL_SCRIPT
+    IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
+    cat > "$IDENT_ALL_SCRIPT" << EOF
 #!/bin/bash
-#SBATCH --job-name=ident_all
-#SBATCH --output=${LOG_DIR}/ident_all_${TIMESTAMP}_%j.out
-#SBATCH --error=${LOG_DIR}/ident_all_${TIMESTAMP}_%j.err
+#SBATCH --job-name=ident_${EXP_SHORT}
+#SBATCH --output=${LOG_DIR}/ident_all_${TIMESTAMP}_${EXP_SHORT}_%j.out
+#SBATCH --error=${LOG_DIR}/ident_all_${TIMESTAMP}_${EXP_SHORT}_%j.err
 #SBATCH --partition=main
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -458,7 +286,7 @@ cat > "$IDENT_ALL_SCRIPT" << EOF
 #SBATCH --gres=gpu:0
 #SBATCH --dependency=afterany:${AGG_SEG_JOB}
 
-echo "IDENTIFICATION ALL HOUSES — \$(date)"
+echo "IDENTIFICATION ALL HOUSES [${EXPERIMENT_NAME}] — \$(date)"
 module load anaconda
 source activate nilm_new
 
@@ -471,12 +299,204 @@ python scripts/run_identification_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
-rm -f "$IDENT_ALL_SCRIPT"
-echo "Identification ALL:          ${IDENT_ALL_JOB}"
+    local IDENT_ALL_JOB
+    IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
+    rm -f "$IDENT_ALL_SCRIPT"
+    echo "  Identification ALL:          ${IDENT_ALL_JOB}"
+}
 
-COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
-cat > "$COMPARE_SCRIPT" << EOF
+# ===========================================================================
+# Collect all house IDs (once, shared across experiments)
+# ===========================================================================
+ALL_HOUSE_IDS=()
+for house_dir in "$DATA_DIR"/*/; do
+    house_id=$(basename "$house_dir")
+    [[ "$house_id" =~ ^[0-9]+$ ]] || continue
+    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
+    [ "$N_MONTHS" -eq 0 ] && continue
+    ALL_HOUSE_IDS+=("$house_id")
+done
+TOTAL_HOUSES=${#ALL_HOUSE_IDS[@]}
+
+# Count experiments
+EXP_ARRAY=($EXPERIMENT_NAMES)
+NUM_EXPERIMENTS=${#EXP_ARRAY[@]}
+
+echo "============================================================"
+echo "SLIDING WINDOW — ${NUM_EXPERIMENTS} experiment(s), ${CONCURRENT_HOUSES} houses, fill to limit"
+echo "============================================================"
+echo "Experiments:      ${EXPERIMENT_NAMES}"
+echo "Timestamp:        $TIMESTAMP"
+echo "Houses:           $TOTAL_HOUSES"
+echo "QOS job limit:    $MAX_JOBS"
+echo "Effective limit:  $EFFECTIVE_LIMIT (after ${SAFETY_MARGIN} reserved)"
+echo "Concurrent houses: $CONCURRENT_HOUSES"
+echo "Poll interval:    ${POLL_INTERVAL}s"
+echo ""
+
+# ===========================================================================
+# Outer loop: one experiment at a time
+# ===========================================================================
+EXP_IDX=0
+
+for EXPERIMENT_NAME in $EXPERIMENT_NAMES; do
+    EXP_IDX=$((EXP_IDX + 1))
+    # Short name for job names (e.g., "exp016" from "exp016_ma_detrend")
+    EXP_SHORT=$(echo "$EXPERIMENT_NAME" | grep -o '^exp[0-9]*')
+
+    EXPERIMENT_OUTPUT="${ALL_EXPERIMENTS_DIR}/${EXPERIMENT_NAME}_${TIMESTAMP}"
+    REPORTS_DIR="${EXPERIMENT_OUTPUT}/reports"
+    TIMING_FILE="${EXPERIMENT_OUTPUT}/house_timing.csv"
+
+    mkdir -p "$EXPERIMENT_OUTPUT" "$REPORTS_DIR"
+    echo "house_id,n_months,start_time,end_time,elapsed_seconds,elapsed_human,status" > "$TIMING_FILE"
+
+    # Save experiment metadata
+    cd "${PROJECT_ROOT}/experiment_pipeline"
+    python -c "
+import sys; sys.path.insert(0, 'src')
+from core.config import get_experiment, save_experiment_metadata
+exp = get_experiment('${EXPERIMENT_NAME}')
+save_experiment_metadata(exp, '${EXPERIMENT_OUTPUT}')
+print('Metadata saved for ${EXPERIMENT_NAME}')
+"
+    cd "${PROJECT_ROOT}"
+
+    echo ""
+    echo "============================================================"
+    echo "[Experiment ${EXP_IDX}/${NUM_EXPERIMENTS}] ${EXPERIMENT_NAME}"
+    echo "Output: ${EXPERIMENT_OUTPUT}"
+    echo "============================================================"
+    echo ""
+
+    # ---- Per-house state ----
+    declare -A H_TOTAL
+    declare -A H_NEXT
+    declare -A H_POST
+
+    QUEUE_IDX=0
+    ACTIVE_HOUSES=()
+    COMPLETED_COUNT=0
+    FAILED_HOUSES=()
+
+    # ---- Main sliding-window loop ----
+    while [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; do
+
+        # --- 1. Fill active house pool ---
+        while [ ${#ACTIVE_HOUSES[@]} -lt "$CONCURRENT_HOUSES" ] && [ "$QUEUE_IDX" -lt "$TOTAL_HOUSES" ]; do
+            hid="${ALL_HOUSE_IDS[$QUEUE_IDX]}"
+            house_dir="${DATA_DIR}/${hid}"
+            QUEUE_IDX=$((QUEUE_IDX + 1))
+
+            H_TOTAL[$hid]=$(count_unique_months "$house_dir" "$hid")
+            H_NEXT[$hid]=0
+            H_POST[$hid]=""
+
+            ACTIVE_HOUSES+=("$hid")
+            echo "[$(date '+%H:%M:%S')] Started house ${hid} (${H_TOTAL[$hid]} months) — [${COMPLETED_COUNT}/${TOTAL_HOUSES} done, ${#ACTIVE_HOUSES[@]} active]"
+        done
+
+        # --- 2. Submit months — fill available slots ---
+        CURRENT_JOBS=$(count_my_jobs)
+        AVAILABLE=$((EFFECTIVE_LIMIT - CURRENT_JOBS))
+
+        if [ "$AVAILABLE" -gt 0 ]; then
+            for hid in "${ACTIVE_HOUSES[@]}"; do
+                [ "$AVAILABLE" -le 0 ] && break
+                [ "${H_NEXT[$hid]}" -ge "${H_TOTAL[$hid]}" ] && continue
+
+                SUBMITTED_HOUSE=0
+                while [ "$AVAILABLE" -gt 0 ] && [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ]; do
+                    JOB_ID=$(submit_month "$hid" "${H_NEXT[$hid]}" "${H_TOTAL[$hid]}")
+
+                    if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
+                        echo "  ERROR submitting month ${H_NEXT[$hid]} for house ${hid}: ${JOB_ID}"
+                        H_NEXT[$hid]=${H_TOTAL[$hid]}
+                        FAILED_HOUSES+=("$hid")
+                        break
+                    fi
+
+                    H_NEXT[$hid]=$((${H_NEXT[$hid]} + 1))
+                    AVAILABLE=$((AVAILABLE - 1))
+                    SUBMITTED_HOUSE=$((SUBMITTED_HOUSE + 1))
+                done
+
+                if [ "$SUBMITTED_HOUSE" -gt 0 ]; then
+                    echo "  House ${hid}: submitted ${SUBMITTED_HOUSE} months (${H_NEXT[$hid]}/${H_TOTAL[$hid]})"
+                fi
+            done
+        fi
+
+        # --- 3. Check for houses with all months done → submit post job ---
+        for hid in "${ACTIVE_HOUSES[@]}"; do
+            [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ] && continue
+            [ -n "${H_POST[$hid]}" ] && continue
+
+            RUNNING=$(count_house_month_jobs "$hid")
+            if [ "$RUNNING" -eq 0 ]; then
+                POST_ID=$(submit_post "$hid" "${H_TOTAL[$hid]}")
+                if [[ "$POST_ID" =~ ^[0-9]+$ ]]; then
+                    H_POST[$hid]="$POST_ID"
+                    echo "[$(date '+%H:%M:%S')] House ${hid}: all months done, post job ${POST_ID}"
+                else
+                    echo "  ERROR submitting post for house ${hid}: ${POST_ID}"
+                    H_POST[$hid]="done"
+                    FAILED_HOUSES+=("$hid")
+                fi
+            fi
+        done
+
+        # --- 4. Check for completed houses ---
+        NEW_ACTIVE=()
+        for hid in "${ACTIVE_HOUSES[@]}"; do
+            if [ "${H_POST[$hid]}" = "done" ]; then
+                COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
+                echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
+                continue
+            fi
+
+            if [[ "${H_POST[$hid]}" =~ ^[0-9]+$ ]]; then
+                status=$(squeue -j "${H_POST[$hid]}" -h -o "%T" 2>/dev/null)
+                if [ -z "$status" ]; then
+                    COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
+                    echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
+                    continue
+                fi
+            fi
+
+            NEW_ACTIVE+=("$hid")
+        done
+        ACTIVE_HOUSES=("${NEW_ACTIVE[@]}")
+
+        # --- 5. Sleep ---
+        if [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; then
+            sleep "$POLL_INTERVAL"
+        fi
+    done
+
+    echo ""
+    echo "[${EXPERIMENT_NAME}] All ${TOTAL_HOUSES} houses processed"
+    if [ ${#FAILED_HOUSES[@]} -gt 0 ]; then
+        echo "[${EXPERIMENT_NAME}] FAILED houses: ${FAILED_HOUSES[*]}"
+    fi
+
+    # Submit aggregate jobs for this experiment
+    submit_aggregates
+
+    # Clean up associative arrays for next experiment
+    unset H_TOTAL H_NEXT H_POST
+
+    echo ""
+done
+
+# =============================================================
+# Cross-experiment comparison (once, after all experiments)
+# =============================================================
+if [ "$NUM_EXPERIMENTS" -gt 1 ]; then
+    echo "Submitting cross-experiment comparison..."
+
+    COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
+    cat > "$COMPARE_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=compare
 #SBATCH --output=${LOG_DIR}/compare_${TIMESTAMP}_%j.out
@@ -486,7 +506,6 @@ cat > "$COMPARE_SCRIPT" << EOF
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
-#SBATCH --dependency=afterany:${IDENT_ALL_JOB}
 
 echo "CROSS-EXPERIMENT COMPARISON — \$(date)"
 module load anaconda
@@ -496,19 +515,24 @@ cd "${PROJECT_ROOT}/experiment_pipeline"
 python scripts/compare_experiments.py \
     --scan \
     --scan-dir ${ALL_EXPERIMENTS_DIR} \
-    --output-dir ${REPORTS_DIR}/comparison \
+    --output-dir ${ALL_EXPERIMENTS_DIR}/comparison_${TIMESTAMP} \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
-rm -f "$COMPARE_SCRIPT"
-echo "Cross-experiment comparison:  ${COMPARE_JOB}"
+    COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
+    rm -f "$COMPARE_SCRIPT"
+    echo "Cross-experiment comparison:  ${COMPARE_JOB}"
+fi
 
 echo ""
 echo "============================================================"
-echo "Output:   ${EXPERIMENT_OUTPUT}"
-echo "Reports:  ${REPORTS_DIR}/"
-echo "Timing:   ${TIMING_FILE}"
+echo "ALL DONE"
+echo "Experiments: ${EXPERIMENT_NAMES}"
+echo "Timestamp:   ${TIMESTAMP}"
+echo "Output dirs:"
+for exp in $EXPERIMENT_NAMES; do
+    echo "  ${ALL_EXPERIMENTS_DIR}/${exp}_${TIMESTAMP}/"
+done
 echo ""
 echo "Monitor:  squeue -u \$USER"
 echo "============================================================"
