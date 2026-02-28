@@ -301,11 +301,19 @@ def _merge_consecutive_events(events: pd.DataFrame, opposite_events: pd.DataFram
         next_duration = (next_event['end'] - next_event['start']).total_seconds() / 60
         both_instantaneous = (current_duration == 0) and (next_duration == 0)
 
+        # Check magnitude similarity — events from different devices have different
+        # magnitudes (e.g., -977W and -1661W). Only merge if ratio <= 1.5.
+        cur_mag = abs(current['magnitude'])
+        nxt_mag = abs(next_event['magnitude'])
+        mag_ratio = max(cur_mag, nxt_mag) / max(min(cur_mag, nxt_mag), 1)
+        magnitudes_similar = mag_ratio <= 1.5
+
         # Merge ONLY if:
         # 1. Both events are instantaneous (duration 0)
         # 2. Gap is at most 1 minute (truly consecutive)
         # 3. No opposite event between them
-        if both_instantaneous and gap_minutes <= 1 and not has_opposite_between:
+        # 4. Magnitudes are similar (ratio <= 1.5) — prevents merging different devices
+        if both_instantaneous and gap_minutes <= 1 and not has_opposite_between and magnitudes_similar:
             # Merge: extend end time, sum magnitudes
             current['end'] = next_event['end']
             current['magnitude'] = current['magnitude'] + next_event['magnitude']

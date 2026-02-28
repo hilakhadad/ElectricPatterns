@@ -264,11 +264,11 @@ def _find_simultaneous_long_events(
 ) -> List[Tuple[int, pd.Series]]:
     """Find long events on OTHER phases that overlap with the reference event.
 
-    Overlap criteria (per user requirements):
+    Overlap criteria:
         - Time overlap with +/-10% of event duration tolerance
         - Similar duration (max ratio 2:1)
         - Duration >= BOILER_MIN_DURATION
-        - Magnitude doesn't matter -- only pattern/character matters
+        - Similar magnitude (max ratio 2:1) — prevents grouping different devices
     """
     ref_phase = reference['phase']
     ref_start = pd.Timestamp(reference['on_start'])
@@ -299,6 +299,14 @@ def _find_simultaneous_long_events(
             if ref_duration > 0 and other_duration > 0:
                 ratio = max(ref_duration, other_duration) / min(ref_duration, other_duration)
                 if ratio > THREE_PHASE_MAX_DURATION_RATIO:
+                    continue
+
+            # Magnitude similarity: prevent grouping devices with very different power
+            ref_mag = abs(reference.get('on_magnitude', 0) or 0)
+            other_mag = abs(other_row.get('on_magnitude', 0) or 0)
+            if ref_mag > 0 and other_mag > 0:
+                mag_ratio = max(ref_mag, other_mag) / min(ref_mag, other_mag)
+                if mag_ratio > 2.0:
                     continue
 
             # Time overlap check with tolerance

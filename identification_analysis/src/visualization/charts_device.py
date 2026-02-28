@@ -870,85 +870,59 @@ def _extract_chart_window(summarized_data, on_start_iso: str, off_end_iso: str,
                 for v in window[remain_col]
             ]
 
-    # Add match rectangles for each phase (individual match shapes)
-    if all_match_intervals:
-        # Build lookup dicts from session events for classification and profiles
-        ses_keys = set()
-        ses_profiles = {}  # (phase, normalized_start) -> power_profile
+    # Compute per-minute segregation breakdown for accurate visualization.
+    # Uses actual data (original - remaining) to guarantee visual correctness:
+    # Original = Remaining + Session_match_1 + Session_match_2 + ... + Other at every minute.
+    # Each session match is a separate stacked layer so overlapping devices are visible.
+    chart_ts_list = window['timestamp'].dt.strftime('%Y-%m-%d %H:%M').tolist()
+    ts_to_idx = {t: i for i, t in enumerate(chart_ts_list)}
+
+    def _safe_int(v):
+        if v is None or (isinstance(v, float) and v != v):
+            return 0
+        return int(round(v))
+
+    for phase in ['w1', 'w2', 'w3']:
+        orig_vals = result.get(f'o_{phase}', [])
+        rem_vals = result.get(f'r_{phase}', [])
+        if not orig_vals or not rem_vals:
+            continue
+
+        n = len(orig_vals)
+
+        # Build per-match arrays (one per constituent event on this phase)
+        ses_match_arrays = []
         for ce in (constituent_events or []):
-            ce_start = ce.get('on_start', '')
-            ce_phase = ce.get('phase', '')
-            if ce_start and ce_phase:
-                try:
-                    normalized = pd.Timestamp(ce_start).strftime('%Y-%m-%dT%H:%M')
-                    ses_keys.add((ce_phase, normalized))
-                    # Store power profile if available
-                    pp = ce.get('power_profile')
-                    if pp and pp.get('values'):
-                        ses_profiles[(ce_phase, normalized)] = pp
-                except (ValueError, TypeError):
-                    pass
-
-        min_duration_threshold = 3  # spike threshold in minutes
-        win_start = start - margin
-        win_end = end + margin
-
-        for phase in ['w1', 'w2', 'w3']:
-            phase_matches = all_match_intervals.get(phase, [])
-            if not phase_matches:
+            if ce.get('phase') != phase:
                 continue
-            rects = []
-            for interval in phase_matches:
-                # Support both old 4-tuple and new 6-tuple format
-                if len(interval) >= 6:
-                    m_start, m_end, m_mag, m_dur, m_on_end, m_off_start = interval[:6]
-                else:
-                    m_start, m_end, m_mag, m_dur = interval[:4]
-                    m_on_end, m_off_start = m_start, m_end
-                try:
-                    ts_s = pd.Timestamp(m_start)
-                    ts_e = pd.Timestamp(m_end)
-                except (ValueError, TypeError):
-                    continue
-                # Check if within chart window
-                if ts_e < win_start or ts_s > win_end:
-                    continue
-                # Classify: session match, spike, or other device
-                normalized_start = ts_s.strftime('%Y-%m-%dT%H:%M')
-                if (phase, normalized_start) in ses_keys:
-                    cat = 'ses'
-                elif m_dur < min_duration_threshold:
-                    cat = 'spk'
-                else:
-                    cat = 'oth'
-                rect = {
-                    's': ts_s.strftime('%Y-%m-%d %H:%M'),
-                    'e': ts_e.strftime('%Y-%m-%d %H:%M'),
-                    'm': m_mag,
-                    'c': cat,
-                }
-                # Add per-minute profile if available (session events)
-                pp = ses_profiles.get((phase, normalized_start))
-                if pp:
-                    # Normalize timestamps to chart format
+            pp = ce.get('power_profile')
+            if pp and pp.get('values') and pp.get('timestamps'):
+                match_vals = [0.0] * n
+                for t, v in zip(pp['timestamps'], pp['values']):
                     try:
-                        rect['pt'] = [
-                            pd.Timestamp(t).strftime('%Y-%m-%d %H:%M')
-                            for t in pp['timestamps']
-                        ]
+                        t_fmt = pd.Timestamp(t).strftime('%Y-%m-%d %H:%M')
                     except (ValueError, TypeError):
-                        rect['pt'] = pp['timestamps']
-                    rect['pp'] = pp['values']
-                else:
-                    # Add on_end/off_start for trapezoidal fallback
-                    try:
-                        rect['oe'] = pd.Timestamp(m_on_end).strftime('%Y-%m-%d %H:%M')
-                        rect['os'] = pd.Timestamp(m_off_start).strftime('%Y-%m-%d %H:%M')
-                    except (ValueError, TypeError):
-                        pass
-                rects.append(rect)
-            if rects:
-                result[f'mt_{phase}'] = rects
+                        continue
+                    idx = ts_to_idx.get(t_fmt)
+                    if idx is not None:
+                        match_vals[idx] += v
+                ses_match_arrays.append([_safe_int(v) for v in match_vals])
+
+        # Total session contribution = sum of all match arrays
+        total_ses = [0] * n
+        for match_arr in ses_match_arrays:
+            for i in range(n):
+                total_ses[i] += match_arr[i]
+
+        # Other = total_extracted - session, clipped to 0
+        oth_vals = [
+            max(0, _safe_int(o) - _safe_int(r) - total_ses[i])
+            for i, (o, r) in enumerate(zip(orig_vals, rem_vals))
+        ]
+
+        # Store as list of match arrays (each is a separate stacked layer)
+        result[f'ses_{phase}'] = ses_match_arrays
+        result[f'oth_{phase}'] = oth_vals
 
     return result
 
@@ -1062,57 +1036,39 @@ def _build_activation_charts_script(all_chart_data: dict) -> str:
                 title:{{text:ph.toUpperCase()+' — Remaining',font:{{size:12}}}}
             }}), cfg);
 
-            // Row 3: Segregated — individual match rectangles as toself polygons
+            // Row 3: Segregated — stacked area charts from actual data
+            // Uses original - remaining for guaranteed visual correctness.
+            // Each session match is a separate layer so stacked devices are visible.
             var segTraces = [];
-            var matchRects = d['mt_'+ph]||[];
-            var sesX=[],sesY=[],spkX=[],spkY=[],othX=[],othY=[];
-            matchRects.forEach(function(r) {{
-                var bx,by;
-                if (r.c==='ses') {{ bx=sesX; by=sesY; }}
-                else if (r.c==='spk') {{ bx=spkX; by=spkY; }}
-                else {{ bx=othX; by=othY; }}
+            var othVals = d['oth_'+ph]||[];
+            var sesMatchArrays = d['ses_'+ph]||[];  // Array of arrays (one per match)
+            var hasData = othVals.length>0 || sesMatchArrays.length>0;
 
-                if (r.pp && r.pt && r.pp.length>0) {{
-                    // Per-minute profile: draw actual extraction shape
-                    for (var i=0;i<r.pt.length;i++) {{
-                        bx.push(r.pt[i]);
-                        by.push(r.pp[i]);
-                    }}
-                    // Close polygon back to zero
-                    bx.push(r.pt[r.pt.length-1],r.pt[0],null);
-                    by.push(0,0,null);
-                }} else if (r.oe && r.os && r.oe!==r.s && r.os!==r.e) {{
-                    // Trapezoidal fallback (ramp up → stable → ramp down)
-                    bx.push(r.s,r.oe,r.os,r.e,r.s,null);
-                    by.push(0,r.m,r.m,0,0,null);
-                }} else {{
-                    // Flat rectangle fallback
-                    bx.push(r.s,r.s,r.e,r.e,r.s,null);
-                    by.push(0,r.m,r.m,0,0,null);
-                }}
-            }});
-
-            if (sesX.length) segTraces.push({{
-                x:sesX,y:sesY,type:'scatter',mode:'lines',
-                fill:'toself',fillcolor:_hexRgba(d.dc,0.55),
-                line:{{color:d.dc,width:1}},
-                name:'This session',legendgroup:'ses',showlegend:true,
-                hovertemplate:'Session: %{{y:.0f}}W<extra></extra>'
-            }});
-            if (spkX.length) segTraces.push({{
-                x:spkX,y:spkY,type:'scatter',mode:'lines',
-                fill:'toself',fillcolor:'rgba(255,165,0,0.4)',
-                line:{{color:'#e67e22',width:1}},
-                name:'Filtered (<2 min)',legendgroup:'spk',showlegend:true,
-                hovertemplate:'Spike: %{{y:.0f}}W<extra></extra>'
-            }});
-            if (othX.length) segTraces.push({{
-                x:othX,y:othY,type:'scatter',mode:'lines',
-                fill:'toself',fillcolor:'rgba(176,176,176,0.4)',
-                line:{{color:'#aaa',width:1}},
-                name:'Other devices',legendgroup:'oth',showlegend:true,
-                hovertemplate:'Other: %{{y:.0f}}W<extra></extra>'
-            }});
+            if (hasData) {{
+                // Bottom layer: Other devices (gray)
+                segTraces.push({{
+                    x:ts,y:othVals.length ? othVals : ts.map(function(){{return 0;}}),
+                    type:'scatter',mode:'lines',stackgroup:'seg',
+                    fillcolor:'rgba(176,176,176,0.4)',
+                    line:{{color:'#aaa',width:0.5}},
+                    name:'Other devices',legendgroup:'oth',showlegend:true,
+                    hovertemplate:'Other: %{{y:.0f}}W<extra></extra>'
+                }});
+                // Each session match as a separate stacked layer
+                var opacities = [0.55, 0.40, 0.30, 0.25];
+                sesMatchArrays.forEach(function(matchVals, i) {{
+                    var a = opacities[Math.min(i, opacities.length-1)];
+                    segTraces.push({{
+                        x:ts,y:matchVals,
+                        type:'scatter',mode:'lines',stackgroup:'seg',
+                        fillcolor:_hexRgba(d.dc,a),
+                        line:{{color:d.dc,width:1}},
+                        name:i===0?'This session':'',
+                        legendgroup:'ses',showlegend:i===0,
+                        hovertemplate:'Match '+(i+1)+': %{{y:.0f}}W<extra></extra>'
+                    }});
+                }});
+            }}
             if (!segTraces.length) segTraces.push({{
                 x:ts,y:ts.map(function(){{return null;}}),
                 type:'scatter',mode:'lines',line:{{width:0}},

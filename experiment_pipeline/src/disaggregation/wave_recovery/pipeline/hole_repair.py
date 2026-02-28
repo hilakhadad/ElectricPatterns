@@ -189,7 +189,22 @@ def _repair_wave_holes(
             logger.info(f"    Extracted too little power ({total_extracted:.0f}W-min), skipping")
             continue
 
-        # Step 5: Update remaining -- replace with wave-extracted version
+        # Step 5: Post-validation — did the wave extraction actually improve remaining?
+        # Compare remaining stability before (rectangle) vs after (wave).
+        # If the wave created a triangle that made remaining WORSE, cancel the repair.
+        old_remaining_region = remaining[full_event_mask]
+        new_remaining_event = new_remaining_region[full_event_mask]
+        old_std = float(old_remaining_region.std()) if len(old_remaining_region) > 1 else 0.0
+        new_std = float(new_remaining_event.std()) if len(new_remaining_event) > 1 else 0.0
+
+        if new_std >= old_std:
+            logger.info(
+                f"    Wave repair cancelled for {match['on_event_id']} on {phase}: "
+                f"remaining not improved (old_std={old_std:.0f}W, new_std={new_std:.0f}W)"
+            )
+            continue
+
+        # Step 6: Update remaining -- replace with wave-extracted version
         updated_remaining[phase].loc[full_event_mask] = new_remaining_region.loc[full_event_mask]
 
         # Create wave match record

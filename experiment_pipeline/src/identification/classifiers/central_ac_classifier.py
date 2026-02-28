@@ -81,6 +81,12 @@ def _check_central_ac_overlap(
                             break
 
                 if len(synced) >= 2:
+                    # Magnitude balance: reject if phase magnitudes differ by more than 2x
+                    phase_mags = [s.avg_magnitude for s in synced.values()]
+                    mag_ratio = max(phase_mags) / max(min(phase_mags), 1)
+                    if mag_ratio > 2.0:
+                        continue
+
                     for s in synced.values():
                         used_session_ids.add(s.session_id)
 
