@@ -43,7 +43,7 @@ def detect_gradual_events(
     window_minutes: int = 3,
     partial_factor: float = 0.8,
     max_factor: float = 3.0,
-    max_duration_minutes: int = 3,
+    max_duration_minutes: int = 5,
     progressive_search: bool = False,
     phase: str = None,
     logger=None,
@@ -299,9 +299,9 @@ def _get_adjacent_unused_indices(
         if not adjacent:
             adjacent.append(idx)
         else:
-            # Check if within 2 minutes of last added
+            # Check if within 5 minutes of last added
             time_diff = (timestamps[idx] - timestamps[adjacent[-1]]) / np.timedelta64(1, 'm')
-            if time_diff <= 2:
+            if time_diff <= 5:
                 adjacent.append(idx)
             else:
                 break
