@@ -241,7 +241,7 @@ python scripts/run_analysis.py \
 echo "Pre-analysis done for house ${house_id} (norm=${NORM_METHOD}): \$(date)"
 EOF
 
-    PRE_JOB_ID=$(sbatch "$PRE_SCRIPT" | awk '{print $4}')
+    PRE_JOB_ID=$(sbatch "$PRE_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$PRE_SCRIPT"
     ALL_PRE_JOBS+=($PRE_JOB_ID)
 
@@ -350,7 +350,7 @@ fi
 echo "End: \$(date)"
 EOF
 
-        JOB_ID=$(sbatch "$JOB_SCRIPT" | awk '{print $4}')
+        JOB_ID=$(sbatch "$JOB_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
         rm -f "$JOB_SCRIPT"
 
         ALL_FINAL_JOBS+=($JOB_ID)
@@ -404,7 +404,7 @@ python -u scripts/run_single_month.py \
 echo "Month \$SLURM_ARRAY_TASK_ID done: \$(date)"
 EOF
 
-        ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" | awk '{print $4}')
+        ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
         rm -f "$ARRAY_SCRIPT"
 
         # Step 2: M2 + reports — runs AFTER all months complete
@@ -508,7 +508,7 @@ fi
 echo "End: \$(date)"
 EOF
 
-        POST_JOB_ID=$(sbatch "$POST_SCRIPT" | awk '{print $4}')
+        POST_JOB_ID=$(sbatch "$POST_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
         rm -f "$POST_SCRIPT"
 
         ALL_FINAL_JOBS+=($POST_JOB_ID)
@@ -580,7 +580,7 @@ python scripts/run_analysis.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    AGG_HOUSE_JOB=$(sbatch "$AGG_HOUSE_SCRIPT" | awk '{print $4}')
+    AGG_HOUSE_JOB=$(sbatch "$AGG_HOUSE_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$AGG_HOUSE_SCRIPT"
     echo "Aggregate house pre-analysis:  ${AGG_HOUSE_JOB} (afterany pre-analysis jobs — runs EARLY)"
 
@@ -627,7 +627,7 @@ python scripts/run_dynamic_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" | awk '{print $4}')
+    AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$AGG_SEG_SCRIPT"
     echo "Aggregate segregation (M1):    ${AGG_SEG_JOB} (afterany all pipelines + agg_pre)"
 
@@ -670,7 +670,7 @@ python scripts/run_identification_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" | awk '{print $4}')
+    IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$IDENT_ALL_SCRIPT"
     echo "Identification (ALL houses):   ${IDENT_ALL_JOB} (afterany agg_seg — runs LAST)"
 
@@ -715,7 +715,7 @@ python scripts/compare_experiments.py \
 
 echo "Exit: \$? — End: \$(date)"
 EOF
-    COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" | awk '{print $4}')
+    COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$COMPARE_SCRIPT"
     echo "Cross-experiment comparison:    ${COMPARE_JOB} (afterany ident_all — runs VERY LAST)"
 fi

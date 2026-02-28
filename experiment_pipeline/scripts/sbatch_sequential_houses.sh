@@ -166,7 +166,7 @@ echo "Month ${month_idx} done: \$(date)"
 EOF
 
     local job_id
-    job_id=$(sbatch "$SCRIPT" 2>&1 | awk '{print $4}')
+    job_id=$(sbatch "$SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$SCRIPT"
     echo "$job_id"
 }
@@ -369,7 +369,7 @@ fi
 echo "End: \$(date)"
 EOF
 
-    POST_JOB_ID=$(sbatch "$POST_SCRIPT" 2>&1 | awk '{print $4}')
+    POST_JOB_ID=$(sbatch "$POST_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$POST_SCRIPT"
 
     if [[ ! "$POST_JOB_ID" =~ ^[0-9]+$ ]]; then
@@ -423,7 +423,7 @@ python scripts/run_dynamic_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | awk '{print $4}')
+AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
 rm -f "$AGG_SEG_SCRIPT"
 echo "Aggregate segregation:       ${AGG_SEG_JOB}"
 
@@ -454,7 +454,7 @@ python scripts/run_identification_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | awk '{print $4}')
+IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
 rm -f "$IDENT_ALL_SCRIPT"
 echo "Identification ALL:          ${IDENT_ALL_JOB}"
 
@@ -484,7 +484,7 @@ python scripts/compare_experiments.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" 2>&1 | awk '{print $4}')
+COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
 rm -f "$COMPARE_SCRIPT"
 echo "Cross-experiment comparison:  ${COMPARE_JOB}"
 
