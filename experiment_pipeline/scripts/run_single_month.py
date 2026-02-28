@@ -224,7 +224,7 @@ def main():
             t0 = time.time()
             process_matching(
                 house_id=args.house_id, run_number=run_number,
-                threshold=threshold, month_filter=month,
+                threshold=threshold, month_filter=month, config=exp_config,
             )
             logger.info(f"  Matching: {time.time() - t0:.1f}s")
 

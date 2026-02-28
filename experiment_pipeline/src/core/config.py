@@ -47,6 +47,8 @@ class ExperimentConfig:
     wave_max_duration_minutes: int = 45  # Maximum wave duration
     wave_monotonic_tolerance: float = 0.15  # Fraction of points allowed to be non-monotonic
     wave_min_decay_fraction: float = 0.3  # Must decay at least 30% from peak to qualify
+    use_complementary_off_matching: bool = False  # Stage 4: merge two OFF events that together match an ON
+    complementary_off_max_gap_minutes: int = 10  # Max gap between the two OFF events
     use_normalization: bool = False  # Apply normalization preprocessing before pipeline starts
     normalization_method: str = 'none'  # 'ma_detrend', 'phase_balance', 'mad_clean', 'combined'
     normalization_params: Optional[dict] = None  # Method-specific parameters (e.g., window size)
@@ -88,6 +90,8 @@ class ExperimentConfig:
             'wave_max_duration_minutes': self.wave_max_duration_minutes,
             'wave_monotonic_tolerance': self.wave_monotonic_tolerance,
             'wave_min_decay_fraction': self.wave_min_decay_fraction,
+            'use_complementary_off_matching': self.use_complementary_off_matching,
+            'complementary_off_max_gap_minutes': self.complementary_off_max_gap_minutes,
             'use_normalization': self.use_normalization,
             'normalization_method': self.normalization_method,
             'normalization_params': self.normalization_params,
@@ -116,7 +120,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -131,7 +135,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -147,7 +151,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -157,6 +161,7 @@ EXPERIMENTS = {
         use_settling_extension=True,
         use_split_off_merger=True,
         use_guided_recovery=True,
+        use_complementary_off_matching=True,
     ),
 
     'exp014_wave_recovery': ExperimentConfig(
@@ -166,7 +171,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -177,6 +182,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
     ),
 
     'exp015_hole_repair': ExperimentConfig(
@@ -186,7 +192,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -197,6 +203,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
     ),
 
     'exp016_ma_detrend': ExperimentConfig(
@@ -206,7 +213,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -217,6 +224,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
         use_normalization=True,
         normalization_method='ma_detrend',
         normalization_params={'ma_detrend': {'window_minutes': 120}},
@@ -229,7 +237,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -240,6 +248,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
         use_normalization=True,
         normalization_method='phase_balance',
     ),
@@ -251,7 +260,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -262,6 +271,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
         use_normalization=True,
         normalization_method='mad_clean',
         normalization_params={'mad_clean': {'window_minutes': 240, 'k': 5.0}},
@@ -274,7 +284,7 @@ EXPERIMENTS = {
         off_threshold_factor=1.0,
         expand_event_factor=0.2,
         use_gradual_detection=True,
-        gradual_window_minutes=3,
+        gradual_window_minutes=5,
         gradual_direction_consistency=0.7,
         progressive_window_search=True,
         use_near_threshold_detection=False,
@@ -285,6 +295,7 @@ EXPERIMENTS = {
         use_split_off_merger=True,
         use_guided_recovery=True,
         use_wave_recovery=True,
+        use_complementary_off_matching=True,
         use_normalization=True,
         normalization_method='combined',
         normalization_params={

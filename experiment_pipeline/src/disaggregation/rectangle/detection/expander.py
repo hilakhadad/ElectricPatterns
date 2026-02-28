@@ -10,6 +10,8 @@ def _calc_magnitude_from_phase(data: pd.DataFrame, phase: str, start: pd.Timesta
     """
     Calculate event magnitude as the difference between power at end and power before start.
     NaN raw values are treated as 0 (e.g. at NaN-gap boundaries).
+    When a timestamp is missing (data gap), uses the closest prior value
+    instead of 0 — consistent with what diff() computes on consecutive rows.
     """
     before_start = start - pd.Timedelta(minutes=1)
 
@@ -20,24 +22,46 @@ def _calc_magnitude_from_phase(data: pd.DataFrame, phase: str, start: pd.Timesta
             if pd.isna(value_end):
                 value_end = 0
         except KeyError:
-            value_end = 0
+            # Data gap at end: use closest prior timestamp
+            prev_ts = data.index.asof(end)
+            value_end = float(data.loc[prev_ts, phase]) if prev_ts is not pd.NaT else 0
+            if pd.isna(value_end):
+                value_end = 0
         try:
             value_before = data.loc[before_start, phase]
             if pd.isna(value_before):
                 value_before = 0
         except KeyError:
-            value_before = 0
+            # Data gap before event: use closest prior timestamp
+            prev_ts = data.index.asof(before_start)
+            value_before = float(data.loc[prev_ts, phase]) if prev_ts is not pd.NaT else 0
+            if pd.isna(value_before):
+                value_before = 0
     else:
         # Fallback to boolean indexing
         end_mask = data['timestamp'] == end
         value_end = data.loc[end_mask, phase].values[0] if end_mask.any() else 0
         if pd.isna(value_end):
             value_end = 0
+        if not end_mask.any():
+            # Data gap: use closest prior row
+            prior = data[data['timestamp'] <= end]
+            if not prior.empty:
+                value_end = prior[phase].iloc[-1]
+                if pd.isna(value_end):
+                    value_end = 0
 
         before_mask = data['timestamp'] == before_start
         value_before = data.loc[before_mask, phase].values[0] if before_mask.any() else 0
         if pd.isna(value_before):
             value_before = 0
+        if not before_mask.any():
+            # Data gap: use closest prior row
+            prior = data[data['timestamp'] <= before_start]
+            if not prior.empty:
+                value_before = prior[phase].iloc[-1]
+                if pd.isna(value_before):
+                    value_before = 0
 
     return value_end - value_before
 

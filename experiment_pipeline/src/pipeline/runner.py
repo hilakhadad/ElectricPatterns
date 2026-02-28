@@ -185,7 +185,7 @@ def run_pipeline(
                     ('Detection', lambda th=threshold: process_detection(
                         house_id=house_id, run_number=run_number, threshold=th, config=exp_config)),
                     ('Matching', lambda th=threshold: process_matching(
-                        house_id=house_id, run_number=run_number, threshold=th)),
+                        house_id=house_id, run_number=run_number, threshold=th, config=exp_config)),
                 ]
 
                 pbar = tqdm(
@@ -239,7 +239,7 @@ def run_pipeline(
                     ('Detection', lambda: process_detection(
                         house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)),
                     ('Matching', lambda: process_matching(
-                        house_id=house_id, run_number=run_number, threshold=threshold)),
+                        house_id=house_id, run_number=run_number, threshold=threshold, config=exp_config)),
                     ('Segmentation', lambda: process_segmentation(
                         house_id=house_id, run_number=run_number, skip_large_file=True,
                         use_nan_imputation=getattr(exp_config, 'use_nan_imputation', False))),

@@ -11,10 +11,10 @@ from pathlib import Path
 
 import core
 from core import setup_logging, DEFAULT_THRESHOLD, load_power_data, find_house_data_path, find_previous_run_summarized, build_data_files_dict
-from disaggregation.rectangle.matching import find_match, find_noisy_match, find_partial_match
+from disaggregation.rectangle.matching import find_match, find_noisy_match, find_partial_match, find_complementary_off_matches
 
 
-def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, month_filter: str = None) -> None:
+def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_THRESHOLD, month_filter: str = None, config=None) -> None:
     """
     Match ON events to OFF events for a house - processes month by month.
 
@@ -195,7 +195,27 @@ def process_matching(house_id: str, run_number: int, threshold: int = DEFAULT_TH
             else:
                 final_unmatched_on.append(on_event)
 
-        # Log all ON events that remain unmatched after all 3 stages
+        # Stage 4: Complementary OFF matching (two OFF events that together match one ON)
+        if config and getattr(config, 'use_complementary_off_matching', False):
+            # Build unmatched OFF list for complementary matching
+            pre_comp_unmatched_off = all_off_events[~all_off_events['event_id'].isin(used_off_ids)].to_dict('records') + remainder_off_events
+
+            if final_unmatched_on and len(pre_comp_unmatched_off) >= 2:
+                comp_matches, final_unmatched_on, pre_comp_unmatched_off = \
+                    find_complementary_off_matches(
+                        data, final_unmatched_on, pre_comp_unmatched_off,
+                        max_gap_minutes=getattr(config, 'complementary_off_max_gap_minutes', 10),
+                        logger=logger
+                    )
+                if comp_matches:
+                    matches.extend(comp_matches)
+                    for m in comp_matches:
+                        matched_event_ids.add(m['on_event_id'])
+                        # off_event_id is "id1+id2" — add both originals
+                        for oid in m['off_event_id'].split('+'):
+                            matched_event_ids.add(oid)
+
+        # Log all ON events that remain unmatched after all stages
         for on_event in final_unmatched_on:
             logger.info(f"UNMATCHED {on_event['event_id']}({abs(on_event['magnitude']):.0f}W, "
                         f"phase={on_event['phase']}, start={on_event['start']})")
