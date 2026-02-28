@@ -1,24 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# Submit houses SEQUENTIALLY — one house at a time, months filling job limit.
+# Run all houses with sliding-window job submission.
 #
-# Avoids QOSMaxSubmitJobPerUserLimit by:
-#   1. Auto-detecting the QOS max submit limit (or using MAX_JOBS override)
-#   2. Submitting month jobs up to the limit, then waiting for slots to free
-#   3. Refilling to the limit as jobs complete (sliding window)
+# Manages up to CONCURRENT_HOUSES (default 4) houses simultaneously,
+# filling job slots up to the QOS limit. As jobs finish, new ones fill in.
 #
-# Flow per house:
-#   Submit months up to limit → as slots free, submit more → all months done
-#   → M2 + reports + cleanup → WAIT → next house
+# Per house: submit months → when all months done → submit post (M2+reports)
+# Multiple houses overlap: house B's months run while house A's post runs.
 #
-# After ALL houses: aggregate reports → identification ALL → comparison
+# Avoids QOSMaxSubmitJobPerUserLimit by checking squeue before each submission.
 #
 # Usage:
-#     bash scripts/sbatch_sequential_houses.sh [experiment_name] [max_jobs_override]
+#     bash scripts/sbatch_sequential_houses.sh [experiment] [max_jobs] [concurrent_houses]
 #
 # Examples:
-#     bash scripts/sbatch_sequential_houses.sh                         # auto-detect limit
-#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair 40   # force limit=40
+#     bash scripts/sbatch_sequential_houses.sh                              # defaults
+#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair 100 4     # explicit
 # =============================================================================
 
 # ---- Configuration ----
@@ -27,9 +24,10 @@ DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
-MAX_JOBS_OVERRIDE="${2:-}"   # Optional: override auto-detected limit
-POLL_INTERVAL=20             # Seconds between squeue polls
-SAFETY_MARGIN=3              # Reserve slots for post/aggregate jobs
+MAX_JOBS_OVERRIDE="${2:-}"
+CONCURRENT_HOUSES="${3:-4}"
+POLL_INTERVAL=20
+SAFETY_MARGIN=5
 
 # ---- TS set ONCE ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -37,10 +35,7 @@ EXPERIMENT_OUTPUT="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments/${EXPE
 REPORTS_DIR="${EXPERIMENT_OUTPUT}/reports"
 ALL_EXPERIMENTS_DIR="${PROJECT_ROOT}/experiment_pipeline/OUTPUT/experiments"
 
-# Create directories
-mkdir -p "$LOG_DIR"
-mkdir -p "$EXPERIMENT_OUTPUT"
-mkdir -p "$REPORTS_DIR"
+mkdir -p "$LOG_DIR" "$EXPERIMENT_OUTPUT" "$REPORTS_DIR"
 
 # Initialize timing CSV
 TIMING_FILE="${EXPERIMENT_OUTPUT}/house_timing.csv"
@@ -59,7 +54,6 @@ cd "${PROJECT_ROOT}"
 
 # ---- Auto-detect QOS limit ----
 detect_max_submit() {
-    # Try sacctmgr to find MaxSubmitJobsPerUser for user's QOS
     local qos
     qos=$(sacctmgr -n -P show assoc where user="$USER" format=qos 2>/dev/null | head -1)
     if [ -n "$qos" ]; then
@@ -70,7 +64,7 @@ detect_max_submit() {
             return
         fi
     fi
-    echo "0"  # Could not detect
+    echo "0"
 }
 
 if [ -n "$MAX_JOBS_OVERRIDE" ]; then
@@ -86,7 +80,6 @@ else
     fi
 fi
 
-# Effective limit (minus safety margin for post/aggregate jobs)
 EFFECTIVE_LIMIT=$((MAX_JOBS - SAFETY_MARGIN))
 if [ "$EFFECTIVE_LIMIT" -lt 5 ]; then
     EFFECTIVE_LIMIT=5
@@ -115,19 +108,23 @@ count_my_jobs() {
     squeue -u "$USER" -h 2>/dev/null | wc -l
 }
 
+# Count running month jobs for a specific house
+count_house_month_jobs() {
+    local house_id="$1"
+    squeue -u "$USER" -h -o "%j" 2>/dev/null | grep -c "^mon_${house_id}_" || echo 0
+}
+
 wait_for_job() {
     local job_id="$1"
     while true; do
         local status
         status=$(squeue -j "$job_id" -h -o "%T" 2>/dev/null)
-        if [ -z "$status" ]; then
-            break
-        fi
+        if [ -z "$status" ]; then break; fi
         sleep "$POLL_INTERVAL"
     done
 }
 
-# Submit a single month job; prints the job ID
+# Submit a single month job; prints job ID
 submit_month() {
     local house_id="$1"
     local month_idx="$2"
@@ -171,118 +168,15 @@ EOF
     echo "$job_id"
 }
 
-echo "============================================================"
-echo "SEQUENTIAL HOUSES — FILL TO LIMIT (sliding window)"
-echo "============================================================"
-echo "Experiment:     $EXPERIMENT_NAME"
-echo "Timestamp:      $TIMESTAMP"
-echo "Output dir:     $EXPERIMENT_OUTPUT"
-echo "QOS job limit:  $MAX_JOBS"
-echo "Effective limit: $EFFECTIVE_LIMIT (after ${SAFETY_MARGIN} reserved)"
-echo "Poll interval:  ${POLL_INTERVAL}s"
-echo ""
+# Submit post job (M2 + reports + cleanup); prints job ID
+submit_post() {
+    local house_id="$1"
+    local n_months="$2"
 
-# Collect all house IDs
-HOUSE_IDS=()
-for house_dir in "$DATA_DIR"/*/; do
-    house_id=$(basename "$house_dir")
-    [[ "$house_id" =~ ^[0-9]+$ ]] || continue
-    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
-    [ "$N_MONTHS" -eq 0 ] && continue
-    HOUSE_IDS+=("$house_id")
-done
+    local SCRIPT
+    SCRIPT=$(mktemp "${LOG_DIR}/sbatch_post_${house_id}_XXXXXX.sh")
 
-TOTAL_HOUSES=${#HOUSE_IDS[@]}
-echo "Found ${TOTAL_HOUSES} houses to process"
-echo ""
-
-HOUSE_COUNT=0
-FAILED_HOUSES=()
-
-for house_id in "${HOUSE_IDS[@]}"; do
-    house_dir="${DATA_DIR}/${house_id}"
-    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
-    HOUSE_COUNT=$((HOUSE_COUNT + 1))
-
-    echo "------------------------------------------------------------"
-    echo "[${HOUSE_COUNT}/${TOTAL_HOUSES}] House ${house_id} (${N_MONTHS} months) — $(date '+%H:%M:%S')"
-    echo "------------------------------------------------------------"
-
-    # =================================================================
-    # Step 1: Submit month jobs — fill up to limit, refill as slots free
-    # =================================================================
-    NEXT_MONTH=0                # Next month index to submit
-    MONTH_JOBS=()               # Array of (job_id) for tracking
-    HOUSE_FAILED=false
-
-    while [ "$NEXT_MONTH" -lt "$N_MONTHS" ] || [ ${#MONTH_JOBS[@]} -gt 0 ]; do
-
-        # --- Submit as many months as we have slots for ---
-        if [ "$NEXT_MONTH" -lt "$N_MONTHS" ]; then
-            CURRENT_JOBS=$(count_my_jobs)
-            AVAILABLE=$((EFFECTIVE_LIMIT - CURRENT_JOBS))
-
-            SUBMITTED_THIS_ROUND=0
-            while [ "$AVAILABLE" -gt 0 ] && [ "$NEXT_MONTH" -lt "$N_MONTHS" ]; do
-                JOB_ID=$(submit_month "$house_id" "$NEXT_MONTH" "$N_MONTHS")
-
-                if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
-                    echo "  ERROR submitting month ${NEXT_MONTH}: ${JOB_ID}"
-                    HOUSE_FAILED=true
-                    break
-                fi
-
-                MONTH_JOBS+=("$JOB_ID")
-                NEXT_MONTH=$((NEXT_MONTH + 1))
-                AVAILABLE=$((AVAILABLE - 1))
-                SUBMITTED_THIS_ROUND=$((SUBMITTED_THIS_ROUND + 1))
-            done
-
-            if [ "$SUBMITTED_THIS_ROUND" -gt 0 ]; then
-                echo "  Submitted ${SUBMITTED_THIS_ROUND} months (total queued: ${#MONTH_JOBS[@]}, next: ${NEXT_MONTH}/${N_MONTHS})"
-            fi
-
-            if [ "$HOUSE_FAILED" = true ]; then
-                break
-            fi
-        fi
-
-        # --- Clean finished jobs from tracking list ---
-        if [ ${#MONTH_JOBS[@]} -gt 0 ]; then
-            STILL_RUNNING=()
-            for jid in "${MONTH_JOBS[@]}"; do
-                status=$(squeue -j "$jid" -h -o "%T" 2>/dev/null)
-                if [ -n "$status" ]; then
-                    STILL_RUNNING+=("$jid")
-                fi
-            done
-            MONTH_JOBS=("${STILL_RUNNING[@]}")
-        fi
-
-        # --- If still waiting, sleep ---
-        if [ "$NEXT_MONTH" -lt "$N_MONTHS" ] || [ ${#MONTH_JOBS[@]} -gt 0 ]; then
-            sleep "$POLL_INTERVAL"
-        fi
-    done
-
-    if [ "$HOUSE_FAILED" = true ]; then
-        FAILED_HOUSES+=("$house_id")
-        echo "  SKIPPING house ${house_id} due to submission error"
-        # Wait for any running month jobs to finish
-        for jid in "${MONTH_JOBS[@]}"; do
-            wait_for_job "$jid"
-        done
-        continue
-    fi
-
-    echo "  All ${N_MONTHS} months done — $(date '+%H:%M:%S')"
-
-    # =================================================================
-    # Step 2: M2 + reports + cleanup
-    # =================================================================
-    POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_post_${house_id}_XXXXXX.sh")
-
-    cat > "$POST_SCRIPT" << EOF
+    cat > "$SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=post_${house_id}
 #SBATCH --output=${LOG_DIR}/post_${house_id}_${TIMESTAMP}_%j.out
@@ -295,8 +189,6 @@ for house_id in "${HOUSE_IDS[@]}"; do
 
 echo "========================================"
 echo "House ${house_id} — M2 + REPORTS"
-echo "SLURM_JOBID: \$SLURM_JOBID"
-echo "TS: ${TIMESTAMP}"
 echo "Start: \$(date)"
 echo "========================================"
 
@@ -322,17 +214,11 @@ MINS=\$(( (ELAPSED % 3600) / 60 ))
 SECS=\$((ELAPSED % 60))
 ELAPSED_HUMAN="\${HOURS}h \${MINS}m \${SECS}s"
 
-if [ \$EXIT_CODE -eq 0 ]; then
-    STATUS="OK"
-else
-    STATUS="FAIL(exit=\${EXIT_CODE})"
-fi
+if [ \$EXIT_CODE -eq 0 ]; then STATUS="OK"; else STATUS="FAIL(exit=\${EXIT_CODE})"; fi
 
-echo "${house_id},${N_MONTHS},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${TIMING_FILE}
-
+echo "${house_id},${n_months},\$START_TIME,\$END_TIME,\$ELAPSED,\$ELAPSED_HUMAN,\$STATUS" >> ${TIMING_FILE}
 echo "House ${house_id}: \$STATUS (\$ELAPSED_HUMAN)"
 
-# --- Reports ---
 if [ \$EXIT_CODE -eq 0 ]; then
     echo "Generating reports for house ${house_id}..."
 
@@ -354,7 +240,6 @@ if [ \$EXIT_CODE -eq 0 ]; then
         2>&1
     echo "  Identification report: exit \$?"
 
-    # --- Cleanup ---
     echo "Cleaning up pkl files for house ${house_id}..."
     cd "${PROJECT_ROOT}/experiment_pipeline"
     python -c "
@@ -369,23 +254,157 @@ fi
 echo "End: \$(date)"
 EOF
 
-    POST_JOB_ID=$(sbatch "$POST_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
-    rm -f "$POST_SCRIPT"
+    local job_id
+    job_id=$(sbatch "$SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
+    rm -f "$SCRIPT"
+    echo "$job_id"
+}
 
-    if [[ ! "$POST_JOB_ID" =~ ^[0-9]+$ ]]; then
-        echo "  ERROR: Failed to submit post job for house ${house_id}: ${POST_JOB_ID}"
-        FAILED_HOUSES+=("$house_id")
-        continue
+# ===========================================================================
+echo "============================================================"
+echo "SLIDING WINDOW — ${CONCURRENT_HOUSES} houses, fill to limit"
+echo "============================================================"
+echo "Experiment:       $EXPERIMENT_NAME"
+echo "Timestamp:        $TIMESTAMP"
+echo "Output dir:       $EXPERIMENT_OUTPUT"
+echo "QOS job limit:    $MAX_JOBS"
+echo "Effective limit:  $EFFECTIVE_LIMIT (after ${SAFETY_MARGIN} reserved)"
+echo "Concurrent houses: $CONCURRENT_HOUSES"
+echo "Poll interval:    ${POLL_INTERVAL}s"
+echo ""
+
+# Collect all house IDs
+ALL_HOUSE_IDS=()
+for house_dir in "$DATA_DIR"/*/; do
+    house_id=$(basename "$house_dir")
+    [[ "$house_id" =~ ^[0-9]+$ ]] || continue
+    N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
+    [ "$N_MONTHS" -eq 0 ] && continue
+    ALL_HOUSE_IDS+=("$house_id")
+done
+
+TOTAL_HOUSES=${#ALL_HOUSE_IDS[@]}
+echo "Found ${TOTAL_HOUSES} houses to process"
+echo ""
+
+# ---- Per-house state (associative arrays) ----
+declare -A H_TOTAL       # total months
+declare -A H_NEXT        # next month index to submit
+declare -A H_POST        # post job ID ("" = not submitted, "done" = finished)
+
+# Queue of houses not yet started
+QUEUE_IDX=0              # index into ALL_HOUSE_IDS
+ACTIVE_HOUSES=()         # house IDs currently being processed
+COMPLETED_COUNT=0
+FAILED_HOUSES=()
+
+# ---- Main loop ----
+while [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; do
+
+    # --- 1. Fill active house pool ---
+    while [ ${#ACTIVE_HOUSES[@]} -lt "$CONCURRENT_HOUSES" ] && [ "$QUEUE_IDX" -lt "$TOTAL_HOUSES" ]; do
+        hid="${ALL_HOUSE_IDS[$QUEUE_IDX]}"
+        house_dir="${DATA_DIR}/${hid}"
+        QUEUE_IDX=$((QUEUE_IDX + 1))
+
+        H_TOTAL[$hid]=$(count_unique_months "$house_dir" "$hid")
+        H_NEXT[$hid]=0
+        H_POST[$hid]=""
+
+        ACTIVE_HOUSES+=("$hid")
+        echo "[$(date '+%H:%M:%S')] Started house ${hid} (${H_TOTAL[$hid]} months) — [${COMPLETED_COUNT}/${TOTAL_HOUSES} done, ${#ACTIVE_HOUSES[@]} active]"
+    done
+
+    # --- 2. Submit months — fill available slots across active houses ---
+    CURRENT_JOBS=$(count_my_jobs)
+    AVAILABLE=$((EFFECTIVE_LIMIT - CURRENT_JOBS))
+
+    if [ "$AVAILABLE" -gt 0 ]; then
+        SUBMITTED_TOTAL=0
+
+        for hid in "${ACTIVE_HOUSES[@]}"; do
+            [ "$AVAILABLE" -le 0 ] && break
+            # Skip houses that finished submitting all months
+            [ "${H_NEXT[$hid]}" -ge "${H_TOTAL[$hid]}" ] && continue
+
+            SUBMITTED_HOUSE=0
+            while [ "$AVAILABLE" -gt 0 ] && [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ]; do
+                JOB_ID=$(submit_month "$hid" "${H_NEXT[$hid]}" "${H_TOTAL[$hid]}")
+
+                if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
+                    echo "  ERROR submitting month ${H_NEXT[$hid]} for house ${hid}: ${JOB_ID}"
+                    # Mark as all submitted to skip further attempts
+                    H_NEXT[$hid]=${H_TOTAL[$hid]}
+                    FAILED_HOUSES+=("$hid")
+                    break
+                fi
+
+                H_NEXT[$hid]=$((${H_NEXT[$hid]} + 1))
+                AVAILABLE=$((AVAILABLE - 1))
+                SUBMITTED_HOUSE=$((SUBMITTED_HOUSE + 1))
+                SUBMITTED_TOTAL=$((SUBMITTED_TOTAL + 1))
+            done
+
+            if [ "$SUBMITTED_HOUSE" -gt 0 ]; then
+                echo "  House ${hid}: submitted ${SUBMITTED_HOUSE} months (${H_NEXT[$hid]}/${H_TOTAL[$hid]})"
+            fi
+        done
     fi
 
-    echo "  Post job: ${POST_JOB_ID}"
-    wait_for_job "$POST_JOB_ID"
-    echo "  House ${house_id} complete — $(date '+%H:%M:%S')"
+    # --- 3. Check for houses with all months done → submit post job ---
+    for hid in "${ACTIVE_HOUSES[@]}"; do
+        # Skip if months not all submitted yet
+        [ "${H_NEXT[$hid]}" -lt "${H_TOTAL[$hid]}" ] && continue
+        # Skip if post already submitted
+        [ -n "${H_POST[$hid]}" ] && continue
+
+        # Check if any month jobs still running for this house
+        RUNNING=$(count_house_month_jobs "$hid")
+        if [ "$RUNNING" -eq 0 ]; then
+            POST_ID=$(submit_post "$hid" "${H_TOTAL[$hid]}")
+            if [[ "$POST_ID" =~ ^[0-9]+$ ]]; then
+                H_POST[$hid]="$POST_ID"
+                echo "[$(date '+%H:%M:%S')] House ${hid}: all months done, post job ${POST_ID}"
+            else
+                echo "  ERROR submitting post for house ${hid}: ${POST_ID}"
+                H_POST[$hid]="done"
+                FAILED_HOUSES+=("$hid")
+            fi
+        fi
+    done
+
+    # --- 4. Check for completed houses (post job finished) ---
+    NEW_ACTIVE=()
+    for hid in "${ACTIVE_HOUSES[@]}"; do
+        if [ "${H_POST[$hid]}" = "done" ]; then
+            # Already marked done (error case)
+            COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
+            echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
+            continue
+        fi
+
+        if [[ "${H_POST[$hid]}" =~ ^[0-9]+$ ]]; then
+            status=$(squeue -j "${H_POST[$hid]}" -h -o "%T" 2>/dev/null)
+            if [ -z "$status" ]; then
+                COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
+                echo "[$(date '+%H:%M:%S')] House ${hid} complete [${COMPLETED_COUNT}/${TOTAL_HOUSES}]"
+                continue
+            fi
+        fi
+
+        NEW_ACTIVE+=("$hid")
+    done
+    ACTIVE_HOUSES=("${NEW_ACTIVE[@]}")
+
+    # --- 5. Sleep before next poll ---
+    if [ "$COMPLETED_COUNT" -lt "$TOTAL_HOUSES" ]; then
+        sleep "$POLL_INTERVAL"
+    fi
 done
 
 echo ""
 echo "============================================================"
-echo "All ${HOUSE_COUNT} houses processed"
+echo "All ${TOTAL_HOUSES} houses processed"
 if [ ${#FAILED_HOUSES[@]} -gt 0 ]; then
     echo "FAILED houses: ${FAILED_HOUSES[*]}"
 fi
@@ -397,7 +416,6 @@ echo ""
 # =============================================================
 echo "Submitting aggregate jobs..."
 
-# Aggregate segregation
 AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
 cat > "$AGG_SEG_SCRIPT" << EOF
 #!/bin/bash
@@ -427,7 +445,6 @@ AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '
 rm -f "$AGG_SEG_SCRIPT"
 echo "Aggregate segregation:       ${AGG_SEG_JOB}"
 
-# Identification ALL (depends on agg_seg)
 IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
 cat > "$IDENT_ALL_SCRIPT" << EOF
 #!/bin/bash
@@ -458,7 +475,6 @@ IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | grep "Submitted batch job" | a
 rm -f "$IDENT_ALL_SCRIPT"
 echo "Identification ALL:          ${IDENT_ALL_JOB}"
 
-# Cross-experiment comparison (depends on ident_all)
 COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
 cat > "$COMPARE_SCRIPT" << EOF
 #!/bin/bash
