@@ -3,13 +3,17 @@
 # Submit houses SEQUENTIALLY — one house at a time, months in parallel.
 #
 # Unlike sbatch_run_houses.sh which submits ALL houses in parallel,
-# this script chains houses so each waits for the previous to finish.
-# Within each house, months run in parallel (SBATCH array).
+# this script processes one house at a time:
+#   1. Submit month array + post job (2 SLURM jobs per house)
+#   2. WAIT for both to complete (poll squeue)
+#   3. Move to next house
+#
+# This avoids QOSMaxSubmitJobPerUserLimit by having at most ~14 jobs
+# in the queue at any time (12 month tasks + 1 array + 1 post).
 #
 # Flow:
-#   House 1: months (parallel) → M2 + reports → cleanup
-#   House 2: months (parallel) → M2 + reports → cleanup  (waits for House 1)
-#   House 3: months (parallel) → M2 + reports → cleanup  (waits for House 2)
+#   House 1: months (parallel) → M2 + reports → cleanup → WAIT
+#   House 2: months (parallel) → M2 + reports → cleanup → WAIT
 #   ...
 #   After ALL houses: aggregate reports → identification ALL → comparison
 #
@@ -28,6 +32,7 @@ LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
 MONTHS_PARALLEL=12   # Max concurrent months per house
+POLL_INTERVAL=30     # Seconds between squeue polls
 
 # ---- TS set ONCE ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -74,6 +79,22 @@ count_unique_months() {
     echo "$count"
 }
 
+# Helper: wait for a SLURM job to finish (poll squeue)
+wait_for_job() {
+    local job_id="$1"
+    local job_label="$2"
+    while true; do
+        # Check if job is still in the queue (any state: PENDING, RUNNING, etc.)
+        local status
+        status=$(squeue -j "$job_id" -h -o "%T" 2>/dev/null)
+        if [ -z "$status" ]; then
+            # Job no longer in queue — it finished (COMPLETED, FAILED, or CANCELLED)
+            break
+        fi
+        sleep "$POLL_INTERVAL"
+    done
+}
+
 echo "============================================================"
 echo "SEQUENTIAL HOUSE SUBMISSION (one at a time, months parallel)"
 echo "============================================================"
@@ -81,6 +102,7 @@ echo "Experiment:  $EXPERIMENT_NAME"
 echo "Timestamp:   $TIMESTAMP"
 echo "Output dir:  $EXPERIMENT_OUTPUT"
 echo "Months parallel per house: $MONTHS_PARALLEL"
+echo "Poll interval: ${POLL_INTERVAL}s"
 echo ""
 
 # Collect all house IDs
@@ -93,27 +115,24 @@ for house_dir in "$DATA_DIR"/*/; do
     HOUSE_IDS+=("$house_id")
 done
 
-echo "Found ${#HOUSE_IDS[@]} houses to process"
+TOTAL_HOUSES=${#HOUSE_IDS[@]}
+echo "Found ${TOTAL_HOUSES} houses to process"
 echo ""
 
-# Track the previous house's final job for chaining
-PREV_HOUSE_FINAL_JOB=""
-ALL_FINAL_JOBS=()
 HOUSE_COUNT=0
+FAILED_HOUSES=()
 
 for house_id in "${HOUSE_IDS[@]}"; do
     house_dir="${DATA_DIR}/${house_id}"
     N_MONTHS=$(count_unique_months "$house_dir" "$house_id")
+    HOUSE_COUNT=$((HOUSE_COUNT + 1))
 
-    # Build dependency: wait for previous house to finish
-    if [ -n "$PREV_HOUSE_FINAL_JOB" ]; then
-        CHAIN_DEP="#SBATCH --dependency=afterany:${PREV_HOUSE_FINAL_JOB}"
-    else
-        CHAIN_DEP=""
-    fi
+    echo "------------------------------------------------------------"
+    echo "[${HOUSE_COUNT}/${TOTAL_HOUSES}] House ${house_id} (${N_MONTHS} months) — $(date '+%H:%M:%S')"
+    echo "------------------------------------------------------------"
 
     # =================================================================
-    # Step 1: Month array — all months in parallel (waits for prev house)
+    # Step 1: Submit month array
     # =================================================================
     ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_months_${house_id}_XXXXXX.sh")
 
@@ -128,7 +147,6 @@ for house_id in "${HOUSE_IDS[@]}"; do
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
 #SBATCH --array=0-$((N_MONTHS - 1))%${MONTHS_PARALLEL}
-${CHAIN_DEP}
 
 echo "========================================"
 echo "House ${house_id} — month \$SLURM_ARRAY_TASK_ID / $((N_MONTHS - 1))"
@@ -151,11 +169,19 @@ python -u scripts/run_single_month.py \
 echo "Month \$SLURM_ARRAY_TASK_ID done: \$(date)"
 EOF
 
-    ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" | awk '{print $4}')
+    ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" 2>&1 | awk '{print $4}')
     rm -f "$ARRAY_SCRIPT"
 
+    if [[ ! "$ARRAY_JOB_ID" =~ ^[0-9]+$ ]]; then
+        echo "  ERROR: Failed to submit month array for house ${house_id}: ${ARRAY_JOB_ID}"
+        FAILED_HOUSES+=("$house_id")
+        continue
+    fi
+
+    echo "  Months array: ${ARRAY_JOB_ID} [${N_MONTHS} tasks %${MONTHS_PARALLEL}]"
+
     # =================================================================
-    # Step 2: M2 + reports + cleanup (after all months of THIS house)
+    # Step 2: Submit M2 + reports + cleanup (depends on month array)
     # =================================================================
     POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_post_${house_id}_XXXXXX.sh")
 
@@ -247,30 +273,45 @@ fi
 echo "End: \$(date)"
 EOF
 
-    POST_JOB_ID=$(sbatch "$POST_SCRIPT" | awk '{print $4}')
+    POST_JOB_ID=$(sbatch "$POST_SCRIPT" 2>&1 | awk '{print $4}')
     rm -f "$POST_SCRIPT"
 
-    # Chain: next house waits for this house's post job
-    PREV_HOUSE_FINAL_JOB=$POST_JOB_ID
-    ALL_FINAL_JOBS+=($POST_JOB_ID)
-    HOUSE_COUNT=$((HOUSE_COUNT + 1))
+    if [[ ! "$POST_JOB_ID" =~ ^[0-9]+$ ]]; then
+        echo "  ERROR: Failed to submit post job for house ${house_id}: ${POST_JOB_ID}"
+        FAILED_HOUSES+=("$house_id")
+        # Still wait for the array job to finish before moving on
+        echo "  Waiting for month array ${ARRAY_JOB_ID} to finish..."
+        wait_for_job "$ARRAY_JOB_ID" "months_${house_id}"
+        continue
+    fi
 
-    echo "  House ${house_id} (${N_MONTHS} months) -> Array ${ARRAY_JOB_ID} [${N_MONTHS} tasks %${MONTHS_PARALLEL}], Post ${POST_JOB_ID}"
+    echo "  Post job:     ${POST_JOB_ID}"
+
+    # =================================================================
+    # Step 3: WAIT for this house to finish before submitting next
+    # =================================================================
+    echo "  Waiting for house ${house_id} to complete..."
+    wait_for_job "$POST_JOB_ID" "post_${house_id}"
+    echo "  House ${house_id} done — $(date '+%H:%M:%S')"
 done
 
 echo ""
-echo "Submitted ${HOUSE_COUNT} houses in sequential chain"
+echo "============================================================"
+echo "All ${HOUSE_COUNT} houses processed"
+if [ ${#FAILED_HOUSES[@]} -gt 0 ]; then
+    echo "FAILED houses: ${FAILED_HOUSES[*]}"
+fi
+echo "============================================================"
 echo ""
 
 # =============================================================
 # Aggregates — after ALL houses
 # =============================================================
-if [ ${#ALL_FINAL_JOBS[@]} -gt 0 ]; then
-    FINAL_DEPS=$(IFS=:; echo "${ALL_FINAL_JOBS[*]}")
+echo "Submitting aggregate jobs..."
 
-    # Aggregate segregation
-    AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
-    cat > "$AGG_SEG_SCRIPT" << EOF
+# Aggregate segregation
+AGG_SEG_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_agg_seg_XXXXXX.sh")
+cat > "$AGG_SEG_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=agg_seg
 #SBATCH --output=${LOG_DIR}/agg_seg_${TIMESTAMP}_%j.out
@@ -280,7 +321,6 @@ if [ ${#ALL_FINAL_JOBS[@]} -gt 0 ]; then
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=100G
 #SBATCH --gres=gpu:0
-#SBATCH --dependency=afterany:${PREV_HOUSE_FINAL_JOB}
 
 echo "AGGREGATE: Segregation — \$(date)"
 module load anaconda
@@ -295,13 +335,13 @@ python scripts/run_dynamic_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" | awk '{print $4}')
-    rm -f "$AGG_SEG_SCRIPT"
-    echo "Aggregate segregation:       ${AGG_SEG_JOB}"
+AGG_SEG_JOB=$(sbatch "$AGG_SEG_SCRIPT" 2>&1 | awk '{print $4}')
+rm -f "$AGG_SEG_SCRIPT"
+echo "Aggregate segregation:       ${AGG_SEG_JOB}"
 
-    # Identification ALL
-    IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
-    cat > "$IDENT_ALL_SCRIPT" << EOF
+# Identification ALL (depends on agg_seg)
+IDENT_ALL_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_ident_all_XXXXXX.sh")
+cat > "$IDENT_ALL_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=ident_all
 #SBATCH --output=${LOG_DIR}/ident_all_${TIMESTAMP}_%j.out
@@ -326,13 +366,13 @@ python scripts/run_identification_report.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" | awk '{print $4}')
-    rm -f "$IDENT_ALL_SCRIPT"
-    echo "Identification ALL:          ${IDENT_ALL_JOB}"
+IDENT_ALL_JOB=$(sbatch "$IDENT_ALL_SCRIPT" 2>&1 | awk '{print $4}')
+rm -f "$IDENT_ALL_SCRIPT"
+echo "Identification ALL:          ${IDENT_ALL_JOB}"
 
-    # Cross-experiment comparison
-    COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
-    cat > "$COMPARE_SCRIPT" << EOF
+# Cross-experiment comparison (depends on ident_all)
+COMPARE_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_compare_XXXXXX.sh")
+cat > "$COMPARE_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=compare
 #SBATCH --output=${LOG_DIR}/compare_${TIMESTAMP}_%j.out
@@ -356,10 +396,9 @@ python scripts/compare_experiments.py \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
-    COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" | awk '{print $4}')
-    rm -f "$COMPARE_SCRIPT"
-    echo "Cross-experiment comparison:  ${COMPARE_JOB}"
-fi
+COMPARE_JOB=$(sbatch "$COMPARE_SCRIPT" 2>&1 | awk '{print $4}')
+rm -f "$COMPARE_SCRIPT"
+echo "Cross-experiment comparison:  ${COMPARE_JOB}"
 
 echo ""
 echo "============================================================"
