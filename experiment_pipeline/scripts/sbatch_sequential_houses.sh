@@ -1,21 +1,20 @@
 #!/bin/bash
 # =============================================================================
-# Submit houses SEQUENTIALLY — one house at a time, months in parallel.
+# Submit houses SEQUENTIALLY — one house at a time, months in parallel batches.
 #
-# Unlike sbatch_run_houses.sh which submits ALL houses in parallel,
-# this script processes one house at a time:
-#   1. Submit month array + post job (2 SLURM jobs per house)
-#   2. WAIT for both to complete (poll squeue)
-#   3. Move to next house
+# Avoids QOSMaxSubmitJobPerUserLimit by:
+#   1. Processing one house at a time (wait for completion before next house)
+#   2. Splitting months into mini-batches (e.g., 12 at a time) instead of
+#      one big array job — so at most BATCH_SIZE jobs in the queue at once.
 #
-# This avoids QOSMaxSubmitJobPerUserLimit by having at most ~14 jobs
-# in the queue at any time (12 month tasks + 1 array + 1 post).
-#
-# Flow:
-#   House 1: months (parallel) → M2 + reports → cleanup → WAIT
-#   House 2: months (parallel) → M2 + reports → cleanup → WAIT
+# Flow per house:
+#   Batch 1: months 0-11 (parallel) → WAIT
+#   Batch 2: months 12-23 (parallel) → WAIT
 #   ...
-#   After ALL houses: aggregate reports → identification ALL → comparison
+#   M2 + reports + cleanup → WAIT
+#   → next house
+#
+# After ALL houses: aggregate reports → identification ALL → comparison
 #
 # Usage:
 #     bash scripts/sbatch_sequential_houses.sh [experiment_name]
@@ -31,7 +30,7 @@ DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
-MONTHS_PARALLEL=12   # Max concurrent months per house
+BATCH_SIZE=12        # Max months to submit at once (= max jobs in queue)
 POLL_INTERVAL=30     # Seconds between squeue polls
 
 # ---- TS set ONCE ----
@@ -82,13 +81,10 @@ count_unique_months() {
 # Helper: wait for a SLURM job to finish (poll squeue)
 wait_for_job() {
     local job_id="$1"
-    local job_label="$2"
     while true; do
-        # Check if job is still in the queue (any state: PENDING, RUNNING, etc.)
         local status
         status=$(squeue -j "$job_id" -h -o "%T" 2>/dev/null)
         if [ -z "$status" ]; then
-            # Job no longer in queue — it finished (COMPLETED, FAILED, or CANCELLED)
             break
         fi
         sleep "$POLL_INTERVAL"
@@ -96,12 +92,12 @@ wait_for_job() {
 }
 
 echo "============================================================"
-echo "SEQUENTIAL HOUSE SUBMISSION (one at a time, months parallel)"
+echo "SEQUENTIAL HOUSE SUBMISSION (months in batches of ${BATCH_SIZE})"
 echo "============================================================"
 echo "Experiment:  $EXPERIMENT_NAME"
 echo "Timestamp:   $TIMESTAMP"
 echo "Output dir:  $EXPERIMENT_OUTPUT"
-echo "Months parallel per house: $MONTHS_PARALLEL"
+echo "Batch size:  $BATCH_SIZE months per submission"
 echo "Poll interval: ${POLL_INTERVAL}s"
 echo ""
 
@@ -132,11 +128,23 @@ for house_id in "${HOUSE_IDS[@]}"; do
     echo "------------------------------------------------------------"
 
     # =================================================================
-    # Step 1: Submit month array
+    # Step 1: Submit months in mini-batches
     # =================================================================
-    ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_months_${house_id}_XXXXXX.sh")
+    BATCH_START=0
+    BATCH_NUM=0
+    HOUSE_FAILED=false
 
-    cat > "$ARRAY_SCRIPT" << EOF
+    while [ "$BATCH_START" -lt "$N_MONTHS" ]; do
+        BATCH_END=$((BATCH_START + BATCH_SIZE - 1))
+        if [ "$BATCH_END" -ge "$N_MONTHS" ]; then
+            BATCH_END=$((N_MONTHS - 1))
+        fi
+        BATCH_NUM=$((BATCH_NUM + 1))
+        BATCH_COUNT=$((BATCH_END - BATCH_START + 1))
+
+        ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_months_${house_id}_b${BATCH_NUM}_XXXXXX.sh")
+
+        cat > "$ARRAY_SCRIPT" << EOF
 #!/bin/bash
 #SBATCH --job-name=mon_${house_id}
 #SBATCH --output=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_%A_%a.out
@@ -146,10 +154,11 @@ for house_id in "${HOUSE_IDS[@]}"; do
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
-#SBATCH --array=0-$((N_MONTHS - 1))%${MONTHS_PARALLEL}
+#SBATCH --array=${BATCH_START}-${BATCH_END}
 
 echo "========================================"
 echo "House ${house_id} — month \$SLURM_ARRAY_TASK_ID / $((N_MONTHS - 1))"
+echo "Batch ${BATCH_NUM}: indices ${BATCH_START}-${BATCH_END}"
 echo "Array job: \$SLURM_ARRAY_JOB_ID[\$SLURM_ARRAY_TASK_ID]"
 echo "Start: \$(date)"
 echo "========================================"
@@ -169,19 +178,33 @@ python -u scripts/run_single_month.py \
 echo "Month \$SLURM_ARRAY_TASK_ID done: \$(date)"
 EOF
 
-    ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" 2>&1 | awk '{print $4}')
-    rm -f "$ARRAY_SCRIPT"
+        ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" 2>&1 | awk '{print $4}')
+        rm -f "$ARRAY_SCRIPT"
 
-    if [[ ! "$ARRAY_JOB_ID" =~ ^[0-9]+$ ]]; then
-        echo "  ERROR: Failed to submit month array for house ${house_id}: ${ARRAY_JOB_ID}"
+        if [[ ! "$ARRAY_JOB_ID" =~ ^[0-9]+$ ]]; then
+            echo "  ERROR: Failed to submit batch ${BATCH_NUM} for house ${house_id}: ${ARRAY_JOB_ID}"
+            HOUSE_FAILED=true
+            break
+        fi
+
+        echo "  Batch ${BATCH_NUM}: months ${BATCH_START}-${BATCH_END} (${BATCH_COUNT} tasks) -> job ${ARRAY_JOB_ID}"
+
+        # Wait for this batch to finish before submitting next
+        wait_for_job "$ARRAY_JOB_ID"
+
+        BATCH_START=$((BATCH_END + 1))
+    done
+
+    if [ "$HOUSE_FAILED" = true ]; then
         FAILED_HOUSES+=("$house_id")
+        echo "  SKIPPING house ${house_id} due to submission error"
         continue
     fi
 
-    echo "  Months array: ${ARRAY_JOB_ID} [${N_MONTHS} tasks %${MONTHS_PARALLEL}]"
+    echo "  All ${N_MONTHS} months done — $(date '+%H:%M:%S')"
 
     # =================================================================
-    # Step 2: Submit M2 + reports + cleanup (depends on month array)
+    # Step 2: Submit M2 + reports + cleanup (no dependency needed — months done)
     # =================================================================
     POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_post_${house_id}_XXXXXX.sh")
 
@@ -195,7 +218,6 @@ EOF
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:0
-#SBATCH --dependency=afterok:${ARRAY_JOB_ID}
 
 echo "========================================"
 echo "House ${house_id} — M2 + REPORTS"
@@ -279,20 +301,12 @@ EOF
     if [[ ! "$POST_JOB_ID" =~ ^[0-9]+$ ]]; then
         echo "  ERROR: Failed to submit post job for house ${house_id}: ${POST_JOB_ID}"
         FAILED_HOUSES+=("$house_id")
-        # Still wait for the array job to finish before moving on
-        echo "  Waiting for month array ${ARRAY_JOB_ID} to finish..."
-        wait_for_job "$ARRAY_JOB_ID" "months_${house_id}"
         continue
     fi
 
-    echo "  Post job:     ${POST_JOB_ID}"
-
-    # =================================================================
-    # Step 3: WAIT for this house to finish before submitting next
-    # =================================================================
-    echo "  Waiting for house ${house_id} to complete..."
-    wait_for_job "$POST_JOB_ID" "post_${house_id}"
-    echo "  House ${house_id} done — $(date '+%H:%M:%S')"
+    echo "  Post job: ${POST_JOB_ID}"
+    wait_for_job "$POST_JOB_ID"
+    echo "  House ${house_id} complete — $(date '+%H:%M:%S')"
 done
 
 echo ""
@@ -305,7 +319,7 @@ echo "============================================================"
 echo ""
 
 # =============================================================
-# Aggregates — after ALL houses
+# Aggregates — after ALL houses (submit with dependency chain)
 # =============================================================
 echo "Submitting aggregate jobs..."
 
