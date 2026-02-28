@@ -1,27 +1,24 @@
 #!/bin/bash
 # =============================================================================
-# Submit houses SEQUENTIALLY — one house at a time, months in parallel batches.
+# Submit houses SEQUENTIALLY — one house at a time, months filling job limit.
 #
 # Avoids QOSMaxSubmitJobPerUserLimit by:
-#   1. Processing one house at a time (wait for completion before next house)
-#   2. Splitting months into mini-batches (e.g., 12 at a time) instead of
-#      one big array job — so at most BATCH_SIZE jobs in the queue at once.
+#   1. Auto-detecting the QOS max submit limit (or using MAX_JOBS override)
+#   2. Submitting month jobs up to the limit, then waiting for slots to free
+#   3. Refilling to the limit as jobs complete (sliding window)
 #
 # Flow per house:
-#   Batch 1: months 0-11 (parallel) → WAIT
-#   Batch 2: months 12-23 (parallel) → WAIT
-#   ...
-#   M2 + reports + cleanup → WAIT
-#   → next house
+#   Submit months up to limit → as slots free, submit more → all months done
+#   → M2 + reports + cleanup → WAIT → next house
 #
 # After ALL houses: aggregate reports → identification ALL → comparison
 #
 # Usage:
-#     bash scripts/sbatch_sequential_houses.sh [experiment_name]
+#     bash scripts/sbatch_sequential_houses.sh [experiment_name] [max_jobs_override]
 #
 # Examples:
-#     bash scripts/sbatch_sequential_houses.sh                    # default: exp015_hole_repair
-#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair
+#     bash scripts/sbatch_sequential_houses.sh                         # auto-detect limit
+#     bash scripts/sbatch_sequential_houses.sh exp015_hole_repair 40   # force limit=40
 # =============================================================================
 
 # ---- Configuration ----
@@ -30,8 +27,9 @@ DATA_DIR="${PROJECT_ROOT}/INPUT/HouseholdData"
 LOG_DIR="${PROJECT_ROOT}/experiment_pipeline/logs"
 
 EXPERIMENT_NAME="${1:-exp015_hole_repair}"
-BATCH_SIZE=12        # Max months to submit at once (= max jobs in queue)
-POLL_INTERVAL=30     # Seconds between squeue polls
+MAX_JOBS_OVERRIDE="${2:-}"   # Optional: override auto-detected limit
+POLL_INTERVAL=20             # Seconds between squeue polls
+SAFETY_MARGIN=3              # Reserve slots for post/aggregate jobs
 
 # ---- TS set ONCE ----
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -59,7 +57,42 @@ print('Experiment metadata saved to ${EXPERIMENT_OUTPUT}')
 "
 cd "${PROJECT_ROOT}"
 
-# Helper: count unique months
+# ---- Auto-detect QOS limit ----
+detect_max_submit() {
+    # Try sacctmgr to find MaxSubmitJobsPerUser for user's QOS
+    local qos
+    qos=$(sacctmgr -n -P show assoc where user="$USER" format=qos 2>/dev/null | head -1)
+    if [ -n "$qos" ]; then
+        local limit
+        limit=$(sacctmgr -n -P show qos "$qos" format=MaxSubmitJobsPerUser 2>/dev/null | head -1)
+        if [[ "$limit" =~ ^[0-9]+$ ]] && [ "$limit" -gt 0 ]; then
+            echo "$limit"
+            return
+        fi
+    fi
+    echo "0"  # Could not detect
+}
+
+if [ -n "$MAX_JOBS_OVERRIDE" ]; then
+    MAX_JOBS="$MAX_JOBS_OVERRIDE"
+    echo "Job limit: ${MAX_JOBS} (user override)"
+else
+    MAX_JOBS=$(detect_max_submit)
+    if [ "$MAX_JOBS" -eq 0 ]; then
+        MAX_JOBS=40
+        echo "Job limit: ${MAX_JOBS} (fallback — could not auto-detect)"
+    else
+        echo "Job limit: ${MAX_JOBS} (auto-detected from QOS)"
+    fi
+fi
+
+# Effective limit (minus safety margin for post/aggregate jobs)
+EFFECTIVE_LIMIT=$((MAX_JOBS - SAFETY_MARGIN))
+if [ "$EFFECTIVE_LIMIT" -lt 5 ]; then
+    EFFECTIVE_LIMIT=5
+fi
+
+# ---- Helpers ----
 count_unique_months() {
     local house_dir="$1"
     local house_id="$2"
@@ -78,7 +111,10 @@ count_unique_months() {
     echo "$count"
 }
 
-# Helper: wait for a SLURM job to finish (poll squeue)
+count_my_jobs() {
+    squeue -u "$USER" -h 2>/dev/null | wc -l
+}
+
 wait_for_job() {
     local job_id="$1"
     while true; do
@@ -91,14 +127,59 @@ wait_for_job() {
     done
 }
 
+# Submit a single month job; prints the job ID
+submit_month() {
+    local house_id="$1"
+    local month_idx="$2"
+    local n_months="$3"
+
+    local SCRIPT
+    SCRIPT=$(mktemp "${LOG_DIR}/sbatch_mon_${house_id}_${month_idx}_XXXXXX.sh")
+
+    cat > "$SCRIPT" << EOF
+#!/bin/bash
+#SBATCH --job-name=mon_${house_id}_${month_idx}
+#SBATCH --output=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_${month_idx}.out
+#SBATCH --error=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_${month_idx}.err
+#SBATCH --partition=main
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --gres=gpu:0
+
+echo "House ${house_id} — month ${month_idx} / $((n_months - 1))"
+echo "Start: \$(date)"
+
+module load anaconda
+source activate nilm_new
+
+cd "${PROJECT_ROOT}/experiment_pipeline"
+
+python -u scripts/run_single_month.py \
+    --house_id ${house_id} \
+    --month_index ${month_idx} \
+    --experiment_name ${EXPERIMENT_NAME} \
+    --output_path ${EXPERIMENT_OUTPUT} \
+    --input_path ${DATA_DIR}
+
+echo "Month ${month_idx} done: \$(date)"
+EOF
+
+    local job_id
+    job_id=$(sbatch "$SCRIPT" 2>&1 | awk '{print $4}')
+    rm -f "$SCRIPT"
+    echo "$job_id"
+}
+
 echo "============================================================"
-echo "SEQUENTIAL HOUSE SUBMISSION (months in batches of ${BATCH_SIZE})"
+echo "SEQUENTIAL HOUSES — FILL TO LIMIT (sliding window)"
 echo "============================================================"
-echo "Experiment:  $EXPERIMENT_NAME"
-echo "Timestamp:   $TIMESTAMP"
-echo "Output dir:  $EXPERIMENT_OUTPUT"
-echo "Batch size:  $BATCH_SIZE months per submission"
-echo "Poll interval: ${POLL_INTERVAL}s"
+echo "Experiment:     $EXPERIMENT_NAME"
+echo "Timestamp:      $TIMESTAMP"
+echo "Output dir:     $EXPERIMENT_OUTPUT"
+echo "QOS job limit:  $MAX_JOBS"
+echo "Effective limit: $EFFECTIVE_LIMIT (after ${SAFETY_MARGIN} reserved)"
+echo "Poll interval:  ${POLL_INTERVAL}s"
 echo ""
 
 # Collect all house IDs
@@ -128,83 +209,76 @@ for house_id in "${HOUSE_IDS[@]}"; do
     echo "------------------------------------------------------------"
 
     # =================================================================
-    # Step 1: Submit months in mini-batches
+    # Step 1: Submit month jobs — fill up to limit, refill as slots free
     # =================================================================
-    BATCH_START=0
-    BATCH_NUM=0
+    NEXT_MONTH=0                # Next month index to submit
+    MONTH_JOBS=()               # Array of (job_id) for tracking
     HOUSE_FAILED=false
 
-    while [ "$BATCH_START" -lt "$N_MONTHS" ]; do
-        BATCH_END=$((BATCH_START + BATCH_SIZE - 1))
-        if [ "$BATCH_END" -ge "$N_MONTHS" ]; then
-            BATCH_END=$((N_MONTHS - 1))
-        fi
-        BATCH_NUM=$((BATCH_NUM + 1))
-        BATCH_COUNT=$((BATCH_END - BATCH_START + 1))
+    while [ "$NEXT_MONTH" -lt "$N_MONTHS" ] || [ ${#MONTH_JOBS[@]} -gt 0 ]; do
 
-        ARRAY_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_months_${house_id}_b${BATCH_NUM}_XXXXXX.sh")
+        # --- Submit as many months as we have slots for ---
+        if [ "$NEXT_MONTH" -lt "$N_MONTHS" ]; then
+            CURRENT_JOBS=$(count_my_jobs)
+            AVAILABLE=$((EFFECTIVE_LIMIT - CURRENT_JOBS))
 
-        cat > "$ARRAY_SCRIPT" << EOF
-#!/bin/bash
-#SBATCH --job-name=mon_${house_id}
-#SBATCH --output=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_%A_%a.out
-#SBATCH --error=${LOG_DIR}/month_${house_id}_${TIMESTAMP}_%A_%a.err
-#SBATCH --partition=main
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=16G
-#SBATCH --gres=gpu:0
-#SBATCH --array=${BATCH_START}-${BATCH_END}
+            SUBMITTED_THIS_ROUND=0
+            while [ "$AVAILABLE" -gt 0 ] && [ "$NEXT_MONTH" -lt "$N_MONTHS" ]; do
+                JOB_ID=$(submit_month "$house_id" "$NEXT_MONTH" "$N_MONTHS")
 
-echo "========================================"
-echo "House ${house_id} — month \$SLURM_ARRAY_TASK_ID / $((N_MONTHS - 1))"
-echo "Batch ${BATCH_NUM}: indices ${BATCH_START}-${BATCH_END}"
-echo "Array job: \$SLURM_ARRAY_JOB_ID[\$SLURM_ARRAY_TASK_ID]"
-echo "Start: \$(date)"
-echo "========================================"
+                if [[ ! "$JOB_ID" =~ ^[0-9]+$ ]]; then
+                    echo "  ERROR submitting month ${NEXT_MONTH}: ${JOB_ID}"
+                    HOUSE_FAILED=true
+                    break
+                fi
 
-module load anaconda
-source activate nilm_new
+                MONTH_JOBS+=("$JOB_ID")
+                NEXT_MONTH=$((NEXT_MONTH + 1))
+                AVAILABLE=$((AVAILABLE - 1))
+                SUBMITTED_THIS_ROUND=$((SUBMITTED_THIS_ROUND + 1))
+            done
 
-cd "${PROJECT_ROOT}/experiment_pipeline"
+            if [ "$SUBMITTED_THIS_ROUND" -gt 0 ]; then
+                echo "  Submitted ${SUBMITTED_THIS_ROUND} months (total queued: ${#MONTH_JOBS[@]}, next: ${NEXT_MONTH}/${N_MONTHS})"
+            fi
 
-python -u scripts/run_single_month.py \
-    --house_id ${house_id} \
-    --month_index \$SLURM_ARRAY_TASK_ID \
-    --experiment_name ${EXPERIMENT_NAME} \
-    --output_path ${EXPERIMENT_OUTPUT} \
-    --input_path ${DATA_DIR}
-
-echo "Month \$SLURM_ARRAY_TASK_ID done: \$(date)"
-EOF
-
-        ARRAY_JOB_ID=$(sbatch "$ARRAY_SCRIPT" 2>&1 | awk '{print $4}')
-        rm -f "$ARRAY_SCRIPT"
-
-        if [[ ! "$ARRAY_JOB_ID" =~ ^[0-9]+$ ]]; then
-            echo "  ERROR: Failed to submit batch ${BATCH_NUM} for house ${house_id}: ${ARRAY_JOB_ID}"
-            HOUSE_FAILED=true
-            break
+            if [ "$HOUSE_FAILED" = true ]; then
+                break
+            fi
         fi
 
-        echo "  Batch ${BATCH_NUM}: months ${BATCH_START}-${BATCH_END} (${BATCH_COUNT} tasks) -> job ${ARRAY_JOB_ID}"
+        # --- Clean finished jobs from tracking list ---
+        if [ ${#MONTH_JOBS[@]} -gt 0 ]; then
+            STILL_RUNNING=()
+            for jid in "${MONTH_JOBS[@]}"; do
+                status=$(squeue -j "$jid" -h -o "%T" 2>/dev/null)
+                if [ -n "$status" ]; then
+                    STILL_RUNNING+=("$jid")
+                fi
+            done
+            MONTH_JOBS=("${STILL_RUNNING[@]}")
+        fi
 
-        # Wait for this batch to finish before submitting next
-        wait_for_job "$ARRAY_JOB_ID"
-
-        BATCH_START=$((BATCH_END + 1))
+        # --- If still waiting, sleep ---
+        if [ "$NEXT_MONTH" -lt "$N_MONTHS" ] || [ ${#MONTH_JOBS[@]} -gt 0 ]; then
+            sleep "$POLL_INTERVAL"
+        fi
     done
 
     if [ "$HOUSE_FAILED" = true ]; then
         FAILED_HOUSES+=("$house_id")
         echo "  SKIPPING house ${house_id} due to submission error"
+        # Wait for any running month jobs to finish
+        for jid in "${MONTH_JOBS[@]}"; do
+            wait_for_job "$jid"
+        done
         continue
     fi
 
     echo "  All ${N_MONTHS} months done — $(date '+%H:%M:%S')"
 
     # =================================================================
-    # Step 2: Submit M2 + reports + cleanup (no dependency needed — months done)
+    # Step 2: M2 + reports + cleanup
     # =================================================================
     POST_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_seq_post_${house_id}_XXXXXX.sh")
 
@@ -319,7 +393,7 @@ echo "============================================================"
 echo ""
 
 # =============================================================
-# Aggregates — after ALL houses (submit with dependency chain)
+# Aggregates — after ALL houses
 # =============================================================
 echo "Submitting aggregate jobs..."
 
