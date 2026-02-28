@@ -111,7 +111,7 @@ count_my_jobs() {
 # Count running month jobs for a specific house
 count_house_month_jobs() {
     local house_id="$1"
-    squeue -u "$USER" -h -o "%j" 2>/dev/null | grep -c "^mon_${house_id}_" || echo 0
+    squeue -u "$USER" -h -o "%j" 2>/dev/null | grep -c "^mon_${house_id}_" || true
 }
 
 wait_for_job() {
