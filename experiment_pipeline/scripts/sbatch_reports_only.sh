@@ -91,12 +91,13 @@ python scripts/run_dynamic_report.py \
     --experiment ${EXPERIMENT_OUTPUT} \
     --output-dir ${REPORTS_DIR} \
     --publish segregation \
+    --aggregate-only \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
     SEG_JOB=$(sbatch "$SEG_SCRIPT" 2>&1 | grep "Submitted batch job" | awk '{print $4}')
     rm -f "$SEG_SCRIPT"
-    echo "  Segregation report:    ${SEG_JOB}"
+    echo "  Segregation report (aggregate):  ${SEG_JOB}"
 
     # ---- 2. Identification report (all houses + aggregate) — after segregation ----
     IDENT_SCRIPT=$(mktemp "${LOG_DIR}/sbatch_rpt_ident_XXXXXX.sh")
