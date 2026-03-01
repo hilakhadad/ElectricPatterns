@@ -122,6 +122,7 @@ python scripts/run_identification_report.py \
     --experiment ${EXPERIMENT_OUTPUT} \
     --output-dir ${REPORTS_DIR} \
     --publish identification \
+    --aggregate-only \
     2>&1
 echo "Exit: \$? — End: \$(date)"
 EOF
