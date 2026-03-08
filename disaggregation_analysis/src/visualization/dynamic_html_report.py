@@ -183,7 +183,7 @@ def generate_dynamic_house_report(
         experiment_dir: Root experiment output directory
         house_id: House ID
         output_path: Where to save the HTML file (optional, auto-generated if None)
-        pre_quality: Pre-analysis quality score (float, 'faulty', or None)
+        pre_quality: Pre-analysis quality score (float or None)
         skip_activations_detail: Unused (kept for backward compatibility)
         show_timing: If True, print per-step timing to console
 
@@ -338,6 +338,8 @@ def generate_dynamic_aggregate_report(
                 metrics['pre_quality'] = house_pre.get('quality_score')
                 metrics['nan_continuity'] = house_pre.get('nan_continuity', 'unknown')
                 metrics['max_nan_pct'] = house_pre.get('max_nan_pct', 0)
+                metrics['n_phases_without_data'] = house_pre.get('n_phases_without_data', 0)
+                metrics['nan_bracket'] = house_pre.get('nan_bracket')
             else:
                 metrics['pre_quality'] = house_pre
                 metrics['nan_continuity'] = 'unknown'
@@ -440,24 +442,12 @@ def _build_house_html(
 
     # Upstream metric banner: pre-analysis quality from house_analysis
     upstream_banner_html = ''
-    if pre_quality is not None and not (isinstance(pre_quality, str) and pre_quality.startswith('faulty')):
+    if pre_quality is not None and isinstance(pre_quality, (int, float)):
         upstream_banner_html = _build_upstream_metric_banner(
             label='Input Data Quality (from Pre-Analysis)',
             value=pre_quality,
             suffix='/100',
             color='#7B9BC4',
-        )
-    elif isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        _faulty_labels = {
-            'faulty_dead_phase': 'Dead Phase',
-            'faulty_high_nan': 'High NaN',
-            'faulty_both': 'Dead Phase + High NaN',
-        }
-        upstream_banner_html = _build_upstream_metric_banner(
-            label='Input Data Quality (from Pre-Analysis)',
-            value=_faulty_labels.get(pre_quality, 'Faulty'),
-            suffix='',
-            color='#6f42c1',
         )
 
     return f"""<!DOCTYPE html>
@@ -725,6 +715,8 @@ def _build_aggregate_html(
         pre_quality = m.get('pre_quality')
         tier = _assign_tier(pre_quality)
         nan_cont = m.get('nan_continuity', 'unknown')
+        n_missing = m.get('n_phases_without_data', 0) or 0
+        nan_bracket = m.get('nan_bracket', '0-5') or '0-5'
 
         eff = t.get('efficiency', 0)
         if eff >= 70:
@@ -744,6 +736,7 @@ def _build_aggregate_html(
 
         house_rows += f'''
         <tr data-tier="{tier}" data-continuity="{nan_cont}"
+            data-missing-phases="{n_missing}" data-nan-bracket="{nan_bracket}"
             data-segregated="{t.get('segregated_pct', 0):.1f}" data-background="{t.get('background_pct', 0):.1f}"
             data-aboveth="{t.get('above_th_pct', 0):.1f}" data-subth="{t.get('sub_threshold_pct', 0):.1f}"
             data-nodata="{t.get('no_data_pct', 0):.1f}" data-efficiency="{eff:.1f}"
@@ -763,14 +756,21 @@ def _build_aggregate_html(
         </tr>
         '''
 
-    # Count tiers and continuity labels
+    # Count tiers, continuity, missing phases, and NaN brackets
     tier_counts = {}
     continuity_counts = {}
+    missing_phase_counts = {}
+    nan_bracket_counts = {}
     for m in valid:
         tier = _assign_tier(m.get('pre_quality'))
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         cont = m.get('nan_continuity', 'unknown')
         continuity_counts[cont] = continuity_counts.get(cont, 0) + 1
+        n_miss = m.get('n_phases_without_data', 0) or 0
+        n_miss = min(n_miss, 2)
+        missing_phase_counts[n_miss] = missing_phase_counts.get(n_miss, 0) + 1
+        nb = m.get('nan_bracket', '0-5') or '0-5'
+        nan_bracket_counts[nb] = nan_bracket_counts.get(nb, 0) + 1
 
     # Distribution chart for efficiency
     chart_id = 'agg-efficiency-dist'
@@ -802,7 +802,7 @@ def _build_aggregate_html(
     })
 
     # Build filter bar and quality distribution
-    filter_bar = _build_filter_bar(tier_counts, continuity_counts)
+    filter_bar = _build_filter_bar(tier_counts, continuity_counts, missing_phase_counts, nan_bracket_counts)
     quality_dist_bar = _build_quality_dist_bar(tier_counts, n_houses)
 
     about_html = _build_about_section('disaggregation')
@@ -907,9 +907,6 @@ def _build_aggregate_html(
         .tier-good {{ background: #D0E4F4; color: #2A5A7A; }}
         .tier-fair {{ background: #F5ECD5; color: #6A5A2A; }}
         .tier-poor {{ background: #F5D8D8; color: #6A3030; }}
-        .tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
-        .tier-faulty_high_nan {{ background: #E5D8F0; color: #5A3A7A; }}
-        .tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .tier-unknown {{ background: #e9ecef; color: #495057; }}
         .cont-continuous {{ background: #D8F0E0; color: #3A6A4A; }}
         .cont-minor_gaps {{ background: #D0E4F4; color: #2A5A7A; }}
@@ -1113,6 +1110,17 @@ def _build_aggregate_html(
     function updateFilter() {{
         var selectedTiers = getCheckedTiers();
         var selectedCont = getCheckedContinuity();
+        // Missing phases filter
+        var checkedMissing = [];
+        document.querySelectorAll('[data-filter-missing]').forEach(function(cb) {{
+            if (cb.checked) checkedMissing.push(cb.getAttribute('data-filter-missing'));
+        }});
+        // NaN bracket filter
+        var checkedNanBracket = [];
+        document.querySelectorAll('[data-filter-nan-bracket]').forEach(function(cb) {{
+            if (cb.checked) checkedNanBracket.push(cb.getAttribute('data-filter-nan-bracket'));
+        }});
+
         var table = document.getElementById('houses-table');
         var rows = table.querySelectorAll('tbody tr');
         var visible = 0;
@@ -1121,7 +1129,11 @@ def _build_aggregate_html(
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier');
             var cont = row.getAttribute('data-continuity');
-            if (selectedTiers.indexOf(tier) !== -1 && selectedCont.indexOf(cont) !== -1) {{
+            var missing = row.getAttribute('data-missing-phases');
+            var nanBracket = row.getAttribute('data-nan-bracket');
+            var missingMatch = checkedMissing.length === 0 || checkedMissing.indexOf(missing) !== -1;
+            var nanMatch = checkedNanBracket.length === 0 || checkedNanBracket.indexOf(nanBracket) !== -1;
+            if (selectedTiers.indexOf(tier) !== -1 && selectedCont.indexOf(cont) !== -1 && missingMatch && nanMatch) {{
                 row.classList.remove('hidden');
                 visible++;
                 sumExpl += parseFloat(row.getAttribute('data-segregated')) || 0;
@@ -1150,12 +1162,6 @@ def _build_aggregate_html(
         if (status) status.textContent = 'Showing ' + visible + ' / ' + rows.length + ' houses';
     }}
 
-    function allExceptFaulty() {{
-        document.querySelectorAll('.tier-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = !cb.value.startsWith('faulty'); }});
-        document.querySelectorAll('.cont-filter input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
-        updateFilter();
-    }}
-
     function selectAll() {{
         document.querySelectorAll('.filter-bar input[type=checkbox]').forEach(function(cb) {{ cb.checked = true; }});
         updateFilter();
@@ -1178,16 +1184,16 @@ def _build_aggregate_html(
 </html>"""
 
 
-def _build_filter_bar(tier_counts: Dict[str, int], continuity_counts: Optional[Dict[str, int]] = None) -> str:
-    """Build the tier and continuity filter bars HTML."""
+def _build_filter_bar(tier_counts: Dict[str, int],
+                      continuity_counts: Optional[Dict[str, int]] = None,
+                      missing_phase_counts: Optional[Dict[int, int]] = None,
+                      nan_bracket_counts: Optional[Dict[str, int]] = None) -> str:
+    """Build the tier, continuity, missing phases, and NaN bracket filter bars HTML."""
     tiers = [
         ('excellent', 'Excellent', 'tier-excellent'),
         ('good', 'Good', 'tier-good'),
         ('fair', 'Fair', 'tier-fair'),
         ('poor', 'Poor', 'tier-poor'),
-        ('faulty_dead_phase', 'Dead Phase', 'tier-faulty_dead_phase'),
-        ('faulty_high_nan', 'High NaN', 'tier-faulty_high_nan'),
-        ('faulty_both', 'Both', 'tier-faulty_both'),
         ('unknown', 'Unknown', 'tier-unknown'),
     ]
 
@@ -1233,14 +1239,65 @@ def _build_filter_bar(tier_counts: Dict[str, int], continuity_counts: Optional[D
         {cont_checkboxes}
     </div>'''
 
+    # Missing phases filter
+    missing_bar = ''
+    if missing_phase_counts:
+        missing_checkboxes = ''
+        missing_items = [
+            (0, '0 Missing Phases', '#28a745'),
+            (1, '1 Missing Phase', '#e67e22'),
+            (2, '2 Missing Phases', '#dc3545'),
+        ]
+        for value, label, color in missing_items:
+            count = missing_phase_counts.get(value, 0)
+            if count == 0:
+                continue
+            missing_checkboxes += f'''
+            <span class="filter-checkbox" style="background: {{{{color}}}}22; border: 1px solid {color}; padding: 4px 10px; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" value="{value}" checked onchange="updateFilter()" data-filter-missing="{value}">
+                {label} ({count})
+            </span> '''
+        if missing_checkboxes:
+            missing_bar = f'''
+    <div class="filter-bar">
+        <label>Filter by Phases Without Data:</label>
+        {missing_checkboxes}
+    </div>'''
+
+    # NaN bracket filter
+    nan_bar = ''
+    if nan_bracket_counts:
+        nan_checkboxes = ''
+        nan_items = [
+            ('0-5', '<5% NaN', '#28a745'),
+            ('5-10', '5-10% NaN', '#3498db'),
+            ('10-15', '10-15% NaN', '#e67e22'),
+            ('15-20', '15-20% NaN', '#e74c3c'),
+            ('20+', '>20% NaN', '#8e44ad'),
+        ]
+        for value, label, color in nan_items:
+            count = nan_bracket_counts.get(value, 0)
+            if count == 0:
+                continue
+            nan_checkboxes += f'''
+            <span class="filter-checkbox" style="background: {color}22; border: 1px solid {color}; padding: 4px 10px; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" value="{value}" checked onchange="updateFilter()" data-filter-nan-bracket="{value}">
+                {label} ({count})
+            </span> '''
+        if nan_checkboxes:
+            nan_bar = f'''
+    <div class="filter-bar">
+        <label>Filter by Max Phase NaN %:</label>
+        {nan_checkboxes}
+    </div>'''
+
     return f'''
     <div class="filter-bar">
         <label>Filter by Pre-Quality:</label>
         {tier_checkboxes}
-        <button class="filter-btn" onclick="allExceptFaulty()" style="font-weight:bold;">All except Faulty</button>
         <button class="filter-btn" onclick="selectAll()">Show All</button>
         <span class="filter-status" id="filter-status"></span>
-    </div>{cont_bar}'''
+    </div>{cont_bar}{missing_bar}{nan_bar}'''
 
 
 def _build_empty_aggregate_html(generated_at: str, experiment_dir: str, total: int) -> str:

@@ -80,10 +80,10 @@ def generate_dynamic_evaluation_summary(
             current_remaining = run_data[remaining_col].clip(lower=0).sum()
             orig = original_power[phase]
 
-            # Power explained by THIS iteration
-            iteration_explained = max(0, prev_remaining[phase] - current_remaining)
-            # Cumulative explained from original
-            cumulative_explained = max(0, orig - current_remaining)
+            # Power segregated by THIS iteration
+            iteration_segregated = max(0, prev_remaining[phase] - current_remaining)
+            # Cumulative segregated from original
+            cumulative_segregated = max(0, orig - current_remaining)
 
             rows.append({
                 'run_number': run_number,
@@ -91,10 +91,10 @@ def generate_dynamic_evaluation_summary(
                 'phase': phase,
                 'original_power': round(orig, 1),
                 'remaining_power': round(current_remaining, 1),
-                'iteration_explained': round(iteration_explained, 1),
-                'iteration_explained_pct': round(iteration_explained / orig * 100, 2) if orig > 0 else 0,
-                'cumulative_explained': round(cumulative_explained, 1),
-                'cumulative_explained_pct': round(cumulative_explained / orig * 100, 2) if orig > 0 else 0,
+                'iteration_segregated': round(iteration_segregated, 1),
+                'iteration_segregated_pct': round(iteration_segregated / orig * 100, 2) if orig > 0 else 0,
+                'cumulative_segregated': round(cumulative_segregated, 1),
+                'cumulative_segregated_pct': round(cumulative_segregated / orig * 100, 2) if orig > 0 else 0,
             })
 
             prev_remaining[phase] = current_remaining
@@ -114,6 +114,6 @@ def generate_dynamic_evaluation_summary(
     last_run = summary_df[summary_df['run_number'] == summary_df['run_number'].max()]
     for _, row in last_run.iterrows():
         logger.info(
-            f"  {row['phase']}: {row['cumulative_explained_pct']:.1f}% of total power explained "
-            f"({row['cumulative_explained']:.0f}W / {row['original_power']:.0f}W)"
+            f"  {row['phase']}: {row['cumulative_segregated_pct']:.1f}% of total power segregated "
+            f"({row['cumulative_segregated']:.0f}W / {row['original_power']:.0f}W)"
         )

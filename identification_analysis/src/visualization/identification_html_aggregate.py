@@ -102,8 +102,12 @@ def generate_identification_aggregate_report(
         house_pre = (pre_analysis_scores or {}).get(house_id, {})
         if isinstance(house_pre, dict):
             pre_quality = house_pre.get('quality_score')
+            n_phases_without_data = house_pre.get('n_phases_without_data', 0)
+            nan_bracket = house_pre.get('nan_bracket', '0-5')
         else:
             pre_quality = house_pre
+            n_phases_without_data = 0
+            nan_bracket = '0-5'
 
         if not sessions:
             house_summaries.append({
@@ -120,6 +124,8 @@ def generate_identification_aggregate_report(
                 'classified_min_per_day': 0,
                 'spike_count': spike_count,
                 'pre_quality': pre_quality,
+                'n_phases_without_data': n_phases_without_data,
+                'nan_bracket': nan_bracket,
             })
             continue
 
@@ -208,6 +214,8 @@ def generate_identification_aggregate_report(
             'classified_min_per_day': classified_min_per_day,
             'spike_count': spike_count,
             'pre_quality': pre_quality,
+            'n_phases_without_data': n_phases_without_data,
+            'nan_bracket': nan_bracket,
         })
 
     if show_timing:
@@ -308,6 +316,8 @@ def _build_aggregate_html(
         # Pre-quality
         pq_html = _format_pre_quality(h.get('pre_quality'))
         tier = _assign_tier(h.get('pre_quality'))
+        n_missing = h.get('n_phases_without_data', 0) or 0
+        nan_bracket = h.get('nan_bracket', '0-5') or '0-5'
 
         # Device type badges
         badges = ''
@@ -328,7 +338,7 @@ def _build_aggregate_html(
         spikes = h.get('spike_count', 0)
 
         table_rows += f'''
-        <tr data-tier="{tier}">
+        <tr data-tier="{tier}" data-missing-phases="{n_missing}" data-nan-bracket="{nan_bracket}">
             <td style="{_td}" data-value="{hid}">{link}</td>
             <td style="{_td}text-align:center;" data-value="{days}">{days}</td>
             <td style="{_td}text-align:center;">{pq_html}</td>
@@ -347,9 +357,6 @@ def _build_aggregate_html(
         'good': ('Good', '#cce5ff', '#004085'),
         'fair': ('Fair', '#fff3cd', '#856404'),
         'poor': ('Poor', '#fde2d4', '#813e1a'),
-        'faulty_dead_phase': ('Dead Phase', '#d4c5e2', '#5a3d7a'),
-        'faulty_high_nan': ('High NaN', '#e2d5f0', '#6f42c1'),
-        'faulty_both': ('Faulty Both', '#c9a3d4', '#4a0e6b'),
         'unknown': ('Unknown', '#e9ecef', '#495057'),
     }
     filter_checkboxes = ''
@@ -361,6 +368,39 @@ def _build_aggregate_html(
             f'<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;'
             f'border-radius:4px;font-size:0.85em;background:{bg};color:{fg};cursor:pointer;">'
             f'<input type="checkbox" data-filter-tier="{tier_key}" checked '
+            f'onchange="updateIdFilter()"> {label} ({cnt})</label> '
+        )
+
+    # Missing phases filter
+    missing_phase_counts = {}
+    nan_bracket_counts = {}
+    for h in house_summaries:
+        n_miss = min(h.get('n_phases_without_data', 0) or 0, 2)
+        missing_phase_counts[n_miss] = missing_phase_counts.get(n_miss, 0) + 1
+        nb = h.get('nan_bracket', '0-5') or '0-5'
+        nan_bracket_counts[nb] = nan_bracket_counts.get(nb, 0) + 1
+
+    missing_checkboxes = ''
+    for key, label, color in [(0, '0 Missing', '#28a745'), (1, '1 Missing', '#e67e22'), (2, '2 Missing', '#dc3545')]:
+        cnt = missing_phase_counts.get(key, 0)
+        if cnt == 0:
+            continue
+        missing_checkboxes += (
+            f'<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;'
+            f'border-radius:4px;font-size:0.85em;border:1px solid {color};cursor:pointer;">'
+            f'<input type="checkbox" data-filter-missing="{key}" checked '
+            f'onchange="updateIdFilter()"> {label} ({cnt})</label> '
+        )
+
+    nan_checkboxes = ''
+    for key, label, color in [('0-5', '<5%', '#28a745'), ('5-10', '5-10%', '#3498db'), ('10-15', '10-15%', '#e67e22'), ('15-20', '15-20%', '#e74c3c'), ('20+', '>20%', '#8e44ad')]:
+        cnt = nan_bracket_counts.get(key, 0)
+        if cnt == 0:
+            continue
+        nan_checkboxes += (
+            f'<label style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;'
+            f'border-radius:4px;font-size:0.85em;border:1px solid {color};cursor:pointer;">'
+            f'<input type="checkbox" data-filter-nan-bracket="{key}" checked '
             f'onchange="updateIdFilter()"> {label} ({cnt})</label> '
         )
 
@@ -481,6 +521,14 @@ def _build_aggregate_html(
                 {filter_checkboxes}
                 <span id="id-filter-status" style="font-size:0.85em;color:#888;margin-left:auto;"></span>
             </div>
+            <div class="filter-bar" style="margin-top:4px;">
+                <span style="font-weight:600;color:#555;margin-right:5px;">Phases Without Data:</span>
+                {missing_checkboxes}
+            </div>
+            <div class="filter-bar" style="margin-top:4px;">
+                <span style="font-weight:600;color:#555;margin-right:5px;">Max Phase NaN %:</span>
+                {nan_checkboxes}
+            </div>
             <div style="font-size:0.82em;color:#666;margin-bottom:10px;line-height:1.7;">
                 <strong>Column descriptions:</strong>
                 <strong>Days</strong> = calendar days from first to last session |
@@ -558,11 +606,24 @@ def _build_aggregate_html(
         document.querySelectorAll('[data-filter-tier]').forEach(function(cb) {{
             if (cb.checked) checkedTiers.push(cb.getAttribute('data-filter-tier'));
         }});
+        var checkedMissing = [];
+        document.querySelectorAll('[data-filter-missing]').forEach(function(cb) {{
+            if (cb.checked) checkedMissing.push(cb.getAttribute('data-filter-missing'));
+        }});
+        var checkedNanBracket = [];
+        document.querySelectorAll('[data-filter-nan-bracket]').forEach(function(cb) {{
+            if (cb.checked) checkedNanBracket.push(cb.getAttribute('data-filter-nan-bracket'));
+        }});
         var rows = document.querySelectorAll('#agg-table tbody tr');
         var shown = 0;
         rows.forEach(function(row) {{
             var tier = row.getAttribute('data-tier') || 'unknown';
-            if (checkedTiers.indexOf(tier) !== -1) {{
+            var missing = row.getAttribute('data-missing-phases') || '0';
+            var nanBracket = row.getAttribute('data-nan-bracket') || '0-5';
+            var tierMatch = checkedTiers.indexOf(tier) !== -1;
+            var missingMatch = checkedMissing.length === 0 || checkedMissing.indexOf(missing) !== -1;
+            var nanMatch = checkedNanBracket.length === 0 || checkedNanBracket.indexOf(nanBracket) !== -1;
+            if (tierMatch && missingMatch && nanMatch) {{
                 row.style.display = '';
                 shown++;
             }} else {{

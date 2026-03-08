@@ -26,8 +26,8 @@ def calculate_classification_metrics(
 
     Loads classification pkl files from all run directories and computes:
     - classified_rate: fraction of matches assigned to a known device type
-    - device_power_pct: fraction of total power explained by classified devices
-    - total_explained_power_pct: threshold-independent total explained power
+    - device_power_pct: fraction of total power segregated by classified devices
+    - total_segregated_power_pct: threshold-independent total segregated power
     - per-device and per-iteration breakdowns
 
     Args:
@@ -75,8 +75,8 @@ def calculate_classification_metrics(
     combined = pd.concat(all_classified, ignore_index=True)
     overall = _compute_device_metrics(combined)
 
-    # Total explained power (threshold-independent)
-    total_explained_pct = _compute_total_explained_power(experiment_dir, house_id, threshold_schedule)
+    # Total segregated power (threshold-independent)
+    total_segregated_pct = _compute_total_segregated_power(experiment_dir, house_id, threshold_schedule)
 
     # Per-phase breakdown
     per_phase = {}
@@ -95,7 +95,7 @@ def calculate_classification_metrics(
         'device_power_pct': overall.get('device_power_pct', 0),
         'boiler_power_pct': overall.get('boiler_power_pct', 0),
         'ac_power_pct': overall.get('ac_power_pct', 0),
-        'total_explained_power_pct': total_explained_pct,
+        'total_segregated_power_pct': total_segregated_pct,
         'device_breakdown': overall['device_breakdown'],
         'per_iteration': per_iteration,
         'per_phase': per_phase,
@@ -163,19 +163,19 @@ def _compute_device_metrics(classified: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-def _compute_total_explained_power(
+def _compute_total_segregated_power(
     experiment_dir: Path,
     house_id: str,
     threshold_schedule: List[int],
 ) -> float:
     """
-    Compute total explained power as a threshold-independent metric.
+    Compute total segregated power as a threshold-independent metric.
 
     Looks at the LAST iteration's summarized output and compares
     remaining power to original power from run_0.
 
     Returns:
-        Fraction of total power explained (0.0 - 1.0)
+        Fraction of total power segregated (0.0 - 1.0)
     """
     # Find the last run's summarized data
     last_run = len(threshold_schedule) - 1
@@ -217,8 +217,8 @@ def _compute_total_explained_power(
     if total_original == 0:
         return 0.0
 
-    explained = total_original - total_remaining
-    return round(max(0, explained / total_original), 4)
+    segregated = total_original - total_remaining
+    return round(max(0, segregated / total_original), 4)
 
 
 def _load_threshold_schedule(experiment_dir: Path) -> List[int]:
@@ -296,7 +296,7 @@ def _empty_metrics(house_id: str) -> Dict[str, Any]:
         'device_power_pct': 0,
         'boiler_power_pct': 0,
         'ac_power_pct': 0,
-        'total_explained_power_pct': 0,
+        'total_segregated_power_pct': 0,
         'device_breakdown': {dt: {'count': 0, 'power_pct': 0, 'avg_duration': 0, 'avg_magnitude': 0}
                              for dt in DEVICE_TYPES},
         'per_iteration': [],

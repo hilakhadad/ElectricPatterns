@@ -61,17 +61,16 @@ def _load_pre_analysis_scores(house_analysis_path) -> Dict[str, Any]:
         quality_label = quality.get('quality_label')
         quality_score = quality.get('quality_score')
 
-        if quality_label and quality_label.startswith('faulty'):
-            qs = quality_label
-        elif quality_score is not None:
-            qs = quality_score
-        else:
+        if quality_score is None:
             return None
 
         return house_id, {
-            'quality_score': qs,
+            'quality_score': quality_score,
+            'quality_label': quality_label,
             'nan_continuity': quality.get('nan_continuity_label', 'unknown'),
             'max_nan_pct': quality.get('max_phase_nan_pct', 0),
+            'n_phases_without_data': quality.get('n_phases_without_data', 0),
+            'nan_bracket': quality.get('nan_bracket', None),
         }
 
     if house_analysis_path.is_dir():

@@ -498,24 +498,24 @@ def create_tier_score_comparison_chart(analyses: List[Dict[str, Any]]) -> str:
         ('integrity_score', 'Integrity (10)', '#2ecc71'),
     ]
 
-    # Group houses into tiers
-    tier_order = ['Excellent', 'Good', 'Fair', 'Poor', 'Faulty']
+    # Group houses into tiers (score-based, thresholds: 80/65/50)
+    tier_order = ['Excellent', 'Good', 'Fair', 'Poor']
     tier_houses = {t: [] for t in tier_order}
 
+    tier_name_map = {'excellent': 'Excellent', 'good': 'Good', 'fair': 'Fair', 'poor': 'Poor'}
     for a in analyses:
-        score = a.get('data_quality', {}).get('quality_score', 0)
-        qlabel = a.get('flags', {}).get('quality_label')
-
-        if qlabel and 'faulty' in qlabel:
-            tier_houses['Faulty'].append(a)
-        elif score >= 90:
-            tier_houses['Excellent'].append(a)
-        elif score >= 75:
-            tier_houses['Good'].append(a)
-        elif score >= 50:
-            tier_houses['Fair'].append(a)
-        else:
-            tier_houses['Poor'].append(a)
+        tier = a.get('data_quality', {}).get('quality_tier', None)
+        if tier is None:
+            score = a.get('data_quality', {}).get('quality_score', 0)
+            if score >= 80:
+                tier = 'excellent'
+            elif score >= 65:
+                tier = 'good'
+            elif score >= 50:
+                tier = 'fair'
+            else:
+                tier = 'poor'
+        tier_houses[tier_name_map.get(tier, 'Poor')].append(a)
 
     # Only include tiers with houses
     active_tiers = [t for t in tier_order if tier_houses[t]]

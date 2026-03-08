@@ -4,7 +4,7 @@ HTML comparison report generator.
 Produces a standalone HTML file with:
 1. Configuration comparison table (feature flags per experiment)
 2. Aggregate performance summary
-3. Per-house heatmap (houses x experiments → explained_pct)
+3. Per-house heatmap (houses x experiments → segregated_pct)
 4. Device type distribution table
 """
 import sys
@@ -196,26 +196,26 @@ def _build_aggregate_section(aggregate_df: pd.DataFrame) -> str:
         return ''
 
     header = """<th>Experiment</th><th>Houses</th>
-        <th>Mean Explained %</th><th>Median</th><th>P25</th><th>P75</th>
+        <th>Mean Segregated %</th><th>Median</th><th>P25</th><th>P75</th>
         <th>Classified Rate</th><th>Mean Time (s)</th><th>Key Features</th>"""
 
     rows_html = ''
     # Find best values for highlighting
-    best_mean = aggregate_df['mean_explained_pct'].max()
+    best_mean = aggregate_df['mean_segregated_pct'].max()
     best_classified = aggregate_df['mean_classified_rate'].max()
 
     for _, row in aggregate_df.iterrows():
-        mean_cls = ' class="best-value"' if row['mean_explained_pct'] == best_mean else ''
+        mean_cls = ' class="best-value"' if row['mean_segregated_pct'] == best_mean else ''
         cr_cls = ' class="best-value"' if row['mean_classified_rate'] == best_classified else ''
 
         rows_html += f"""<tr>
             <td><strong>{row['exp_id']}</strong><br>
                 <span style="font-size:0.75em;color:{EP_TEXT_SECONDARY};">{row.get('description', '')[:60]}</span></td>
             <td>{row['n_houses']}</td>
-            <td{mean_cls}>{_format_val(row['mean_explained_pct'])}</td>
-            <td>{_format_val(row['median_explained_pct'])}</td>
-            <td>{_format_val(row['p25_explained_pct'])}</td>
-            <td>{_format_val(row['p75_explained_pct'])}</td>
+            <td{mean_cls}>{_format_val(row['mean_segregated_pct'])}</td>
+            <td>{_format_val(row['median_segregated_pct'])}</td>
+            <td>{_format_val(row['p25_segregated_pct'])}</td>
+            <td>{_format_val(row['p75_segregated_pct'])}</td>
             <td{cr_cls}>{_format_val(row['mean_classified_rate'], '.1%')}</td>
             <td>{_format_val(row['mean_elapsed_sec'], '.0f')}</td>
             <td style="font-size:0.8em;">{row.get('key_features', '')}</td>
@@ -232,7 +232,7 @@ def _build_aggregate_section(aggregate_df: pd.DataFrame) -> str:
 
 
 def _build_heatmap_section(per_house_df: pd.DataFrame, exp_names: List[str]) -> str:
-    """Build per-house heatmap: rows=houses, columns=experiments, cells=explained_pct."""
+    """Build per-house heatmap: rows=houses, columns=experiments, cells=segregated_pct."""
     if per_house_df.empty:
         return ''
 
@@ -245,7 +245,7 @@ def _build_heatmap_section(per_house_df: pd.DataFrame, exp_names: List[str]) -> 
 
     # Pivot for easy lookup
     pivot = per_house_df.pivot_table(
-        index='house_id', columns='exp_id', values='avg_explained_pct',
+        index='house_id', columns='exp_id', values='avg_segregated_pct',
     )
 
     rows_html = ''
@@ -283,7 +283,7 @@ def _build_heatmap_section(per_house_df: pd.DataFrame, exp_names: List[str]) -> 
 <section>
     <h2>Per-House Segregation Heatmap</h2>
     <p style="color:{EP_TEXT_SECONDARY};font-size:0.85em;margin-bottom:12px;">
-        Weighted average explained % across phases. Best value per house is <u>underlined</u>.
+        Weighted average segregated % across phases. Best value per house is <u>underlined</u>.
     </p>
     <div style="overflow-x:auto;">
     <table class="data-table">

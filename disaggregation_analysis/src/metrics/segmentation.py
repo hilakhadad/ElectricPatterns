@@ -230,7 +230,7 @@ def calculate_segmentation_quality(seg_df: pd.DataFrame,
     return metrics
 
 
-def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
+def calculate_threshold_segregation_metrics(experiment_dir: Path, house_id: str,
                                             run_number: int = 0,
                                             threshold: float = 1300) -> Dict[str, Any]:
     """
@@ -250,9 +250,9 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
         threshold: Power threshold in watts (default 1300W, matching pipeline config)
 
     Returns:
-        Dictionary with threshold explanation metrics per phase and total
+        Dictionary with threshold segregation metrics per phase and total
     """
-    logger.debug("calculate_threshold_explanation_metrics: house_id=%s, run_number=%d, threshold=%.0f",
+    logger.debug("calculate_threshold_segregation_metrics: house_id=%s, run_number=%d, threshold=%.0f",
                  house_id, run_number, threshold)
     metrics = {
         'threshold': threshold,
@@ -270,7 +270,7 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
         summarized_files = list(house_dir.glob("summarized_*.pkl"))
 
     if not summarized_files:
-        logger.warning("calculate_threshold_explanation_metrics: No summarized data for house %s run %d",
+        logger.warning("calculate_threshold_segregation_metrics: No summarized data for house %s run %d",
                        house_id, run_number)
         metrics['error'] = 'No summarized file found'
         return metrics
@@ -278,7 +278,7 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
     phases = ['w1', 'w2', 'w3']
 
     # Initialize counters per phase
-    phase_stats = {p: {'above_th': 0, 'explained': 0} for p in phases}
+    phase_stats = {p: {'above_th': 0, 'segregated': 0} for p in phases}
     total_minutes = 0
 
     # Process all files
@@ -307,45 +307,45 @@ def calculate_threshold_explanation_metrics(experiment_dir: Path, house_id: str,
             # Minutes segregated: original > TH but remaining < TH
             # This means the segregation successfully attributed the high power
             if above_th_count > 0:
-                explained_mask = above_th_mask & (df[remaining_col] < threshold)
-                explained_count = explained_mask.sum()
-                phase_stats[phase]['explained'] += explained_count
+                segregated_mask = above_th_mask & (df[remaining_col] < threshold)
+                segregated_count = segregated_mask.sum()
+                phase_stats[phase]['segregated'] += segregated_count
 
     # Calculate per-phase metrics
     total_above_th = 0
-    total_explained = 0
+    total_segregated = 0
 
     for phase in phases:
         above_th = phase_stats[phase]['above_th']
-        explained = phase_stats[phase]['explained']
+        segregated = phase_stats[phase]['segregated']
 
         metrics[f'{phase}_minutes_above_th'] = above_th
-        metrics[f'{phase}_minutes_explained'] = explained
+        metrics[f'{phase}_minutes_segregated'] = segregated
         if above_th > 0:
-            metrics[f'{phase}_explanation_rate'] = explained / above_th
+            metrics[f'{phase}_segregation_rate'] = segregated / above_th
         else:
-            metrics[f'{phase}_explanation_rate'] = 0
+            metrics[f'{phase}_segregation_rate'] = 0
 
         total_above_th += above_th
-        total_explained += explained
+        total_segregated += segregated
 
     # Total metrics
     metrics['total_minutes'] = total_minutes
     metrics['total_minutes_above_th'] = total_above_th
-    metrics['total_minutes_explained'] = total_explained
+    metrics['total_minutes_segregated'] = total_segregated
     if total_above_th > 0:
-        metrics['total_explanation_rate'] = total_explained / total_above_th
+        metrics['total_segregation_rate'] = total_segregated / total_above_th
     else:
-        metrics['total_explanation_rate'] = 0
+        metrics['total_segregation_rate'] = 0
 
     return metrics
 
 
-def calculate_threshold_explanation_all_iterations(experiment_dir: Path, house_id: str,
+def calculate_threshold_segregation_all_iterations(experiment_dir: Path, house_id: str,
                                                     max_iterations: int = 10,
                                                     threshold: float = 1300) -> List[Dict[str, Any]]:
     """
-    Calculate threshold explanation metrics for all iterations.
+    Calculate threshold segregation metrics for all iterations.
 
     Args:
         experiment_dir: Path to experiment output directory
@@ -356,7 +356,7 @@ def calculate_threshold_explanation_all_iterations(experiment_dir: Path, house_i
     Returns:
         List of dictionaries with metrics per iteration
     """
-    logger.debug("calculate_threshold_explanation_all_iterations: house_id=%s, max_iterations=%d, threshold=%.0f",
+    logger.debug("calculate_threshold_segregation_all_iterations: house_id=%s, max_iterations=%d, threshold=%.0f",
                  house_id, max_iterations, threshold)
     results = []
 
@@ -373,7 +373,7 @@ def calculate_threshold_explanation_all_iterations(experiment_dir: Path, house_i
         if not summarized_files:
             break  # No more iterations
 
-        metrics = calculate_threshold_explanation_metrics(
+        metrics = calculate_threshold_segregation_metrics(
             experiment_dir, house_id, run_number, threshold
         )
         metrics['iteration'] = run_number

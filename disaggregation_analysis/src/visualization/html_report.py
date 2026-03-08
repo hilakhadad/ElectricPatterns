@@ -31,7 +31,7 @@ from visualization.html_report_single import (
     _generate_iterations_section,
     _generate_matching_section,
     _generate_segmentation_section,
-    _generate_threshold_explanation_html,
+    _generate_threshold_segregation_html,
     _generate_patterns_section,
     _generate_ac_detection_html,
     _generate_boiler_detection_html,

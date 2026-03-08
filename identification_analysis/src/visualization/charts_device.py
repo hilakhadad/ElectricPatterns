@@ -65,7 +65,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
     """
     Create HTML table summarizing detected devices.
 
-    Columns: Device Type | Count | Avg Power | Avg Duration | % of Explained
+    Columns: Device Type | Count | Avg Power | Avg Duration | % of Segregated
     """
     logger.debug("Creating device summary table chart")
     devices = metrics.get('devices', {})
@@ -124,7 +124,7 @@ def create_device_summary_table(metrics: Dict[str, Any]) -> str:
                 <th style="padding: 12px 15px; text-align: center;">Count</th>
                 <th style="padding: 12px 15px; text-align: center;">Avg Power</th>
                 <th style="padding: 12px 15px; text-align: center;">Avg Duration</th>
-                <th style="padding: 12px 15px; text-align: left;">% of Explained Energy</th>
+                <th style="padding: 12px 15px; text-align: left;">% of Segregated Energy</th>
             </tr>
         </thead>
         <tbody>

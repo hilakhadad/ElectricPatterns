@@ -123,9 +123,6 @@ def _build_html_document(title: str, summary: str, table: str,
         .filter-checkbox.tier-good {{ background: #D0E4F4; color: #2A5A7A; }}
         .filter-checkbox.tier-fair {{ background: #F5ECD5; color: #6A5A2A; }}
         .filter-checkbox.tier-poor {{ background: #F5D8D8; color: #6A3030; }}
-        .filter-checkbox.tier-faulty_dead_phase {{ background: #d4c5e2; color: #5a3d7a; }}
-        .filter-checkbox.tier-faulty_high_nan {{ background: #E5D8F0; color: #5A3A7A; }}
-        .filter-checkbox.tier-faulty_both {{ background: #c9a3d4; color: #4a0e6b; }}
         .filter-checkbox.tier-unknown {{ background: #e9ecef; color: #495057; }}
 
         .filter-checkbox.unchecked {{
@@ -358,22 +355,12 @@ def _build_html_document(title: str, summary: str, table: str,
             <span class="filter-checkbox tier-poor">
                 <input type="checkbox" value="poor" checked onchange="updateFilter()"> Poor <span class="tier-count-label" id="count-poor"></span>
             </span>
-            <span class="filter-checkbox tier-faulty_dead_phase">
-                <input type="checkbox" value="faulty_dead_phase" checked onchange="updateFilter()"> Dead Phase <span class="tier-count-label" id="count-faulty_dead_phase"></span>
-            </span>
-            <span class="filter-checkbox tier-faulty_high_nan">
-                <input type="checkbox" value="faulty_high_nan" checked onchange="updateFilter()"> High NaN <span class="tier-count-label" id="count-faulty_high_nan"></span>
-            </span>
-            <span class="filter-checkbox tier-faulty_both">
-                <input type="checkbox" value="faulty_both" checked onchange="updateFilter()"> Both <span class="tier-count-label" id="count-faulty_both"></span>
-            </span>
             <span class="filter-checkbox tier-unknown">
                 <input type="checkbox" value="unknown" checked onchange="updateFilter()"> Unknown <span class="tier-count-label" id="count-unknown"></span>
             </span>
             <span style="margin-left: 10px;">
                 <button class="filter-btn" onclick="selectAll()">Select All</button>
                 <button class="filter-btn" onclick="deselectAll()">Deselect All</button>
-                <button class="filter-btn" onclick="allExceptFaulty()" style="font-weight: bold;">All except Faulty</button>
             </span>
             <span class="filter-status" id="filter-status"></span>
         </div>
@@ -406,7 +393,7 @@ def _build_html_document(title: str, summary: str, table: str,
 
         // Count houses per tier and show in filter bar
         function initFilterCounts() {{
-            const tiers = ['excellent', 'good', 'fair', 'poor', 'faulty_dead_phase', 'faulty_high_nan', 'faulty_both', 'unknown'];
+            const tiers = ['excellent', 'good', 'fair', 'poor', 'unknown'];
             tiers.forEach(function(tier) {{
                 const count = houseData.filter(function(h) {{ return h.tier === tier; }}).length;
                 const el = document.getElementById('count-' + tier);
@@ -442,13 +429,6 @@ def _build_html_document(title: str, summary: str, table: str,
 
         function deselectAll() {{
             document.querySelectorAll('#filter-bar input[type=checkbox]').forEach(function(cb) {{ cb.checked = false; }});
-            updateFilter();
-        }}
-
-        function allExceptFaulty() {{
-            document.querySelectorAll('#filter-bar input[type=checkbox]').forEach(function(cb) {{
-                cb.checked = !cb.value.startsWith('faulty');
-            }});
             updateFilter();
         }}
 
@@ -490,7 +470,7 @@ def _build_html_document(title: str, summary: str, table: str,
             if (el) el.textContent = n;
 
             if (n === 0) {{
-                setCardValue('summary-th-explanation', '-');
+                setCardValue('summary-th-segregation', '-');
                 setCardValue('summary-th-std', '');
                 setCardValue('summary-overall-score', '-');
                 setCardValue('summary-matching-score', '-');
@@ -501,20 +481,20 @@ def _build_html_document(title: str, summary: str, table: str,
                 return;
             }}
 
-            // Threshold explanation
-            var thRates = filtered.map(function(h) {{ return h.th_explanation_rate || 0; }});
+            // Threshold segregation
+            var thRates = filtered.map(function(h) {{ return h.th_segregation_rate || 0; }});
             var avgTh = mean(thRates);
             var stdTh = stdDev(thRates);
-            setCardValue('summary-th-explanation', formatPct(avgTh));
+            setCardValue('summary-th-segregation', formatPct(avgTh));
             setCardValue('summary-th-std', '(>1300W) \u00b1' + formatPct(stdTh) + ' std');
 
-            // Color for th explanation
+            // Color for th segregation
             var thCard = document.getElementById('summary-th-card');
             if (thCard) {{
                 var thColor = avgTh >= 0.8 ? '#28a745' : avgTh >= 0.5 ? '#ffc107' : '#dc3545';
                 thCard.style.border = '2px solid ' + thColor;
                 thCard.style.background = 'linear-gradient(135deg, #fff 0%, ' + thColor + '22 100%)';
-                var thNum = document.getElementById('summary-th-explanation');
+                var thNum = document.getElementById('summary-th-segregation');
                 if (thNum) thNum.style.color = thColor;
             }}
 
@@ -552,7 +532,7 @@ def _build_html_document(title: str, summary: str, table: str,
             var matchRates = filtered.map(function(h) {{ return h.matching_rate || 0; }});
             var segRatios = filtered.map(function(h) {{ return h.seg_ratio || 0; }});
             var minRatios = filtered.map(function(h) {{ return h.minutes_ratio || 0; }});
-            var thRates = filtered.map(function(h) {{ return h.th_explanation_rate || 0; }});
+            var thRates = filtered.map(function(h) {{ return h.th_segregation_rate || 0; }});
             var overallScores = filtered.map(function(h) {{ return h.overall_score || 0; }});
 
             var totalMatches = filtered.reduce(function(s, h) {{ return s + (h.total_matches || 0); }}, 0);

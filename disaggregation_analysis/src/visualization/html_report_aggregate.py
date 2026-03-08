@@ -39,7 +39,7 @@ def _extract_house_data(analyses: List[Dict[str, Any]]) -> list:
         seg = first.get('segmentation', {}) or {}
         flags = a.get('flags', {}) or {}
         patterns = first.get('patterns', {}) or {}
-        th_expl = a.get('threshold_explanation', {}) or {}
+        th_expl = a.get('threshold_segregation', {}) or {}
 
         pre_quality = a.get('pre_analysis_quality_score', None)
         tier = _assign_tier(pre_quality)
@@ -62,7 +62,7 @@ def _extract_house_data(analyses: List[Dict[str, Any]]) -> list:
             'matching_rate': (iterations.get('first_iter_matching_rate', 0) or 0),
             'seg_ratio': (seg.get('segmentation_ratio', 0) or 0),
             'minutes_ratio': minutes_ratio,
-            'th_explanation_rate': (th_expl.get('total_explanation_rate', 0) or 0),
+            'th_segregation_rate': (th_expl.get('total_segregation_rate', 0) or 0),
             'overall_score': (scores.get('overall_score', 0) or 0),
             'matching_score': (scores.get('matching_score', 0) or 0),
             'tags': matching.get('tag_breakdown', {}) or {},
@@ -151,21 +151,21 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     seg_ratios = [((a.get('first_iteration', {}) or {}).get('segmentation', {}) or {}).get('segmentation_ratio', 0) or 0 for a in valid]
     total_matches = sum(((a.get('first_iteration', {}) or {}).get('matching', {}) or {}).get('total_matches', 0) or 0 for a in valid)
 
-    # Threshold explanation rates
-    th_explanation_rates = [(a.get('threshold_explanation', {}) or {}).get('total_explanation_rate', 0) or 0 for a in valid]
+    # Threshold segregation rates
+    th_segregation_rates = [(a.get('threshold_segregation', {}) or {}).get('total_segregation_rate', 0) or 0 for a in valid]
 
     avg_overall = sum(overall_scores) / n_houses if n_houses > 0 else 0
     avg_matching = sum(matching_scores) / n_houses if n_houses > 0 else 0
     avg_seg = sum(seg_ratios) / n_houses if n_houses > 0 else 0
-    avg_th_expl = np.mean(th_explanation_rates) if th_explanation_rates else 0
-    std_th_expl = np.std(th_explanation_rates) if th_explanation_rates else 0
+    avg_th_expl = np.mean(th_segregation_rates) if th_segregation_rates else 0
+    std_th_expl = np.std(th_segregation_rates) if th_segregation_rates else 0
 
     # Count issues
     n_low_matching = sum(1 for a in valid if (a.get('flags', {}) or {}).get('low_matching_rate', False))
     n_negative = sum(1 for a in valid if (a.get('flags', {}) or {}).get('has_negative_values', False))
     n_low_seg = sum(1 for a in valid if (a.get('flags', {}) or {}).get('low_segmentation', False))
 
-    # Color for threshold explanation rate
+    # Color for threshold segregation rate
     th_color = '#28a745' if avg_th_expl >= 0.8 else '#ffc107' if avg_th_expl >= 0.5 else '#dc3545'
 
     # Classification metrics (dynamic threshold experiments only)
@@ -199,7 +199,7 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
             <div class="summary-label">Houses Analyzed</div>
         </div>
         <div class="summary-card" id="summary-th-card" style="border: 2px solid {th_color}; background: linear-gradient(135deg, #fff 0%, {th_color}22 100%);">
-            <div class="summary-number" id="summary-th-explanation" style="color: {th_color};">{avg_th_expl:.1%}</div>
+            <div class="summary-number" id="summary-th-segregation" style="color: {th_color};">{avg_th_expl:.1%}</div>
             <div class="summary-label">High-Power Energy Segregated</div>
             <div id="summary-th-std" style="font-size: 0.8em; color: #666;">(&gt;1300W) \u00b1{std_th_expl:.1%} std</div>
         </div>
@@ -298,9 +298,9 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         else:
             minutes_seg_ratio = 0
 
-        # Threshold explanation rate
-        th_expl = a.get('threshold_explanation', {}) or {}
-        th_explanation_rate = th_expl.get('total_explanation_rate', 0) or 0
+        # Threshold segregation rate
+        th_expl = a.get('threshold_segregation', {}) or {}
+        th_segregation_rate = th_expl.get('total_segregation_rate', 0) or 0
 
         # Score badge - check for damaged phases first
         score = scores.get('overall_score', 0) or 0
@@ -318,22 +318,16 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
         else:
             badge = '<span class="badge badge-red">Poor</span>'
 
-        # Color for explanation rate
-        th_color = '#28a745' if th_explanation_rate >= 0.8 else '#ffc107' if th_explanation_rate >= 0.5 else '#dc3545'
+        # Color for segregation rate
+        th_color = '#28a745' if th_segregation_rate >= 0.8 else '#ffc107' if th_segregation_rate >= 0.5 else '#dc3545'
 
         # Pre-analysis quality score (from house_analysis)
         pre_quality = a.get('pre_analysis_quality_score', None)
+        if isinstance(pre_quality, str):
+            pre_quality = None  # Legacy faulty strings — treat as missing
         tier = _assign_tier(pre_quality)
-        if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-            _faulty_labels = {
-                'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
-                'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
-                'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
-            }
-            _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
-            pre_quality_html = f'<span style="color: #6f42c1; font-weight: bold;" title="{_ft}">{_fl}</span>'
-        elif pre_quality is not None:
-            pre_q_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
+        if pre_quality is not None:
+            pre_q_color = '#28a745' if pre_quality >= 80 else '#007bff' if pre_quality >= 65 else '#ffc107' if pre_quality >= 50 else '#dc3545'
             pre_quality_html = f'<span style="color: {pre_q_color}; font-weight: bold;">{pre_quality:.0f}</span>'
         else:
             pre_quality_html = '<span style="color: #999;">-</span>'
@@ -363,7 +357,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]]) -> str:
             <td>{(iterations.get('first_iter_matching_rate', 0) or 0):.1%}</td>
             <td>{(seg.get('segmentation_ratio', 0) or 0):.1%}</td>
             <td>{minutes_seg_ratio:.2%}</td>
-            <td style="color: {th_color}; font-weight: bold;">{th_explanation_rate:.1%}</td>{classification_cells}
+            <td style="color: {th_color}; font-weight: bold;">{th_segregation_rate:.1%}</td>{classification_cells}
             <td style="font-size: 1.2em;">{devices}</td>
             <td>{score:.0f} {badge}</td>
             <td style="font-size: 1.2em;">{flags_display}</td>

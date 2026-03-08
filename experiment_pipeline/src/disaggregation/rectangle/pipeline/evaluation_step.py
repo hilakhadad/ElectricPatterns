@@ -184,8 +184,8 @@ def process_evaluation(house_id: str, run_number: int, threshold: int, actual_th
         }
         results_list.append(result)
 
-        logger.info(f"Phase {phase} - Power: {metrics['explained_power']:.0f}W ({metrics['explained_power_cumulative_pct']:.1f}% cumulative)")
-        logger.info(f"Phase {phase} - Time: {metrics['minutes_explained_cumulative']}/{metrics['minutes_above_th']} min ({metrics['minutes_explained_cumulative_pct']:.1f}%)")
+        logger.info(f"Phase {phase} - Power: {metrics['segregated_power']:.0f}W ({metrics['segregated_power_cumulative_pct']:.1f}% cumulative)")
+        logger.info(f"Phase {phase} - Time: {metrics['minutes_segregated_cumulative']}/{metrics['minutes_above_th']} min ({metrics['minutes_segregated_cumulative_pct']:.1f}%)")
 
     # Save results
     results_df = pd.DataFrame(results_list)

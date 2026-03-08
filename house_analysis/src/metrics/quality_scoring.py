@@ -32,7 +32,7 @@ def _score_sharp_entry(data: pd.DataFrame, phase_cols: list, metrics: dict) -> f
     Score sharp entry rate (up to 20 points).
 
     Fraction of threshold crossings caused by single-minute sharp jumps >= threshold.
-    Best predictor of algorithm success (rho=+0.576 overall, +0.606 th_explanation_rate).
+    Calibrated on 171 houses (Feb 2026): rho=+0.21 with segregated %, +0.31 with efficiency.
     """
     sharp_entry_score = 0
     phase_sharp_rates = []
@@ -149,7 +149,7 @@ def _score_power_profile(data: pd.DataFrame, phase_cols: list, metrics: dict) ->
     """
     Score power profile (up to 20 points).
 
-    Penalizes houses stuck in 500-1000W range (rho=-0.43 with overall_score).
+    Penalizes houses stuck in 500-1000W range (rho=+0.42 with segregated %).
     Rewards houses with clear low-power baseline (< 500W).
     """
     power_profile_score = 20
@@ -187,7 +187,7 @@ def _score_variability(data: pd.DataFrame, phase_cols: list, metrics: dict) -> f
     """
     Score variability (up to 20 points).
 
-    Higher CV = more device activity = better algorithm performance (rho=+0.41).
+    Higher CV = more device activity = better algorithm performance (rho=+0.30 with segregated %).
     """
     variability_score = 0
 
@@ -221,7 +221,7 @@ def _score_data_volume(data: pd.DataFrame, days_span: Optional[int],
     """
     Score data volume (up to 15 points).
 
-    More days of data = better (rho=+0.25), plus monthly balance (rho=+0.14).
+    More days of data = better (rho=+0.26 with segregated %), plus monthly balance.
     """
     data_volume_score = 0
 
@@ -337,27 +337,34 @@ def _apply_anomaly_penalties(metrics: dict,
     """
     Apply anomaly penalties to the base quality score.
 
+    Penalties were recalibrated on 171 houses (Feb 2026) by sweeping penalty
+    factors against Spearman rho with segregated %. Optimal factor ~0.5 of
+    the original penalties, improving rho from 0.53 to 0.60.
+
     Returns:
         Final quality score after penalties.
     """
     base_score = metrics.get('base_quality_score', 0)
     anomaly_penalties = []
 
-    # Dead phase penalty (-15 per phase)
+    # Dead phase penalty (-8 per phase, cap -16)
+    # Pipeline still works on remaining phases; original -15 was too harsh.
     n_dead = len(metrics.get('dead_phases', []))
     if n_dead > 0:
         dead_names = ', '.join(metrics['dead_phases'])
-        deduction = min(30, n_dead * 15)
+        deduction = min(16, n_dead * 8)
         anomaly_penalties.append({
             'reason': f'dead_phase ({dead_names})',
             'deduction': deduction,
         })
 
-    # Faulty NaN phase penalty (-10 per phase)
+    # Faulty NaN phase penalty (-5 per phase, cap -10)
+    # NaN gaps don't significantly hurt pipeline performance (rho with
+    # segregated % barely changes when NaN penalty is removed).
     n_faulty = len(metrics.get('faulty_nan_phases', []))
     if n_faulty > 0:
         faulty_names = ', '.join(metrics['faulty_nan_phases'])
-        deduction = min(20, n_faulty * 10)
+        deduction = min(10, n_faulty * 5)
         anomaly_penalties.append({
             'reason': f'faulty_nan_phase ({faulty_names})',
             'deduction': deduction,
@@ -368,12 +375,12 @@ def _apply_anomaly_penalties(metrics: dict,
     if cov < 0.50:
         anomaly_penalties.append({
             'reason': f'very_low_coverage ({cov:.0%})',
-            'deduction': 15,
+            'deduction': 8,
         })
     elif cov < 0.70:
         anomaly_penalties.append({
             'reason': f'low_coverage ({cov:.0%})',
-            'deduction': 8,
+            'deduction': 4,
         })
 
     # Extreme outliers
@@ -381,7 +388,7 @@ def _apply_anomaly_penalties(metrics: dict,
     if n_anomalies > 0:
         anomaly_penalties.append({
             'reason': f'extreme_outliers ({n_anomalies} readings >20kW)',
-            'deduction': 5,
+            'deduction': 3,
         })
 
     # High power density — most of the time above pipeline thresholds
@@ -389,12 +396,12 @@ def _apply_anomaly_penalties(metrics: dict,
     if hpd > 0.40:
         anomaly_penalties.append({
             'reason': f'high_power_density ({hpd:.0%} of time above 800W)',
-            'deduction': 8,
+            'deduction': 4,
         })
     elif hpd > 0.25:
         anomaly_penalties.append({
             'reason': f'high_power_density ({hpd:.0%} of time above 800W)',
-            'deduction': 4,
+            'deduction': 2,
         })
 
     # Fragmented data
@@ -402,12 +409,12 @@ def _apply_anomaly_penalties(metrics: dict,
     if total_loss >= 40:
         anomaly_penalties.append({
             'reason': f'fragmented_data ({total_loss:.0f}% data loss)',
-            'deduction': 10,
+            'deduction': 5,
         })
     elif total_loss >= 15:
         anomaly_penalties.append({
             'reason': f'discontinuous_data ({total_loss:.0f}% data loss)',
-            'deduction': 5,
+            'deduction': 3,
         })
 
     total_penalty = sum(p['deduction'] for p in anomaly_penalties)
@@ -425,9 +432,13 @@ def _apply_anomaly_penalties(metrics: dict,
 
 def _compute_quality_tier(metrics: dict) -> None:
     """
-    Compute quality flags and faulty phase label.
+    Compute quality flags, faulty-phase warnings, and quality tier.
 
-    Updates metrics dict in-place with 'quality_flags' and 'quality_label'.
+    quality_label: informational warning about phase issues (does NOT override tier).
+    quality_tier: derived from quality_score alone (excellent/good/fair/poor).
+
+    Updates metrics dict in-place with 'quality_flags', 'quality_label',
+    and 'quality_tier'.
     """
     sharp_entry_score = metrics.get('sharp_entry_score', 0)
     device_signature_score = metrics.get('device_signature_score', 0)
@@ -451,7 +462,7 @@ def _compute_quality_tier(metrics: dict) -> None:
         quality_flags.append('low_data_integrity')
     metrics['quality_flags'] = quality_flags
 
-    # Mark faulty phases
+    # Mark faulty phases (informational warning, does NOT override tier)
     has_dead = metrics.get('has_dead_phase', False)
     has_nan = metrics.get('has_faulty_nan_phase', False)
     non_dead_nan = [p for p in metrics.get('faulty_nan_phases', [])
@@ -464,3 +475,35 @@ def _compute_quality_tier(metrics: dict) -> None:
         metrics['quality_label'] = 'faulty_high_nan'
     else:
         metrics['quality_label'] = None
+
+    # Quality tier based on score alone (faulty label is informational only)
+    score = metrics.get('quality_score', 0)
+    if score >= 80:
+        metrics['quality_tier'] = 'excellent'
+    elif score >= 65:
+        metrics['quality_tier'] = 'good'
+    elif score >= 50:
+        metrics['quality_tier'] = 'fair'
+    else:
+        metrics['quality_tier'] = 'poor'
+
+    # --- Data completeness filters (independent of quality tier) ---
+    # Phases without data: union of dead phases and faulty NaN phases
+    dead = set(metrics.get('dead_phases', []))
+    faulty_nan = set(metrics.get('faulty_nan_phases', []))
+    phases_without_data = dead | faulty_nan
+    metrics['n_phases_without_data'] = len(phases_without_data)
+    metrics['phases_without_data'] = sorted(phases_without_data)
+
+    # NaN bracket based on max phase NaN percentage (0-5, 5-10, ..., up to max)
+    max_nan = metrics.get('max_phase_nan_pct', 0)
+    if max_nan < 5:
+        metrics['nan_bracket'] = '0-5'
+    elif max_nan < 10:
+        metrics['nan_bracket'] = '5-10'
+    elif max_nan < 15:
+        metrics['nan_bracket'] = '10-15'
+    elif max_nan < 20:
+        metrics['nan_bracket'] = '15-20'
+    else:
+        metrics['nan_bracket'] = '20+'

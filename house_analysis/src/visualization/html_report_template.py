@@ -521,17 +521,34 @@ def _build_html_document(title: str, summary: str, filter_bar: str,
                 if (cb.checked) checkedWave.push(cb.getAttribute('data-filter-wave'));
             }});
 
+            // Get checked missing phase counts
+            var checkedMissing = [];
+            document.querySelectorAll('[data-filter-missing]').forEach(function(cb) {{
+                if (cb.checked) checkedMissing.push(cb.getAttribute('data-filter-missing'));
+            }});
+
+            // Get checked NaN brackets
+            var checkedNanBracket = [];
+            document.querySelectorAll('[data-filter-nan-bracket]').forEach(function(cb) {{
+                if (cb.checked) checkedNanBracket.push(cb.getAttribute('data-filter-nan-bracket'));
+            }});
+
             // Show/hide rows
             var rows = document.querySelectorAll('#comparison-table tbody tr');
             rows.forEach(function(row) {{
                 var tier = row.getAttribute('data-tier');
                 var cont = row.getAttribute('data-continuity');
                 var wave = row.getAttribute('data-wave');
+                var missing = row.getAttribute('data-missing-phases');
+                var nanBracket = row.getAttribute('data-nan-bracket');
+
                 var tierMatch = checkedTiers.length === 0 || checkedTiers.indexOf(tier) !== -1;
                 var contMatch = checkedCont.length === 0 || checkedCont.indexOf(cont) !== -1;
                 var waveMatch = checkedWave.length === 0 || checkedWave.indexOf(wave) !== -1;
+                var missingMatch = checkedMissing.length === 0 || checkedMissing.indexOf(missing) !== -1;
+                var nanMatch = checkedNanBracket.length === 0 || checkedNanBracket.indexOf(nanBracket) !== -1;
 
-                if (tierMatch && contMatch && waveMatch) {{
+                if (tierMatch && contMatch && waveMatch && missingMatch && nanMatch) {{
                     row.classList.remove('row-hidden');
                 }} else {{
                     row.classList.add('row-hidden');

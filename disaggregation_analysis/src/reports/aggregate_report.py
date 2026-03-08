@@ -40,7 +40,8 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
 
     Returns:
         Dictionary mapping house_id -> dict with keys:
-            - quality_score: float or 'faulty'
+            - quality_score: float (always numeric)
+            - quality_label: str or None (informational warning, e.g. 'faulty_dead_phase')
             - nan_continuity: str (continuous/minor_gaps/discontinuous/fragmented/unknown)
             - max_nan_pct: float
     """
@@ -57,20 +58,19 @@ def load_pre_analysis_scores(house_analysis_path: Path) -> Dict[str, Any]:
         if not house_id:
             return None
         quality = analysis.get('data_quality', {})
-        quality_label = quality.get('quality_label', None)
         quality_score = quality.get('quality_score', None)
+        quality_label = quality.get('quality_label', None)
 
-        if quality_label and quality_label.startswith('faulty'):
-            qs = quality_label  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
-        elif quality_score is not None:
-            qs = quality_score
-        else:
+        if quality_score is None:
             return None
 
         return house_id, {
-            'quality_score': qs,
+            'quality_score': quality_score,
+            'quality_label': quality_label,
             'nan_continuity': quality.get('nan_continuity_label', 'unknown'),
             'max_nan_pct': quality.get('max_phase_nan_pct', 0),
+            'n_phases_without_data': quality.get('n_phases_without_data', 0),
+            'nan_bracket': quality.get('nan_bracket', None),
         }
 
     # If it's a directory, look for per_house JSON files
@@ -311,6 +311,8 @@ def aggregate_experiment_results(experiment_dir: Path,
                 house_pre = pre_analysis_scores[house_id]
                 if isinstance(house_pre, dict):
                     analysis['pre_analysis_quality_score'] = house_pre.get('quality_score')
+                    analysis['pre_n_phases_without_data'] = house_pre.get('n_phases_without_data', 0)
+                    analysis['pre_nan_bracket'] = house_pre.get('nan_bracket')
                 else:
                     # Backward compatibility: old format was scalar
                     analysis['pre_analysis_quality_score'] = house_pre

@@ -84,8 +84,8 @@ def generate_html_report(analyses: List[Dict[str, Any]],
     # Generate all sections
     summary_html = _generate_summary_section(analyses)
     wave_html = _generate_wave_section(analyses)
-    table_html, tier_counts, continuity_counts, wave_counts = _generate_comparison_table(analyses, per_house_dir)
-    filter_bar_html = _build_filter_bar(tier_counts, continuity_counts, wave_counts)
+    table_html, tier_counts, continuity_counts, wave_counts, missing_phase_counts, nan_bracket_counts = _generate_comparison_table(analyses, per_house_dir)
+    filter_bar_html = _build_filter_bar(tier_counts, continuity_counts, wave_counts, missing_phase_counts, nan_bracket_counts)
     charts_html = _generate_charts_section(analyses)
     quality_tiers_html = _generate_quality_tiers_section(analyses)
 

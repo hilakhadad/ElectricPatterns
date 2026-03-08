@@ -35,26 +35,21 @@ def _generate_summary_section(analyses: List[Dict[str, Any]]) -> str:
     avg_coverage = sum(coverage_ratios) / n_houses if n_houses > 0 else 0
     total_days = sum(days_spans)
 
-    # Compute tier counts for quality distribution bar
-    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0,
-                   'faulty_dead_phase': 0, 'faulty_high_nan': 0, 'faulty_both': 0, 'unknown': 0}
+    # Compute tier counts for quality distribution bar (score-based, thresholds: 80/65/50)
+    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0, 'unknown': 0}
     for a in analyses:
-        score = a.get('data_quality', {}).get('quality_score', 0)
-        qlabel = a.get('flags', {}).get('quality_label')
-        if qlabel == 'faulty_both':
-            tier_counts['faulty_both'] += 1
-        elif qlabel == 'faulty_dead_phase':
-            tier_counts['faulty_dead_phase'] += 1
-        elif qlabel == 'faulty_high_nan':
-            tier_counts['faulty_high_nan'] += 1
-        elif score >= 90:
-            tier_counts['excellent'] += 1
-        elif score >= 75:
-            tier_counts['good'] += 1
-        elif score >= 50:
-            tier_counts['fair'] += 1
-        else:
-            tier_counts['poor'] += 1
+        tier = a.get('data_quality', {}).get('quality_tier', None)
+        if tier is None:
+            score = a.get('data_quality', {}).get('quality_score', 0)
+            if score >= 80:
+                tier = 'excellent'
+            elif score >= 65:
+                tier = 'good'
+            elif score >= 50:
+                tier = 'fair'
+            else:
+                tier = 'poor'
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
     quality_bar = _build_quality_dist_bar(tier_counts, n_houses)
 
@@ -145,11 +140,12 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         'high_phase_imbalance': 'High Phase Imbalance',
     }
 
-    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0,
-                   'faulty_dead_phase': 0, 'faulty_high_nan': 0, 'faulty_both': 0}
+    tier_counts = {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0}
     continuity_counts = {'continuous': 0, 'minor_gaps': 0,
                          'discontinuous': 0, 'fragmented': 0, 'unknown': 0}
     wave_counts = {'wave_dominant': 0, 'has_waves': 0, 'no_waves': 0}
+    missing_phase_counts = {0: 0, 1: 0, 2: 0}
+    nan_bracket_counts = {'0-5': 0, '5-10': 0, '10-15': 0, '15-20': 0, '20+': 0}
     rows = []
 
     for a in analyses:
@@ -179,33 +175,37 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
             issues_text = 'None'
             issues_html = '<span class="no-issues">None</span>'
 
-        # Quality badge + tier key
+        # Quality badge + tier key (score-based, thresholds: 80/65/50)
         score = quality.get('quality_score', 0)
         qlabel = flags.get('quality_label')
+        tier_key = quality.get('quality_tier', None)
+        if tier_key is None:
+            if score >= 80:
+                tier_key = 'excellent'
+            elif score >= 65:
+                tier_key = 'good'
+            elif score >= 50:
+                tier_key = 'fair'
+            else:
+                tier_key = 'poor'
 
+        tier_badge_map = {
+            'excellent': '<span class="badge badge-green">Excellent</span>',
+            'good': '<span class="badge badge-blue">Good</span>',
+            'fair': '<span class="badge badge-orange">Fair</span>',
+            'poor': '<span class="badge badge-red">Poor</span>',
+        }
+        badge = tier_badge_map.get(tier_key, '<span class="badge badge-red">Poor</span>')
+
+        # Add faulty warning indicator next to tier badge
         if qlabel == 'faulty_both':
-            badge = '<span class="badge badge-purple-dark">Faulty (Both)</span>'
-            tier_key = 'faulty_both'
+            badge += ' <span class="badge badge-purple-dark" title="Dead phase + High NaN">&#9888;</span>'
         elif qlabel == 'faulty_dead_phase':
-            badge = '<span class="badge badge-purple-light">Faulty (Dead Phase)</span>'
-            tier_key = 'faulty_dead_phase'
+            badge += ' <span class="badge badge-purple-light" title="Dead phase detected">&#9888;</span>'
         elif qlabel == 'faulty_high_nan':
-            badge = '<span class="badge badge-purple">Faulty (High NaN)</span>'
-            tier_key = 'faulty_high_nan'
-        elif score >= 90:
-            badge = '<span class="badge badge-green">Excellent</span>'
-            tier_key = 'excellent'
-        elif score >= 75:
-            badge = '<span class="badge badge-blue">Good</span>'
-            tier_key = 'good'
-        elif score >= 50:
-            badge = '<span class="badge badge-orange">Fair</span>'
-            tier_key = 'fair'
-        else:
-            badge = '<span class="badge badge-red">Poor</span>'
-            tier_key = 'poor'
+            badge += ' <span class="badge badge-purple" title="High NaN phase">&#9888;</span>'
 
-        tier_counts[tier_key] += 1
+        tier_counts[tier_key] = tier_counts.get(tier_key, 0) + 1
 
         # NaN continuity
         continuity = quality.get('nan_continuity_label', 'unknown')
@@ -238,6 +238,25 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
         # Wave classification count (must be after wave_cls assignment)
         wave_counts[wave_cls] = wave_counts.get(wave_cls, 0) + 1
         wave_score = wave.get('max_wave_score', 0)
+
+        # Data completeness filters
+        n_missing = quality.get('n_phases_without_data', 0)
+        nan_bracket = quality.get('nan_bracket', '0-5')
+        # Fallback for data generated before these fields existed
+        if n_missing is None:
+            dead = set(quality.get('dead_phases', []) if isinstance(quality.get('dead_phases'), list) else [])
+            faulty_nan = set(quality.get('faulty_nan_phases', []) if isinstance(quality.get('faulty_nan_phases'), list) else [])
+            n_missing = len(dead | faulty_nan)
+        if nan_bracket is None:
+            max_nan = quality.get('max_phase_nan_pct', 0) or 0
+            if max_nan < 5: nan_bracket = '0-5'
+            elif max_nan < 10: nan_bracket = '5-10'
+            elif max_nan < 15: nan_bracket = '10-15'
+            elif max_nan < 20: nan_bracket = '15-20'
+            else: nan_bracket = '20+'
+        n_missing = min(n_missing, 2)  # Cap at 2 for filter (3 = no data at all)
+        missing_phase_counts[n_missing] = missing_phase_counts.get(n_missing, 0) + 1
+        nan_bracket_counts[nan_bracket] = nan_bracket_counts.get(nan_bracket, 0) + 1
         wave_badge_map = {
             'wave_dominant': '<span class="badge badge-orange">Wave Dominant</span>',
             'has_waves': '<span class="badge badge-blue">Has Waves</span>',
@@ -247,6 +266,7 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
 
         rows.append(f"""
         <tr data-tier="{tier_key}" data-continuity="{continuity}" data-wave="{wave_cls}"
+            data-missing-phases="{n_missing}" data-nan-bracket="{nan_bracket}"
             data-house-id="{house_id}"
             data-excluded="false" data-score="{score:.1f}" data-coverage="{cov_ratio:.4f}"
             data-nan="{no_data_pct:.2f}" data-days="{days_span}"
@@ -308,21 +328,20 @@ def _generate_comparison_table(analyses: List[Dict[str, Any]],
     </table>
     </div>
     """
-    return html, tier_counts, continuity_counts, wave_counts
+    return html, tier_counts, continuity_counts, wave_counts, missing_phase_counts, nan_bracket_counts
 
 
 def _build_filter_bar(tier_counts: Dict[str, int],
                       continuity_counts: Dict[str, int],
-                      wave_counts: Dict[str, int] = None) -> str:
-    """Build the filter bar with tier, NaN continuity, and wave checkboxes."""
+                      wave_counts: Dict[str, int] = None,
+                      missing_phase_counts: Dict[int, int] = None,
+                      nan_bracket_counts: Dict[str, int] = None) -> str:
+    """Build the filter bar with tier, NaN continuity, wave, missing phases, and NaN bracket checkboxes."""
     tier_labels = {
         'excellent': ('Excellent', '#28a745'),
         'good': ('Good', '#007bff'),
         'fair': ('Fair', '#ffc107'),
         'poor': ('Poor', '#dc3545'),
-        'faulty_dead_phase': ('Faulty (Dead)', '#5a3d7a'),
-        'faulty_high_nan': ('Faulty (NaN)', '#6f42c1'),
-        'faulty_both': ('Faulty (Both)', '#4a0e6b'),
     }
     continuity_labels = {
         'continuous': ('Continuous', '#28a745'),
@@ -382,6 +401,59 @@ def _build_filter_bar(tier_counts: Dict[str, int],
             {wave_html}
         </div>""" if wave_html else ''
 
+    # Missing phases checkboxes
+    missing_phase_labels = {
+        0: ('0 Missing Phases', '#28a745'),
+        1: ('1 Missing Phase', '#e67e22'),
+        2: ('2 Missing Phases', '#dc3545'),
+    }
+    missing_html = ''
+    if missing_phase_counts:
+        for key in [0, 1, 2]:
+            count = missing_phase_counts.get(key, 0)
+            if count == 0:
+                continue
+            label, color = missing_phase_labels[key]
+            missing_html += f"""
+            <label class="filter-checkbox" style="border-color: {color};">
+                <input type="checkbox" checked onchange="updateFilter()" data-filter-missing="{key}">
+                <span class="filter-dot" style="background: {color};"></span>
+                {label} <span class="filter-count">({count})</span>
+            </label>"""
+
+    missing_group = f"""
+        <div class="filter-group">
+            <span class="filter-group-label">Phases Without Data:</span>
+            {missing_html}
+        </div>""" if missing_html else ''
+
+    # NaN bracket checkboxes
+    nan_bracket_labels = [
+        ('0-5', '<5% NaN', '#28a745'),
+        ('5-10', '5-10% NaN', '#3498db'),
+        ('10-15', '10-15% NaN', '#e67e22'),
+        ('15-20', '15-20% NaN', '#e74c3c'),
+        ('20+', '>20% NaN', '#8e44ad'),
+    ]
+    nan_html = ''
+    if nan_bracket_counts:
+        for key, label, color in nan_bracket_labels:
+            count = nan_bracket_counts.get(key, 0)
+            if count == 0:
+                continue
+            nan_html += f"""
+            <label class="filter-checkbox" style="border-color: {color};">
+                <input type="checkbox" checked onchange="updateFilter()" data-filter-nan-bracket="{key}">
+                <span class="filter-dot" style="background: {color};"></span>
+                {label} <span class="filter-count">({count})</span>
+            </label>"""
+
+    nan_group = f"""
+        <div class="filter-group">
+            <span class="filter-group-label">Max Phase NaN %:</span>
+            {nan_html}
+        </div>""" if nan_html else ''
+
     return f"""
     <div class="filter-bar">
         <div class="filter-group">
@@ -393,6 +465,8 @@ def _build_filter_bar(tier_counts: Dict[str, int],
             {cont_html}
         </div>
         {wave_group}
+        {missing_group}
+        {nan_group}
     </div>
     """
 
@@ -433,36 +507,29 @@ def _generate_quality_tiers_section(analyses: List[Dict[str, Any]]) -> str:
         ('integrity_score', 'Integrity', 10),
     ]
 
-    # Group houses into tiers
+    # Group houses into tiers based on quality_tier (score-based, thresholds: 80/65/50)
     tiers = [
-        ('Excellent (90+)', 'green', 'excellent'),
-        ('Good (75-89)', 'blue', 'good'),
-        ('Fair (50-74)', 'orange', 'fair'),
+        ('Excellent (80+)', 'green', 'excellent'),
+        ('Good (65-79)', 'blue', 'good'),
+        ('Fair (50-64)', 'orange', 'fair'),
         ('Poor (<50)', 'red', 'poor'),
-        ('Faulty — Dead Phase', 'purple-light', 'faulty_dead_phase'),
-        ('Faulty — High NaN', 'purple', 'faulty_high_nan'),
-        ('Faulty — Both', 'purple-dark', 'faulty_both'),
     ]
     tier_houses = {key: [] for _, _, key in tiers}
 
     for a in analyses:
-        score = a.get('data_quality', {}).get('quality_score', 0)
-        qlabel = a.get('flags', {}).get('quality_label')
-
-        if qlabel == 'faulty_both':
-            tier_houses['faulty_both'].append(a)
-        elif qlabel == 'faulty_dead_phase':
-            tier_houses['faulty_dead_phase'].append(a)
-        elif qlabel == 'faulty_high_nan':
-            tier_houses['faulty_high_nan'].append(a)
-        elif score >= 90:
-            tier_houses['excellent'].append(a)
-        elif score >= 75:
-            tier_houses['good'].append(a)
-        elif score >= 50:
-            tier_houses['fair'].append(a)
-        else:
-            tier_houses['poor'].append(a)
+        tier = a.get('data_quality', {}).get('quality_tier', None)
+        if tier is None:
+            # Fallback for legacy data without quality_tier
+            score = a.get('data_quality', {}).get('quality_score', 0)
+            if score >= 80:
+                tier = 'excellent'
+            elif score >= 65:
+                tier = 'good'
+            elif score >= 50:
+                tier = 'fair'
+            else:
+                tier = 'poor'
+        tier_houses[tier].append(a)
 
     # Build tier cards
     component_colors = ['#e74c3c', '#e67e22', '#f39c12', '#9b59b6', '#3498db', '#2ecc71']

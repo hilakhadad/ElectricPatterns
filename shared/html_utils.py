@@ -331,7 +331,7 @@ def build_glossary_section() -> str:
                     <tr><td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;font-weight:600;">Session</td>
                         <td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;">A continuous period of device activity consisting of one or more temporally close matches on the same phase. Matches within 30 minutes of each other are grouped into one session.</td></tr>
                     <tr><td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;font-weight:600;">Remaining Power</td>
-                        <td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;">The power left after subtracting all detected device activations from the total signal. Lower remaining means more of the consumption has been explained.</td></tr>
+                        <td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;">The power left after subtracting all detected device activations from the total signal. Lower remaining means more of the consumption has been segregated.</td></tr>
                     <tr><td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;font-weight:600;">Phase (w1 / w2 / w3)</td>
                         <td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;">One of 3 independent electrical circuits in an Israeli household. Most devices use a single phase; large devices like central AC may use 2 or 3 phases simultaneously.</td></tr>
                     <tr><td style="padding:8px 14px;border-bottom:1px solid #E8E4F0;font-weight:600;">Iteration</td>
@@ -459,8 +459,7 @@ def build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
 
     Args:
         tier_counts: dict mapping tier key to count. Accepted keys:
-            'excellent', 'good', 'fair', 'poor',
-            'faulty_dead_phase', 'faulty_high_nan', 'faulty_both', 'unknown'
+            'excellent', 'good', 'fair', 'poor', 'unknown'
         n_houses: total number of houses (denominator for percentages)
 
     Returns:
@@ -471,9 +470,6 @@ def build_quality_dist_bar(tier_counts: dict, n_houses: int) -> str:
         ('good', 'Good', '#007bff'),
         ('fair', 'Fair', '#ffc107'),
         ('poor', 'Poor', '#dc3545'),
-        ('faulty_dead_phase', 'Faulty (Dead)', '#5a3d7a'),
-        ('faulty_high_nan', 'Faulty (NaN)', '#6f42c1'),
-        ('faulty_both', 'Faulty (Both)', '#4a0e6b'),
         ('unknown', 'Unknown', '#6c757d'),
     ]
 
@@ -506,21 +502,22 @@ def assign_tier(pre_quality) -> str:
     """Assign quality tier based on pre-analysis quality score.
 
     Args:
-        pre_quality: numeric score (0-100), a faulty string, or None.
+        pre_quality: numeric score (0-100) or None.
 
     Returns:
-        Tier string: 'excellent', 'good', 'fair', 'poor',
-        'faulty_dead_phase', 'faulty_high_nan', 'faulty_both', or 'unknown'.
+        Tier string: 'excellent', 'good', 'fair', 'poor', or 'unknown'.
+        Thresholds: 80/65/50 (calibrated Feb 2026).
     """
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        return pre_quality  # 'faulty_dead_phase', 'faulty_high_nan', or 'faulty_both'
-    elif pre_quality is None:
+    if pre_quality is None:
+        return 'unknown'
+    elif isinstance(pre_quality, str):
+        # Legacy faulty strings — map to score-based tier if possible
         return 'unknown'
     elif not isinstance(pre_quality, (int, float)):
         return 'unknown'
-    elif pre_quality >= 90:
+    elif pre_quality >= 80:
         return 'excellent'
-    elif pre_quality >= 75:
+    elif pre_quality >= 65:
         return 'good'
     elif pre_quality >= 50:
         return 'fair'
@@ -532,25 +529,18 @@ def format_pre_quality(pre_quality) -> str:
     """Format pre-quality score as colored HTML.
 
     Args:
-        pre_quality: numeric score (0-100), a faulty string, or None.
+        pre_quality: numeric score (0-100) or None.
 
     Returns:
         HTML span string with color-coded quality indicator.
+        Thresholds: 80/65/50 (calibrated Feb 2026).
     """
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        _faulty_labels = {
-            'faulty_dead_phase': ('Dead Phase', 'Phase with <2% of sisters avg'),
-            'faulty_high_nan': ('High NaN', 'Phase with >=10% NaN values'),
-            'faulty_both': ('Both', 'Dead phase + high NaN on other phases'),
-        }
-        _fl, _ft = _faulty_labels.get(pre_quality, ('Faulty', ''))
-        return f'<span style="color:#6f42c1;font-weight:bold;" title="{_ft}">{_fl}</span>'
-    elif pre_quality is None or not isinstance(pre_quality, (int, float)):
+    if pre_quality is None or not isinstance(pre_quality, (int, float)):
         return '<span style="color:#999;">-</span>'
     else:
-        if pre_quality >= 90:
+        if pre_quality >= 80:
             color = '#28a745'
-        elif pre_quality >= 75:
+        elif pre_quality >= 65:
             color = '#007bff'
         elif pre_quality >= 50:
             color = '#ffc107'

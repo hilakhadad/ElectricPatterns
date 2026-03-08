@@ -161,8 +161,8 @@ def main():
     print("AGGREGATE SUMMARY")
     print(f"{'='*70}")
     for _, row in aggregate_df.iterrows():
-        pct = row.get('mean_explained_pct', 0)
-        median = row.get('median_explained_pct', 0)
+        pct = row.get('mean_segregated_pct', 0)
+        median = row.get('median_segregated_pct', 0)
         cr = row.get('mean_classified_rate', 0)
         print(f"  {row['exp_id']:30s}  mean={pct:5.1f}%  median={median:5.1f}%  "
               f"classified={cr:.1%}  houses={row['n_houses']}")

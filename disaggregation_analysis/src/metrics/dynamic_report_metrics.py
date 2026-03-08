@@ -368,13 +368,13 @@ def _load_per_threshold_contribution(
                     })
                     continue
 
-                iter_explained = th_rows['iteration_explained'].sum()
-                iter_pct = th_rows['iteration_explained_pct'].mean()
-                cum_pct = th_rows['cumulative_explained_pct'].mean()
+                iter_segregated = th_rows['iteration_segregated'].sum()
+                iter_pct = th_rows['iteration_segregated_pct'].mean()
+                cum_pct = th_rows['cumulative_segregated_pct'].mean()
 
                 contributions.append({
                     'threshold': th,
-                    'segregated_power': round(iter_explained, 1),
+                    'segregated_power': round(iter_segregated, 1),
                     'segregated_pct': round(iter_pct, 1),
                     'cumulative_pct': round(cum_pct, 1),
                 })
@@ -437,10 +437,10 @@ def _compute_per_threshold_from_pkls(
                 original_total += data[orig_col].clip(lower=0).sum()
 
         if run_number == 0:
-            iter_explained = original_total - remaining_total
+            iter_segregated = original_total - remaining_total
             base_total = original_total
         else:
-            iter_explained = max(0, (prev_remaining_total or 0) - remaining_total)
+            iter_segregated = max(0, (prev_remaining_total or 0) - remaining_total)
             # Use run_0 original as base for percentage
             run0_dir = _find_run_dir(experiment_dir, 0, threshold_schedule[0])
             if run0_dir:
@@ -454,11 +454,11 @@ def _compute_per_threshold_from_pkls(
             else:
                 base_total = original_total
 
-        iter_pct = (iter_explained / base_total * 100) if base_total > 0 else 0
+        iter_pct = (iter_segregated / base_total * 100) if base_total > 0 else 0
 
         contributions.append({
             'threshold': threshold,
-            'segregated_power': round(iter_explained, 1),
+            'segregated_power': round(iter_segregated, 1),
             'segregated_pct': round(iter_pct, 1),
         })
 

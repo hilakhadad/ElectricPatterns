@@ -37,27 +37,27 @@ def calculate_phase_metrics(
     total_power_all = baseline_original.fillna(0).sum()
     total_power_above_th = baseline_original[above_th_mask].sum()
 
-    # Cumulative explained power
-    explained_power_cumulative = (
+    # Cumulative segregated power
+    segregated_power_cumulative = (
         baseline_original[above_th_mask] - current_remaining[above_th_mask]
     ).clip(lower=0).sum()
 
-    explained_power_cumulative_pct = (
-        (explained_power_cumulative / total_power_above_th * 100)
+    segregated_power_cumulative_pct = (
+        (segregated_power_cumulative / total_power_above_th * 100)
         if total_power_above_th > 0 else 0.0
     )
 
     # Iteration-specific power
     if run_number == 0 or prev_remaining is None:
-        explained_power_iteration = explained_power_cumulative
-        explained_power_iteration_pct = explained_power_cumulative_pct
+        segregated_power_iteration = segregated_power_cumulative
+        segregated_power_iteration_pct = segregated_power_cumulative_pct
     else:
         valid_iter_mask = above_th_mask & prev_remaining.notna()
-        explained_power_iteration = (
+        segregated_power_iteration = (
             prev_remaining[valid_iter_mask] - current_remaining[valid_iter_mask]
         ).clip(lower=0).sum()
-        explained_power_iteration_pct = (
-            (explained_power_iteration / total_power_above_th * 100)
+        segregated_power_iteration_pct = (
+            (segregated_power_iteration / total_power_above_th * 100)
             if total_power_above_th > 0 else 0.0
         )
 
@@ -94,23 +94,23 @@ def calculate_phase_metrics(
 
     if logger:
         logger.debug(
-            f"Phase metrics: explained_pwr={explained_power_iteration_pct:.1f}%, "
-            f"explained_time={time_pct_iteration:.1f}%, negative={minutes_negative} min"
+            f"Phase metrics: segregated_pwr={segregated_power_iteration_pct:.1f}%, "
+            f"segregated_time={time_pct_iteration:.1f}%, negative={minutes_negative} min"
         )
 
     return {
         'total_power_all': total_power_all,
         'total_power_above_th': total_power_above_th,
-        'explained_power': explained_power_iteration,
-        'explained_power_pct': round(explained_power_iteration_pct, 2),
-        'explained_power_cumulative': explained_power_cumulative,
-        'explained_power_cumulative_pct': round(explained_power_cumulative_pct, 2),
+        'segregated_power': segregated_power_iteration,
+        'segregated_power_pct': round(segregated_power_iteration_pct, 2),
+        'segregated_power_cumulative': segregated_power_cumulative,
+        'segregated_power_cumulative_pct': round(segregated_power_cumulative_pct, 2),
         'minutes_above_th': minutes_above_th,
-        'minutes_explained': minutes_below_th_iteration,
-        'minutes_explained_pct': round(time_pct_iteration, 2),
-        'minutes_explained_cumulative': minutes_below_th_cumulative,
-        'minutes_explained_cumulative_pct': round(time_pct_cumulative, 2),
-        'threshold_explanation_pct': round(time_pct_cumulative, 2),  # Alias for clarity
+        'minutes_segregated': minutes_below_th_iteration,
+        'minutes_segregated_pct': round(time_pct_iteration, 2),
+        'minutes_segregated_cumulative': minutes_below_th_cumulative,
+        'minutes_segregated_cumulative_pct': round(time_pct_cumulative, 2),
+        'threshold_segregation_pct': round(time_pct_cumulative, 2),  # Alias for clarity
         'minutes_negative': minutes_negative,
         'power_negative': round(power_negative, 2),
         'minutes_missing': minutes_missing,

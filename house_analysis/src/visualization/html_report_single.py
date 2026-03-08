@@ -401,30 +401,38 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
     temporal_by_period = analysis.get('temporal_by_period', {})
     flags = analysis.get('flags', {})
 
-    # Quality badge with Faulty subcategories
+    # Quality badge based on quality_tier (faulty label shown as secondary warning)
     score = quality.get('quality_score', 0)
+    tier = quality.get('quality_tier', None)
     qlabel = flags.get('quality_label')
+
+    if tier is None:
+        # Fallback for legacy data without quality_tier
+        if score >= 80:
+            tier = 'excellent'
+        elif score >= 65:
+            tier = 'good'
+        elif score >= 50:
+            tier = 'fair'
+        else:
+            tier = 'poor'
+
+    tier_badge_map = {
+        'excellent': ('badge-green', 'Excellent'),
+        'good': ('badge-blue', 'Good'),
+        'fair': ('badge-orange', 'Fair'),
+        'poor': ('badge-red', 'Poor'),
+    }
+    badge_class, badge_text = tier_badge_map.get(tier, ('badge-red', 'Poor'))
+
+    # Add faulty warning as a secondary badge (not overriding tier)
+    faulty_badge_html = ''
     if qlabel == 'faulty_both':
-        badge_class = 'badge-purple-dark'
-        badge_text = 'Faulty (Both)'
+        faulty_badge_html = ' <span class="badge badge-purple-dark" title="Dead phase + High NaN detected">Faulty (Both)</span>'
     elif qlabel == 'faulty_dead_phase':
-        badge_class = 'badge-purple-light'
-        badge_text = 'Faulty (Dead Phase)'
+        faulty_badge_html = ' <span class="badge badge-purple-light" title="Dead phase detected">Faulty (Dead Phase)</span>'
     elif qlabel == 'faulty_high_nan':
-        badge_class = 'badge-purple'
-        badge_text = 'Faulty (High NaN)'
-    elif score >= 90:
-        badge_class = 'badge-green'
-        badge_text = 'Excellent'
-    elif score >= 75:
-        badge_class = 'badge-blue'
-        badge_text = 'Good'
-    elif score >= 50:
-        badge_class = 'badge-orange'
-        badge_text = 'Fair'
-    else:
-        badge_class = 'badge-red'
-        badge_text = 'Poor'
+        faulty_badge_html = ' <span class="badge badge-purple" title="High NaN phase detected">Faulty (High NaN)</span>'
 
     # NaN continuity badge
     nan_continuity = quality.get('nan_continuity_label', '')
@@ -912,7 +920,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
 
         <header>
             <h1>House {house_id} Analysis</h1>
-            <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>{nan_badge_html}
+            <span class="badge {badge_class}">{badge_text} - Score: {score:.0f}/100</span>{faulty_badge_html}{nan_badge_html}
         </header>
 
         {about_html}
@@ -926,7 +934,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
             <!-- Quality Score Hero -->
             <div class="hero-card hero-{badge_class}">
                 <div class="hero-score">{score:.0f}<span class="hero-max">/100</span></div>
-                <div class="hero-badge"><span class="badge {badge_class}">{badge_text}</span>{nan_badge_html}</div>
+                <div class="hero-badge"><span class="badge {badge_class}">{badge_text}</span>{faulty_badge_html}{nan_badge_html}</div>
                 <div class="hero-subtitle">
                     {'Base score: ' + str(round(quality.get('base_quality_score', score))) + ' &minus; ' + str(round(quality.get('anomaly_penalties', 0))) + ' anomaly penalty' if quality.get('anomaly_penalties', 0) > 0 else 'Computed from 6 components: Sharp Entry Rate, Device Signature, Power Profile, Variability, Data Volume, Data Integrity'}
                 </div>
@@ -1164,7 +1172,7 @@ def generate_single_house_html_report(analysis: Dict[str, Any],
                     <div class="chart-card chart-full-width">
                         {score_breakdown_chart}
                         <div style="font-size: 0.82em; color: #555; padding: 10px 14px; background: #f8f9fa; border-radius: 6px; margin-top: 6px; line-height: 1.7;">
-                            <strong>Score components explained:</strong><br>
+                            <strong>Score components breakdown:</strong><br>
                             <span style="color:#e74c3c;">&#9632;</span> <strong>Sharp Entry Rate (20 pts)</strong> &mdash; Fraction of threshold (1300W) crossings from single-minute jumps. p50=32%. Higher = easier for algorithm. Score: 0-20.<br>
                             <span style="color:#e67e22;">&#9632;</span> <strong>Device Signature (15 pts)</strong> &mdash; Boiler patterns (sustained &ge;2000W for &ge;20min) + AC compressor cycles (1300-3000W ON/OFF). Score: 0-15.<br>
                             <span style="color:#f39c12;">&#9632;</span> <strong>Power Profile (20 pts)</strong> &mdash; Rewards clear low-power baseline (&lt;100W). Penalizes 500-1000W stuck range. Score: 0-20.<br>

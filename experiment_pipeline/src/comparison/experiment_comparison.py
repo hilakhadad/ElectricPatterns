@@ -164,27 +164,27 @@ def extract_house_metrics(exp_data: dict, house_id: str) -> dict:
         last_rows = eval_df[eval_df['run_number'] == last_run]
 
         total_original = 0.0
-        total_explained = 0.0
+        total_segregated = 0.0
         for phase in PHASES:
             phase_row = last_rows[last_rows['phase'] == phase]
             if not phase_row.empty:
-                pct = phase_row['cumulative_explained_pct'].values[0]
+                pct = phase_row['cumulative_segregated_pct'].values[0]
                 orig = phase_row['original_power'].values[0]
-                row[f'{phase}_explained_pct'] = round(pct, 2)
+                row[f'{phase}_segregated_pct'] = round(pct, 2)
                 total_original += orig
-                total_explained += orig * pct / 100.0
+                total_segregated += orig * pct / 100.0
             else:
-                row[f'{phase}_explained_pct'] = np.nan
+                row[f'{phase}_segregated_pct'] = np.nan
 
         # Weighted average across phases
         if total_original > 0:
-            row['avg_explained_pct'] = round(total_explained / total_original * 100, 2)
+            row['avg_segregated_pct'] = round(total_segregated / total_original * 100, 2)
         else:
-            row['avg_explained_pct'] = np.nan
+            row['avg_segregated_pct'] = np.nan
     else:
         for phase in PHASES:
-            row[f'{phase}_explained_pct'] = np.nan
-        row['avg_explained_pct'] = np.nan
+            row[f'{phase}_segregated_pct'] = np.nan
+        row['avg_segregated_pct'] = np.nan
 
     # --- Identification metrics (M2) ---
     sessions_json = exp_data['sessions'].get(house_id)
@@ -229,7 +229,7 @@ def extract_house_metrics(exp_data: dict, house_id: str) -> dict:
 def compute_aggregate_metrics(exp_data: dict, per_house_rows: List[dict]) -> dict:
     """Compute aggregate statistics across houses for one experiment."""
     df = pd.DataFrame(per_house_rows)
-    explained = df['avg_explained_pct'].dropna()
+    segregated = df['avg_segregated_pct'].dropna()
 
     agg = {
         'experiment': exp_data['experiment'],
@@ -238,16 +238,16 @@ def compute_aggregate_metrics(exp_data: dict, per_house_rows: List[dict]) -> dic
         'n_houses': len(per_house_rows),
     }
 
-    if len(explained) > 0:
-        agg['mean_explained_pct'] = round(explained.mean(), 2)
-        agg['median_explained_pct'] = round(explained.median(), 2)
-        agg['p25_explained_pct'] = round(explained.quantile(0.25), 2)
-        agg['p75_explained_pct'] = round(explained.quantile(0.75), 2)
+    if len(segregated) > 0:
+        agg['mean_segregated_pct'] = round(segregated.mean(), 2)
+        agg['median_segregated_pct'] = round(segregated.median(), 2)
+        agg['p25_segregated_pct'] = round(segregated.quantile(0.25), 2)
+        agg['p75_segregated_pct'] = round(segregated.quantile(0.75), 2)
     else:
-        agg['mean_explained_pct'] = np.nan
-        agg['median_explained_pct'] = np.nan
-        agg['p25_explained_pct'] = np.nan
-        agg['p75_explained_pct'] = np.nan
+        agg['mean_segregated_pct'] = np.nan
+        agg['median_segregated_pct'] = np.nan
+        agg['p25_segregated_pct'] = np.nan
+        agg['p75_segregated_pct'] = np.nan
 
     classified = df['classified_rate'].dropna()
     agg['mean_classified_rate'] = round(classified.mean(), 3) if len(classified) > 0 else np.nan

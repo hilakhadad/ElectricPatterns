@@ -13,8 +13,8 @@ import pandas as pd
 from metrics.matching import calculate_matching_metrics, _get_house_dir, _load_monthly_files
 from metrics.segmentation import (
     calculate_segmentation_metrics,
-    calculate_threshold_explanation_metrics,
-    calculate_threshold_explanation_all_iterations
+    calculate_threshold_segregation_metrics,
+    calculate_threshold_segregation_all_iterations
 )
 from metrics.events import calculate_event_metrics
 from metrics.iterations import calculate_iteration_metrics
@@ -265,19 +265,19 @@ def analyze_experiment_house(experiment_dir: Path, house_id: str,
         monthly_metrics = calculate_monthly_metrics(experiment_dir, house_id, 0)
         analysis['monthly'] = monthly_metrics
 
-    # Calculate threshold explanation metrics (using 1300W threshold from pipeline config)
-    log("  - threshold explanation metrics...")
-    threshold_metrics = calculate_threshold_explanation_metrics(
+    # Calculate threshold segregation metrics (using 1300W threshold from pipeline config)
+    log("  - threshold segregation metrics...")
+    threshold_metrics = calculate_threshold_segregation_metrics(
         experiment_dir, house_id, 0, threshold=1300
     )
-    analysis['threshold_explanation'] = threshold_metrics
+    analysis['threshold_segregation'] = threshold_metrics
 
-    # Calculate threshold explanation per iteration
-    log("  - threshold explanation per iteration...")
-    threshold_per_iter = calculate_threshold_explanation_all_iterations(
+    # Calculate threshold segregation per iteration
+    log("  - threshold segregation per iteration...")
+    threshold_per_iter = calculate_threshold_segregation_all_iterations(
         experiment_dir, house_id, max_iterations=10, threshold=1300
     )
-    analysis['threshold_explanation_per_iteration'] = threshold_per_iter
+    analysis['threshold_segregation_per_iteration'] = threshold_per_iter
 
     # Generate flags for easy filtering (pass pre-computed damaged_info)
     analysis['flags'] = _generate_experiment_flags(analysis, damaged_info=damaged_info)
@@ -639,17 +639,17 @@ def generate_experiment_report(analysis: Dict[str, Any]) -> str:
             lines.append(f"WARNING: {neg_count} negative values detected!")
 
     # High-Power Energy Segregated
-    th_expl = analysis.get('threshold_explanation', {})
+    th_expl = analysis.get('threshold_segregation', {})
     if th_expl and 'total_minutes_above_th' in th_expl:
         lines.append(f"\n--- High-Power Energy Segregated (>{th_expl.get('threshold', 1300)}W) ---")
         lines.append(f"Total minutes above threshold: {th_expl.get('total_minutes_above_th', 0):,}")
-        lines.append(f"Minutes segregated: {th_expl.get('total_minutes_explained', 0):,} "
-                    f"({th_expl.get('total_explanation_rate', 0):.1%})")
+        lines.append(f"Minutes segregated: {th_expl.get('total_minutes_segregated', 0):,} "
+                    f"({th_expl.get('total_segregation_rate', 0):.1%})")
         for phase in ['w1', 'w2', 'w3']:
             above = th_expl.get(f'{phase}_minutes_above_th', 0)
-            explained = th_expl.get(f'{phase}_minutes_explained', 0)
-            rate = th_expl.get(f'{phase}_explanation_rate', 0)
-            lines.append(f"  {phase}: {above:,} above TH, {explained:,} segregated ({rate:.1%})")
+            segregated = th_expl.get(f'{phase}_minutes_segregated', 0)
+            rate = th_expl.get(f'{phase}_segregation_rate', 0)
+            lines.append(f"  {phase}: {above:,} above TH, {segregated:,} segregated ({rate:.1%})")
 
     # Scores
     scores = analysis.get('scores', {})

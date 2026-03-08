@@ -28,7 +28,7 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     matching = first.get('matching', {}) or {}
     seg = first.get('segmentation', {}) or {}
     flags = analysis.get('flags', {}) or {}
-    th_expl = analysis.get('threshold_explanation', {}) or {}
+    th_expl = analysis.get('threshold_segregation', {}) or {}
 
     overall_score = scores.get('overall_score', 0) or 0
     matching_score = scores.get('matching_score', 0) or 0
@@ -38,26 +38,20 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
     pre_quality = analysis.get('pre_analysis_quality_score', None)
 
     # Pre-quality display values (computed outside f-string to avoid format issues)
-    if isinstance(pre_quality, str) and pre_quality.startswith('faulty'):
-        _faulty_displays = {
-            'faulty_dead_phase': 'Dead Phase',
-            'faulty_high_nan': 'High NaN',
-            'faulty_both': 'Both',
-        }
-        pre_quality_display = _faulty_displays.get(pre_quality, 'Faulty')
-        pre_quality_color = '#6f42c1'
-    elif pre_quality is not None:
+    if isinstance(pre_quality, str):
+        pre_quality = None  # Legacy faulty strings — treat as missing
+    if pre_quality is not None:
         pre_quality_display = f'{pre_quality:.0f}'
-        pre_quality_color = '#28a745' if pre_quality >= 75 else '#ffc107' if pre_quality >= 50 else '#dc3545'
+        pre_quality_color = '#28a745' if pre_quality >= 80 else '#007bff' if pre_quality >= 65 else '#ffc107' if pre_quality >= 50 else '#dc3545'
     else:
         pre_quality_display = '-'
         pre_quality_color = '#999'
 
-    # Threshold explanation metrics
-    th_explanation_rate = th_expl.get('total_explanation_rate', 0) or 0
+    # Threshold segregation metrics
+    th_segregation_rate = th_expl.get('total_segregation_rate', 0) or 0
     th_minutes_above = th_expl.get('total_minutes_above_th', 0) or 0
-    th_minutes_explained = th_expl.get('total_minutes_explained', 0) or 0
-    th_color = '#28a745' if th_explanation_rate >= 0.8 else '#ffc107' if th_explanation_rate >= 0.5 else '#dc3545'
+    th_minutes_segregated = th_expl.get('total_minutes_segregated', 0) or 0
+    th_color = '#28a745' if th_segregation_rate >= 0.8 else '#ffc107' if th_segregation_rate >= 0.5 else '#dc3545'
 
     # Score badge - check damaged first
     if has_damaged:
@@ -123,11 +117,11 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
 
     return f"""
     {classification_html}
-    <div class="th-explanation-highlight" style="background: linear-gradient(135deg, #fff 0%, {th_color}22 100%); border: 2px solid {th_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
+    <div class="th-segregation-highlight" style="background: linear-gradient(135deg, #fff 0%, {th_color}22 100%); border: 2px solid {th_color}; border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: center;">
         <h3 style="margin: 0 0 10px 0; color: #333;">High-Power Energy Segregated (&gt;1300W)</h3>
         <div style="display: flex; justify-content: center; gap: 50px; flex-wrap: wrap;">
             <div>
-                <div style="font-size: 2.5em; font-weight: bold; color: {th_color};">{th_explanation_rate:.1%}</div>
+                <div style="font-size: 2.5em; font-weight: bold; color: {th_color};">{th_segregation_rate:.1%}</div>
                 <div style="color: #666;">Segregated Rate</div>
             </div>
             <div>
@@ -135,7 +129,7 @@ def _generate_house_summary(analysis: Dict[str, Any]) -> str:
                 <div style="color: #666;">Minutes &gt;1300W</div>
             </div>
             <div>
-                <div style="font-size: 1.5em; font-weight: bold; color: {th_color};">{th_minutes_explained:,}</div>
+                <div style="font-size: 1.5em; font-weight: bold; color: {th_color};">{th_minutes_segregated:,}</div>
                 <div style="color: #666;">Minutes Segregated</div>
             </div>
         </div>
@@ -214,21 +208,21 @@ def _generate_iterations_section(analysis: Dict[str, Any]) -> str:
 
     total_minutes = iterations.get('total_matched_minutes', 0) or 0
 
-    # High-Power explanation per iteration table
-    th_per_iter = analysis.get('threshold_explanation_per_iteration', []) or []
+    # High-Power segregation per iteration table
+    th_per_iter = analysis.get('threshold_segregation_per_iteration', []) or []
     th_rows = []
     for th in th_per_iter:
         iteration = th.get('iteration', 0) or 0
         above = th.get('total_minutes_above_th', 0) or 0
-        explained = th.get('total_minutes_explained', 0) or 0
-        rate = th.get('total_explanation_rate', 0) or 0
+        segregated = th.get('total_minutes_segregated', 0) or 0
+        rate = th.get('total_segregation_rate', 0) or 0
         th_color = '#28a745' if rate >= 0.8 else '#ffc107' if rate >= 0.5 else '#dc3545'
 
         th_rows.append(f"""
         <tr>
             <td>{iteration}</td>
             <td>{above:,}</td>
-            <td>{explained:,}</td>
+            <td>{segregated:,}</td>
             <td style="color: {th_color}; font-weight: bold;">{rate:.1%}</td>
         </tr>
         """)
@@ -437,33 +431,33 @@ def _generate_segmentation_section(analysis: Dict[str, Any]) -> str:
     <p style="font-size: 0.85em; color: #888; margin-top: 10px; text-align: center;">
         Note: Matched minutes are summed across all 3 phases. Percentage can exceed 100% if events overlap.
     </p>
-    {_generate_threshold_explanation_html(analysis)}
+    {_generate_threshold_segregation_html(analysis)}
     """
 
 
-def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
-    """Generate threshold explanation section."""
-    th_expl = analysis.get('threshold_explanation', {}) or {}
+def _generate_threshold_segregation_html(analysis: Dict[str, Any]) -> str:
+    """Generate threshold segregation section."""
+    th_expl = analysis.get('threshold_segregation', {}) or {}
     if not th_expl or 'total_minutes_above_th' not in th_expl:
         return ''
 
     threshold = th_expl.get('threshold', 500) or 500
     total_above = th_expl.get('total_minutes_above_th', 0) or 0
-    total_explained = th_expl.get('total_minutes_explained', 0) or 0
-    total_rate = th_expl.get('total_explanation_rate', 0) or 0
+    total_segregated = th_expl.get('total_minutes_segregated', 0) or 0
+    total_rate = th_expl.get('total_segregation_rate', 0) or 0
 
     # Per-phase data
     phase_rows = []
     for phase in ['w1', 'w2', 'w3']:
         above = th_expl.get(f'{phase}_minutes_above_th', 0) or 0
-        explained = th_expl.get(f'{phase}_minutes_explained', 0) or 0
-        rate = th_expl.get(f'{phase}_explanation_rate', 0) or 0
+        segregated = th_expl.get(f'{phase}_minutes_segregated', 0) or 0
+        rate = th_expl.get(f'{phase}_segregation_rate', 0) or 0
         color = '#28a745' if rate >= 0.8 else '#ffc107' if rate >= 0.5 else '#dc3545'
         phase_rows.append(f"""
             <tr>
                 <td style="padding: 8px 12px;"><strong>{phase.upper()}</strong></td>
                 <td style="padding: 8px 12px; text-align: right;">{above:,}</td>
-                <td style="padding: 8px 12px; text-align: right;">{explained:,}</td>
+                <td style="padding: 8px 12px; text-align: right;">{segregated:,}</td>
                 <td style="padding: 8px 12px; text-align: right; color: {color}; font-weight: bold;">{rate:.1%}</td>
             </tr>
         """)
@@ -481,7 +475,7 @@ def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
             <div class="summary-label">Minutes Above TH</div>
         </div>
         <div class="summary-card" style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);">
-            <div class="summary-number" style="color: #155724; font-size: 1.6em;">{total_explained:,}</div>
+            <div class="summary-number" style="color: #155724; font-size: 1.6em;">{total_segregated:,}</div>
             <div class="summary-label">Minutes Segregated</div>
         </div>
         <div class="summary-card" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);">
@@ -503,7 +497,7 @@ def _generate_threshold_explanation_html(analysis: Dict[str, Any]) -> str:
             <tr style="background: #e9ecef; font-weight: bold;">
                 <td style="padding: 8px 12px;">TOTAL</td>
                 <td style="padding: 8px 12px; text-align: right;">{total_above:,}</td>
-                <td style="padding: 8px 12px; text-align: right;">{total_explained:,}</td>
+                <td style="padding: 8px 12px; text-align: right;">{total_segregated:,}</td>
                 <td style="padding: 8px 12px; text-align: right; color: {total_color};">{total_rate:.1%}</td>
             </tr>
         </tbody>

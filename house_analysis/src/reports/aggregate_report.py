@@ -88,19 +88,23 @@ def aggregate_all_houses(house_analyses: List[Dict[str, Any]]) -> Dict[str, Any]
     temporal_stats = _aggregate_section(house_analyses, 'temporal_patterns', temporal_keys)
     report['temporal_summary'] = temporal_stats
 
-    # Houses by quality tier
+    # Houses by quality tier (uses quality_tier from scoring, thresholds: 80/65/50)
     quality_tiers = {'excellent': [], 'good': [], 'fair': [], 'poor': []}
     for analysis in house_analyses:
         house_id = analysis.get('house_id', 'unknown')
-        score = analysis.get('data_quality', {}).get('quality_score', 0)
-        if score >= 90:
-            quality_tiers['excellent'].append(house_id)
-        elif score >= 75:
-            quality_tiers['good'].append(house_id)
-        elif score >= 50:
-            quality_tiers['fair'].append(house_id)
-        else:
-            quality_tiers['poor'].append(house_id)
+        tier = analysis.get('data_quality', {}).get('quality_tier', None)
+        if tier is None:
+            # Fallback for legacy data without quality_tier
+            score = analysis.get('data_quality', {}).get('quality_score', 0)
+            if score >= 80:
+                tier = 'excellent'
+            elif score >= 65:
+                tier = 'good'
+            elif score >= 50:
+                tier = 'fair'
+            else:
+                tier = 'poor'
+        quality_tiers[tier].append(house_id)
 
     report['quality_tiers'] = {
         tier: {'count': len(houses), 'houses': houses}
