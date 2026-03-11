@@ -38,6 +38,7 @@ from identification.session_classifier import (
     _magnitude_monotonicity,
     _cycling_regularity,
 )
+from identification.classifiers.boiler_classifier import _check_surrounding_activity
 from identification.session_grouper import Session, MultiPhaseSession, build_single_event_session
 from identification.config import (
     BOILER_MIN_DURATION,
@@ -151,15 +152,27 @@ class TestClassifyEventsEntryPoint:
         expected_keys = {'boiler', 'three_phase_device', 'central_ac', 'regular_ac', 'recurring_pattern', 'unknown'}
         assert set(result.keys()) == expected_keys
 
-    def test_single_boiler_event_classified(self):
-        """A single isolated high-power long event should be classified as boiler."""
+    def test_single_boiler_event_not_boiler(self):
+        """A single isolated high-power event returns to pool (no recurrence)."""
         row = _make_boiler_event(magnitude=2500, duration=40, phase='w1')
         df = make_matches_df([row])
         result = classify_events(df)
-        assert len(result['boiler']) == 1
-        cs = result['boiler'][0]
-        assert isinstance(cs, ClassifiedSession)
-        assert cs.device_type == 'boiler'
+        # Single event — no recurrence — ends up as unknown or recurring_pattern
+        assert len(result['boiler']) == 0
+        assert len(result['unknown']) + len(result['recurring_pattern']) >= 1
+
+    def test_recurring_boiler_events_classified_as_boiler(self):
+        """3+ consistent high-power events on same phase -> boiler."""
+        rows = [
+            _make_boiler_event(on_start_min=0, magnitude=2000, duration=30, phase='w1'),
+            _make_boiler_event(on_start_min=120, magnitude=2100, duration=28, phase='w1'),
+            _make_boiler_event(on_start_min=240, magnitude=1950, duration=32, phase='w1'),
+        ]
+        df = make_matches_df(rows)
+        result = classify_events(df)
+        assert len(result['boiler']) == 3
+        for cs in result['boiler']:
+            assert cs.device_type == 'boiler'
 
     def test_classified_sessions_have_confidence(self):
         """All classified sessions should have a confidence score between 0 and 1."""
@@ -190,12 +203,25 @@ class TestClassifyEventsEntryPoint:
 class TestBoilerIdentification:
     """Test _identify_boiler_events() and helper functions."""
 
-    def test_typical_boiler_classified(self):
-        """Event with duration>=15min, magnitude>=1500W, isolated -> boiler."""
+    def test_typical_boiler_single_event_returns_to_pool(self):
+        """Single event with boiler characteristics -> returns to pool (no recurrence)."""
         row = _make_boiler_event(duration=30, magnitude=2000)
         df = make_matches_df([row])
         boilers, three_phase, remaining = _identify_boiler_events(df)
-        assert len(boilers) == 1
+        assert len(boilers) == 0
+        assert len(three_phase) == 0
+        assert len(remaining) == 1  # returned to pool
+
+    def test_recurring_boiler_classified(self):
+        """3+ consistent events -> boiler."""
+        rows = [
+            _make_boiler_event(on_start_min=0, duration=30, magnitude=2000, phase='w1'),
+            _make_boiler_event(on_start_min=120, duration=28, magnitude=2100, phase='w1'),
+            _make_boiler_event(on_start_min=240, duration=32, magnitude=1950, phase='w1'),
+        ]
+        df = make_matches_df(rows)
+        boilers, three_phase, remaining = _identify_boiler_events(df)
+        assert len(boilers) == 3
         assert boilers[0].device_type == 'boiler'
         assert len(remaining) == 0
 
@@ -215,12 +241,13 @@ class TestBoilerIdentification:
         assert len(boilers) == 0
         assert len(remaining) == 1
 
-    def test_boiler_at_exact_thresholds(self):
-        """Event at exactly BOILER_MIN_DURATION and BOILER_MIN_MAGNITUDE should be classified."""
+    def test_single_at_exact_thresholds_returns_to_pool(self):
+        """Single event at exactly thresholds -> returns to pool (not enough recurrence)."""
         row = make_match_row(0, BOILER_MIN_DURATION, BOILER_MIN_MAGNITUDE, 'w1')
         df = make_matches_df([row])
         boilers, _, remaining = _identify_boiler_events(df)
-        assert len(boilers) == 1
+        assert len(boilers) == 0
+        assert len(remaining) == 1
 
     def test_boiler_not_isolated_near_compressor_cycles(self):
         """A boiler candidate near AC-like compressor cycles should NOT be boiler."""
@@ -237,25 +264,52 @@ class TestBoilerIdentification:
         # The boiler candidate should be rejected because of nearby cycling
         assert len(boilers) == 0
 
-    def test_two_consecutive_boilers_not_disqualify_each_other(self):
-        """Two consecutive boiler activations should not disqualify each other as compressor cycles."""
+    def test_two_consecutive_boilers_return_to_pool(self):
+        """Two consecutive boiler-like events -> return to pool (need 3 for recurrence)."""
         rows = [
             _make_boiler_event(on_start_min=0, duration=30, magnitude=2000, phase='w1'),
             _make_boiler_event(on_start_min=90, duration=25, magnitude=1800, phase='w1'),
         ]
         df = make_matches_df(rows)
         boilers, _, remaining = _identify_boiler_events(df)
-        assert len(boilers) == 2
+        assert len(boilers) == 0
+        assert len(remaining) == 2  # both returned to pool
+
+    def test_three_consistent_boilers_confirmed(self):
+        """Three consistent events on same phase -> confirmed boiler."""
+        rows = [
+            _make_boiler_event(on_start_min=0, duration=30, magnitude=2000, phase='w1'),
+            _make_boiler_event(on_start_min=120, duration=28, magnitude=2000, phase='w1'),
+            _make_boiler_event(on_start_min=240, duration=32, magnitude=2000, phase='w1'),
+        ]
+        df = make_matches_df(rows)
+        boilers, _, remaining = _identify_boiler_events(df)
+        assert len(boilers) == 3
+
+    def test_inconsistent_magnitudes_return_to_pool(self):
+        """3 events but very different magnitudes -> return to pool."""
+        rows = [
+            _make_boiler_event(on_start_min=0, duration=30, magnitude=1600, phase='w1'),
+            _make_boiler_event(on_start_min=120, duration=28, magnitude=3000, phase='w1'),
+            _make_boiler_event(on_start_min=240, duration=32, magnitude=5000, phase='w1'),
+        ]
+        df = make_matches_df(rows)
+        boilers, _, remaining = _identify_boiler_events(df)
+        assert len(boilers) == 0
+        assert len(remaining) == 3  # all returned to pool
 
     def test_boiler_removed_from_remaining(self):
         """Classified boiler events should not appear in remaining."""
         rows = [
+            # 3 recurring boiler events to pass recurrence check
             _make_boiler_event(on_start_min=0, duration=30, magnitude=2000, phase='w1'),
-            make_match_row(200, 5, 500, 'w1'),  # unrelated short event
+            _make_boiler_event(on_start_min=120, duration=28, magnitude=2000, phase='w1'),
+            _make_boiler_event(on_start_min=240, duration=32, magnitude=2000, phase='w1'),
+            make_match_row(500, 5, 500, 'w1'),  # unrelated short event
         ]
         df = make_matches_df(rows)
         boilers, _, remaining = _identify_boiler_events(df)
-        assert len(boilers) == 1
+        assert len(boilers) == 3
         assert len(remaining) == 1
         # The remaining event should be the short one
         assert remaining.iloc[0]['duration'] == 5
@@ -335,7 +389,6 @@ class TestThreePhaseDetection:
         ]
         df = make_matches_df(rows)
         boilers, three_phase, remaining = _identify_boiler_events(df)
-        # They should be individual boilers, not three_phase_device
         assert len(three_phase) == 0
 
     def test_very_different_durations_not_three_phase(self):
@@ -711,8 +764,8 @@ class TestClassifyEventsIntegration:
     """End-to-end tests combining boiler + AC + unknown."""
 
     def test_mixed_devices_classified_correctly(self):
-        """A mix of boiler events, AC cycling, and unclassifiable events."""
-        boiler = _make_boiler_event(
+        """A mix of high-power events, AC cycling, and unclassifiable events."""
+        non_recurring_boiler = _make_boiler_event(
             on_start_min=0, duration=30, magnitude=2000, phase='w2',
         )
         # AC cycling on w1 far from boiler
@@ -720,16 +773,16 @@ class TestClassifyEventsIntegration:
             start_min=500, phase='w1', n_cycles=4, magnitude=1200,
         )
         # Short unknown event on w3
-        unknown = make_match_row(1000, 5, 500, 'w3')
+        unknown_event = make_match_row(1000, 5, 500, 'w3')
 
-        all_rows = [boiler] + ac_events + [unknown]
+        all_rows = [non_recurring_boiler] + ac_events + [unknown_event]
         df = make_matches_df(all_rows)
         result = classify_events(df)
 
-        # Should have at least one boiler, at least one AC, and at least one unknown
-        assert len(result['boiler']) >= 1
+        # Single boiler-like event -> returns to pool (unknown or recurring_pattern)
+        assert len(result['boiler']) == 0
         assert len(result['regular_ac']) >= 1
-        assert len(result['unknown']) >= 1
+        assert len(result['unknown']) + len(result['recurring_pattern']) >= 1
 
     def test_no_event_double_classified(self):
         """Every event should appear in exactly one classification category."""
@@ -760,3 +813,127 @@ class TestClassifyEventsIntegration:
             f"Expected {len(all_rows)} events total across all categories, "
             f"got {total_classified}"
         )
+
+
+# ============================================================================
+# Surrounding activity check tests
+# ============================================================================
+
+class TestSurroundingActivityCheck:
+    """Tests for _check_surrounding_activity — boiler context rejection."""
+
+    def _make_original_signal(self, phase='w1', base_power=200, minutes=1440):
+        """Create a quiet original signal (baseline only)."""
+        idx = pd.date_range(BASE_TIME, periods=minutes, freq='min')
+        data = {f'original_{phase}': [base_power] * minutes}
+        return pd.DataFrame(data, index=idx)
+
+    def test_quiet_surroundings_passes(self):
+        """Boiler candidates with quiet surroundings should NOT be rejected."""
+        # 3 boiler events, 4 hours apart, on a quiet signal
+        candidates = []
+        for i in range(3):
+            start_min = 60 + i * 240  # 60, 300, 540
+            row = make_match_row(start_min, 25, 2000, 'w1')
+            candidates.append((i, pd.Series(row)))
+
+        signal = self._make_original_signal('w1', base_power=200, minutes=720)
+        # Add boiler-level power during events only (this gets excluded)
+        for _, row in candidates:
+            ev_start = pd.Timestamp(row['on_start'])
+            ev_end = pd.Timestamp(row['off_end'])
+            mask = (signal.index >= ev_start) & (signal.index <= ev_end)
+            signal.loc[mask, 'original_w1'] = 2200
+
+        result = _check_surrounding_activity(candidates, 'w1', signal)
+        assert result is False, "Quiet surroundings should not reject boiler"
+
+    def test_active_surroundings_rejects(self):
+        """Boiler candidates with busy surroundings (washing machine) should be rejected."""
+        candidates = []
+        for i in range(4):
+            start_min = 120 + i * 240
+            row = make_match_row(start_min, 25, 2000, 'w1')
+            candidates.append((i, pd.Series(row)))
+
+        signal = self._make_original_signal('w1', base_power=200, minutes=1200)
+
+        # For each boiler event, add 20 minutes of foreign activity before and after
+        for _, row in candidates:
+            ev_start = pd.Timestamp(row['on_start'])
+            ev_end = pd.Timestamp(row['off_end'])
+            # Motor activity BEFORE the heating element
+            before_start = ev_start - pd.Timedelta(minutes=30)
+            before_end = ev_start - pd.Timedelta(minutes=5)
+            mask_before = (signal.index >= before_start) & (signal.index <= before_end)
+            signal.loc[mask_before, 'original_w1'] = 600  # well above 200+150=350 threshold
+            # Pump activity AFTER
+            after_start = ev_end + pd.Timedelta(minutes=5)
+            after_end = ev_end + pd.Timedelta(minutes=25)
+            mask_after = (signal.index >= after_start) & (signal.index <= after_end)
+            signal.loc[mask_after, 'original_w1'] = 500
+
+        result = _check_surrounding_activity(candidates, 'w1', signal)
+        assert result is True, "Active surroundings should reject boiler"
+
+    def test_other_boiler_events_excluded(self):
+        """Other boiler candidate events in the window should NOT count as foreign activity."""
+        # Two boiler events close together (20 min apart) — both are candidates
+        candidates = []
+        for i, start_min in enumerate([60, 115, 540]):
+            row = make_match_row(start_min, 25, 2000, 'w1')
+            candidates.append((i, pd.Series(row)))
+
+        signal = self._make_original_signal('w1', base_power=200, minutes=720)
+        # Add boiler-level power during ALL candidate events
+        for _, row in candidates:
+            ev_start = pd.Timestamp(row['on_start'])
+            ev_end = pd.Timestamp(row['off_end'])
+            mask = (signal.index >= ev_start) & (signal.index <= ev_end)
+            signal.loc[mask, 'original_w1'] = 2200
+
+        # The first two events are within ±60 min of each other, but since both
+        # are boiler candidates, their time ranges are excluded from the count
+        result = _check_surrounding_activity(candidates, 'w1', signal)
+        assert result is False, "Other boiler events should not count as foreign activity"
+
+    def test_partial_activity_below_threshold(self):
+        """If only 40% of events are surrounded (<50% threshold), should NOT reject."""
+        # 5 events, only 2 have active surroundings = 40% < 50%
+        candidates = []
+        for i in range(5):
+            start_min = 60 + i * 200
+            row = make_match_row(start_min, 25, 2000, 'w1')
+            candidates.append((i, pd.Series(row)))
+
+        signal = self._make_original_signal('w1', base_power=200, minutes=1200)
+
+        # Add foreign activity around only the first 2 events
+        for idx in range(2):
+            _, row = candidates[idx]
+            ev_start = pd.Timestamp(row['on_start'])
+            before_start = ev_start - pd.Timedelta(minutes=25)
+            before_end = ev_start - pd.Timedelta(minutes=5)
+            mask = (signal.index >= before_start) & (signal.index <= before_end)
+            signal.loc[mask, 'original_w1'] = 600
+
+        result = _check_surrounding_activity(candidates, 'w1', signal)
+        assert result is False, "40% surrounded should not reject (threshold is 50%)"
+
+    def test_no_original_signal_column(self):
+        """If original signal doesn't have the phase column, should not reject."""
+        candidates = [(0, pd.Series(make_match_row(60, 25, 2000, 'w1')))]
+        signal = pd.DataFrame({'original_w2': [200] * 100},
+                              index=pd.date_range(BASE_TIME, periods=100, freq='min'))
+        result = _check_surrounding_activity(candidates, 'w1', signal)
+        assert result is False
+
+    def test_backward_compat_no_signal(self):
+        """classify_events should work without original_signal (backward compatibility)."""
+        # 3 recurring boiler events
+        rows = [_make_boiler_event(on_start_min=i * 500, duration=25, magnitude=2000)
+                for i in range(3)]
+        df = make_matches_df(rows)
+        # No original_signal passed — should still classify normally
+        result = classify_events(df)
+        assert len(result['boiler']) == 3

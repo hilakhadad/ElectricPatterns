@@ -302,6 +302,69 @@ from .spike_stats import _empty_spike_stats, _compute_spike_stats
 
 
 # ============================================================================
+# Original signal loader (for surrounding activity check)
+# ============================================================================
+
+def load_original_signal(
+    experiment_dir: Path,
+    house_id: str,
+    threshold_schedule: List[int],
+) -> Optional[pd.DataFrame]:
+    """Load the original power signal from summarized pkl files.
+
+    Tries run_post first (has all columns), then falls back to run_0.
+    Returns DataFrame with timestamp index and original_w1/w2/w3 columns,
+    or None if no summarized files are found.
+    """
+    # Try run_post first, then run_0
+    candidate_dirs = [
+        experiment_dir / "run_post" / f"house_{house_id}" / "summarized",
+        experiment_dir / "run_0" / f"house_{house_id}" / "summarized",
+    ]
+    # Also try run_0_thXXXX
+    if threshold_schedule:
+        th = threshold_schedule[0]
+        candidate_dirs.insert(1, experiment_dir / f"run_0_th{th}" / f"house_{house_id}" / "summarized")
+
+    summarized_dir = None
+    for d in candidate_dirs:
+        if d.exists() and list(d.glob(f"summarized_{house_id}_*.pkl")):
+            summarized_dir = d
+            break
+
+    if summarized_dir is None:
+        logger.warning(f"No summarized files found for house {house_id} — skipping context check")
+        return None
+
+    all_dfs = []
+    for pkl_file in sorted(summarized_dir.glob(f"summarized_{house_id}_*.pkl")):
+        try:
+            df = pd.read_pickle(pkl_file)
+            # Set timestamp as index if it's a column (not already the index)
+            if 'timestamp' in df.columns:
+                df = df.set_index('timestamp')
+            # Keep only original columns
+            orig_cols = [c for c in df.columns if c.startswith('original_')]
+            if not orig_cols:
+                continue
+            all_dfs.append(df[orig_cols])
+        except Exception as exc:
+            logger.warning(f"Failed to load summarized {pkl_file}: {exc}")
+
+    if not all_dfs:
+        logger.warning(f"No original signal data found for house {house_id}")
+        return None
+
+    combined = pd.concat(all_dfs)
+    # Ensure index is DatetimeIndex
+    if not isinstance(combined.index, pd.DatetimeIndex):
+        combined.index = pd.to_datetime(combined.index)
+    combined = combined[~combined.index.duplicated(keep='first')].sort_index()
+    logger.info(f"Loaded original signal: {len(combined)} minutes for house {house_id}")
+    return combined
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
 

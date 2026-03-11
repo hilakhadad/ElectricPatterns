@@ -79,7 +79,7 @@ logger = logging.getLogger(__name__)
 class ClassifiedSession:
     """A session with device classification attached."""
     session: Union[Session, MultiPhaseSession]
-    device_type: str          # boiler | central_ac | regular_ac | recurring_pattern | unknown
+    device_type: str          # boiler | central_ac | regular_ac | recurring_pattern | three_phase_device | unknown
     reason: str               # human-readable classification reason
     confidence: float = 0.0   # 0-1 overall confidence score
     confidence_breakdown: Dict[str, float] = field(default_factory=dict)
@@ -91,6 +91,7 @@ class ClassifiedSession:
 
 def classify_events(
     filtered_matches: pd.DataFrame,
+    original_signal: pd.DataFrame = None,
 ) -> Dict[str, List[ClassifiedSession]]:
     """Classify events using priority-based approach (classify-first, group-second).
 
@@ -132,7 +133,9 @@ def classify_events(
             filtered_matches[col] = pd.to_datetime(filtered_matches[col])
 
     # --- Step 1: Boiler (event-level) -------------------------------------
-    boiler_list, three_phase_list, remaining = _identify_boiler_events(filtered_matches)
+    boiler_list, three_phase_list, remaining = _identify_boiler_events(
+        filtered_matches, original_signal=original_signal
+    )
     result['boiler'] = boiler_list
     result['three_phase_device'] = three_phase_list
 

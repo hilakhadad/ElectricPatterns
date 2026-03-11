@@ -62,6 +62,7 @@ def main():
 
     from identification import (
         load_all_matches,
+        load_original_signal,
         filter_transient_events,
         classify_events,
         build_session_json,
@@ -73,7 +74,8 @@ def main():
         sys.exit(1)
 
     filtered, spike_stats = filter_transient_events(all_matches)
-    classified = classify_events(filtered)
+    original_signal = load_original_signal(experiment_dir, args.house_id, threshold_schedule)
+    classified = classify_events(filtered, original_signal=original_signal)
     json_path = build_session_json(
         classified_sessions=classified,
         house_id=args.house_id,

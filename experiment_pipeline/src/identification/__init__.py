@@ -15,6 +15,7 @@ Key modules:
 
 from .session_grouper import (
     load_all_matches,
+    load_original_signal,
     filter_transient_events,
     group_into_sessions,
     build_single_event_session,
@@ -32,6 +33,7 @@ from .config import IdentificationConfig
 
 __all__ = [
     'load_all_matches',
+    'load_original_signal',
     'filter_transient_events',
     'group_into_sessions',
     'classify_events',

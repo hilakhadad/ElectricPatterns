@@ -26,6 +26,20 @@ BOILER_MIN_MAGNITUDE = 1500         # watts
 BOILER_ISOLATION_WINDOW = 30        # minutes — no medium events nearby
 BOILER_MIN_COUNT = 3                # sessions to confirm pattern (informational)
 
+# Recurrence: require multiple consistent events to confirm boiler pattern.
+# Non-recurring candidates return to pool for recurring pattern discovery.
+BOILER_MIN_RECURRENCE = 3           # minimum similar events on same phase to confirm as boiler
+BOILER_RECURRENCE_MAX_MAG_CV = 0.25 # max magnitude CV across recurring events (boilers have same heating element)
+BOILER_RECURRENCE_MAX_DUR_CV = 0.40 # max duration CV (thermostat-controlled = consistent)
+
+# Surrounding activity check: reject boiler if events are part of a larger appliance cycle
+# (e.g. washing machine heating element, dishwasher heating phase).
+# Other boiler candidates on the same phase are EXCLUDED from the activity count.
+BOILER_CONTEXT_WINDOW_MINUTES = 60       # check ±60 minutes around each event
+BOILER_CONTEXT_ACTIVITY_THRESHOLD = 150  # watts above phase baseline = "active"
+BOILER_CONTEXT_MIN_ACTIVE_MINUTES = 10   # active minutes to flag one event as "surrounded"
+BOILER_CONTEXT_REJECT_RATIO = 0.50       # if ≥50% of group events are surrounded → reject as boiler
+
 # ============================================================================
 # Central AC classification
 # ============================================================================

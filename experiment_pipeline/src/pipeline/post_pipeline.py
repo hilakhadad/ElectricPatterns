@@ -39,7 +39,8 @@ def _run_dynamic_post_pipeline(
     if not skip_identification:
         try:
             from identification import (
-                load_all_matches, filter_transient_events,
+                load_all_matches, load_original_signal,
+                filter_transient_events,
                 classify_events,
                 build_session_json,
             )
@@ -60,7 +61,8 @@ def _run_dynamic_post_pipeline(
                         f"{len(filtered)} remaining ({time.time() - t0:.1f}s)")
 
             t0 = time.time()
-            classified = classify_events(filtered)
+            original_signal = load_original_signal(experiment_dir, house_id, threshold_schedule)
+            classified = classify_events(filtered, original_signal=original_signal)
             total_classified = sum(len(v) for v in classified.values())
             non_unknown = total_classified - len(classified.get('unknown', []))
             logger.info(f"  Classify: {non_unknown}/{total_classified} classified "

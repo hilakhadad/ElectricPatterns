@@ -7,7 +7,7 @@ Includes three-phase device detection and phase exclusivity enforcement.
 import logging
 import uuid
 from collections import Counter
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,13 @@ from ..config import (
     BOILER_MIN_DURATION,
     BOILER_MIN_MAGNITUDE,
     BOILER_ISOLATION_WINDOW,
+    BOILER_MIN_RECURRENCE,
+    BOILER_RECURRENCE_MAX_MAG_CV,
+    BOILER_RECURRENCE_MAX_DUR_CV,
+    BOILER_CONTEXT_WINDOW_MINUTES,
+    BOILER_CONTEXT_ACTIVITY_THRESHOLD,
+    BOILER_CONTEXT_MIN_ACTIVE_MINUTES,
+    BOILER_CONTEXT_REJECT_RATIO,
     AC_MIN_CYCLE_DURATION,
     AC_MAX_CYCLE_DURATION,
     AC_MIN_MAGNITUDE,
@@ -84,6 +91,7 @@ def _enforce_boiler_phase_exclusivity(
 
 def _identify_boiler_events(
     all_matches: pd.DataFrame,
+    original_signal: Optional[pd.DataFrame] = None,
 ) -> tuple:
     """Identify boiler events at the individual event level (no pre-grouping).
 
@@ -92,8 +100,12 @@ def _identify_boiler_events(
         2. For each candidate, check other phases for simultaneous long events:
            - If 2+ other phases have overlapping long events with similar duration
              -> three_phase_device
-        3. Apply phase exclusivity to remaining boiler candidates
-        4. Remove all classified events from the pool
+        3. Recurrence check: group remaining candidates by phase and verify
+           consistent magnitude/duration across 3+ events -> boiler.
+           Candidates that fail recurrence return to the pool for recurring
+           pattern discovery or unknown classification.
+        4. Apply phase exclusivity to confirmed boilers
+        5. Remove all classified events from the pool
 
     Returns:
         (boiler_classified, three_phase_classified, remaining_matches)
@@ -177,33 +189,87 @@ def _identify_boiler_events(
         else:
             non_three_phase.append((idx, row))
 
-    # --- Phase exclusivity for remaining boiler candidates ---
+    # --- Recurrence check: group by phase, verify consistent pattern ---
     boiler_classified_pre: list = []
+
+    # Group non-three-phase candidates by phase
+    candidates_by_phase: Dict[str, List[Tuple[int, pd.Series]]] = {}
     for idx, row in non_three_phase:
         if idx in three_phase_consumed:
             continue
-        session = build_single_event_session(row.to_dict(), row['phase'])
-        conf, breakdown = _boiler_confidence(session, all_matches)
-        boiler_classified_pre.append(ClassifiedSession(
-            session=session,
-            device_type='boiler',
-            reason=f"Single event >={BOILER_MIN_DURATION}min, >={BOILER_MIN_MAGNITUDE}W, isolated",
-            confidence=conf,
-            confidence_breakdown=breakdown,
-        ))
+        phase = row['phase']
+        candidates_by_phase.setdefault(phase, []).append((idx, row))
 
+    for phase, phase_candidates in candidates_by_phase.items():
+        magnitudes = [abs(row.get('on_magnitude', 0) or 0) for _, row in phase_candidates]
+        durations = [row.get('duration', 0) or 0 for _, row in phase_candidates]
+
+        # Check recurrence: enough events with consistent magnitude/duration?
+        is_recurring = len(phase_candidates) >= BOILER_MIN_RECURRENCE
+        if is_recurring and len(magnitudes) >= 2 and np.mean(magnitudes) > 0:
+            mag_cv = float(np.std(magnitudes) / np.mean(magnitudes))
+            if mag_cv > BOILER_RECURRENCE_MAX_MAG_CV:
+                is_recurring = False
+        if is_recurring and len(durations) >= 2 and np.mean(durations) > 0:
+            dur_cv = float(np.std(durations) / np.mean(durations))
+            if dur_cv > BOILER_RECURRENCE_MAX_DUR_CV:
+                is_recurring = False
+
+        if is_recurring and original_signal is not None:
+            # Surrounding activity check: reject if events are part of a larger appliance cycle
+            if _check_surrounding_activity(phase_candidates, phase, original_signal):
+                logger.info(
+                    f"  Boiler context check REJECTED on {phase}: "
+                    f"{len(phase_candidates)} events have too much surrounding activity"
+                )
+                is_recurring = False
+
+        if is_recurring:
+            # Confirmed boiler pattern — classify all candidates on this phase
+            for idx, row in phase_candidates:
+                session = build_single_event_session(row.to_dict(), phase)
+                conf, breakdown = _boiler_confidence(session, all_matches)
+                # Add recurrence info to breakdown
+                breakdown['recurrence'] = round(min(1.0, len(phase_candidates) / 5.0), 2)
+                if len(magnitudes) >= 2 and np.mean(magnitudes) > 0:
+                    breakdown['magnitude_consistency'] = round(
+                        1.0 - float(np.std(magnitudes) / np.mean(magnitudes)), 2
+                    )
+                conf = round(float(np.mean(list(breakdown.values()))), 2)
+                boiler_classified_pre.append(ClassifiedSession(
+                    session=session,
+                    device_type='boiler',
+                    reason=(
+                        f"Recurring boiler pattern: {len(phase_candidates)} events on {phase}, "
+                        f"mag CV={np.std(magnitudes)/np.mean(magnitudes):.2f}"
+                    ),
+                    confidence=conf,
+                    confidence_breakdown=breakdown,
+                ))
+            logger.info(
+                f"  Boiler recurrence confirmed on {phase}: {len(phase_candidates)} events, "
+                f"mag CV={np.std(magnitudes)/np.mean(magnitudes):.2f}"
+            )
+        else:
+            # Not enough evidence for boiler — return to pool for recurring
+            # pattern discovery or unknown classification
+            if phase_candidates:
+                logger.info(
+                    f"  Boiler recurrence failed on {phase}: {len(phase_candidates)} events "
+                    f"(need {BOILER_MIN_RECURRENCE} consistent) — returning to pool"
+                )
+
+    # --- Phase exclusivity for confirmed boilers ---
     boiler_classified, demoted = _enforce_boiler_phase_exclusivity(boiler_classified_pre)
+    # Demoted boiler sessions return to the pool (will become recurring_pattern or unknown)
 
-    # Demoted boiler sessions go back to the pool (will become unknown in Step 3)
-    boiler_indices = set()
+    # Collect consumed indices (only confirmed boilers)
     for cs in boiler_classified:
         for ev in cs.session.events:
             ts = pd.Timestamp(ev['on_start'])
             mask = all_matches['on_start'] == ts
             matching = all_matches.index[mask]
-            boiler_indices.update(matching.tolist())
-
-    consumed_indices.update(boiler_indices)
+            consumed_indices.update(matching.tolist())
 
     if demoted:
         logger.info(
@@ -213,6 +279,82 @@ def _identify_boiler_events(
 
     remaining = all_matches.loc[~all_matches.index.isin(consumed_indices)].reset_index(drop=True)
     return boiler_classified, three_phase_classified, remaining
+
+
+def _check_surrounding_activity(
+    phase_candidates: List[Tuple[int, pd.Series]],
+    phase: str,
+    original_signal: pd.DataFrame,
+) -> bool:
+    """Check if boiler candidates are surrounded by foreign activity in the original signal.
+
+    A standalone boiler (water heater) activates in isolation — the original power signal
+    around it should be quiet. In contrast, a washing machine or dishwasher heating element
+    activates as part of a longer cycle with motor/pump activity before and after.
+
+    For each candidate event:
+    1. Look at ±BOILER_CONTEXT_WINDOW_MINUTES around the event in the original signal
+    2. Compute phase baseline (median of the window)
+    3. Count minutes where original power > baseline + BOILER_CONTEXT_ACTIVITY_THRESHOLD
+    4. EXCLUDE minutes that overlap with the event itself or any other boiler candidate on same phase
+    5. If active_minutes >= BOILER_CONTEXT_MIN_ACTIVE_MINUTES → flag as "surrounded"
+
+    If >= BOILER_CONTEXT_REJECT_RATIO of candidates are surrounded → reject the group.
+    """
+    orig_col = f"original_{phase}"
+    if orig_col not in original_signal.columns:
+        return False
+
+    signal = original_signal[orig_col].dropna()
+    if signal.empty:
+        return False
+
+    # Collect all candidate time ranges (to exclude from activity count)
+    candidate_ranges = []
+    for _, row in phase_candidates:
+        ev_start = pd.Timestamp(row['on_start'])
+        ev_end = pd.Timestamp(row.get('off_end') or row.get('off_start') or ev_start)
+        candidate_ranges.append((ev_start, ev_end))
+
+    surrounded_count = 0
+
+    for _, row in phase_candidates:
+        ev_start = pd.Timestamp(row['on_start'])
+        ev_end = pd.Timestamp(row.get('off_end') or row.get('off_start') or ev_start)
+
+        window_start = ev_start - pd.Timedelta(minutes=BOILER_CONTEXT_WINDOW_MINUTES)
+        window_end = ev_end + pd.Timedelta(minutes=BOILER_CONTEXT_WINDOW_MINUTES)
+
+        window_signal = signal[(signal.index >= window_start) & (signal.index <= window_end)]
+        if len(window_signal) < 5:
+            continue
+
+        baseline = float(window_signal.median())
+        threshold = baseline + BOILER_CONTEXT_ACTIVITY_THRESHOLD
+
+        # Find active minutes (above threshold)
+        active_mask = window_signal > threshold
+
+        # Exclude minutes that overlap with ANY boiler candidate event on this phase
+        for cr_start, cr_end in candidate_ranges:
+            overlap_mask = (window_signal.index >= cr_start) & (window_signal.index <= cr_end)
+            active_mask = active_mask & ~overlap_mask
+
+        active_minutes = int(active_mask.sum())
+
+        if active_minutes >= BOILER_CONTEXT_MIN_ACTIVE_MINUTES:
+            surrounded_count += 1
+
+    n_total = len(phase_candidates)
+    if n_total == 0:
+        return False
+
+    ratio = surrounded_count / n_total
+    logger.debug(
+        f"  Context check {phase}: {surrounded_count}/{n_total} surrounded "
+        f"(ratio={ratio:.2f}, threshold={BOILER_CONTEXT_REJECT_RATIO})"
+    )
+    return ratio >= BOILER_CONTEXT_REJECT_RATIO
 
 
 def _is_boiler_candidate_event(row: pd.Series, all_matches: pd.DataFrame) -> bool:
